@@ -1,0 +1,33 @@
+name: Feature request
+description: Propose a new verification capability, scenario, or ergonomic improvement.
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem statement
+      description: What limitation or use case does this proposal address?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed design
+      description: Describe the proposed API, model construct, or scenario change.
+    validations:
+      required: true
+  - type: textarea
+    id: invariants
+    attributes:
+      label: Impact on core invariants
+      description: Confirm whether this preserves zero runtime dependencies, pure ES2022 compilation, determinism, and domain neutrality in @rulecanvas/core.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Optional alternatives or trade-offs considered.
+    validations:
+      required: false

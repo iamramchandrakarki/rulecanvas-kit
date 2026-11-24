@@ -1,0 +1,30 @@
+{
+  "name": "rulecanvas-kit",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "^22.12.0 || ^24.0.0 || >=26.0.0"
+  },
+  "packageManager": "pnpm@12.21.0",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  },
+  "scripts": {
+    "build": "pnpm --filter @rulecanvas/core build",
+    "typecheck": "pnpm build && pnpm -r typecheck",
+    "test": "pnpm build && vitest run",
+    "verify:boundaries": "pnpm build && vitest run packages/rulecanvas-core/tests/boundaries.test.ts",
+    "verify:hygiene": "node scripts/check-test-hygiene.mjs",
+    "bench": "pnpm build && tsx packages/rulecanvas-core/bench/run-bench.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "fast-check": "^4.11.0",
+    "oxc-parser": "^0.159.0",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.1"
+  }
+}

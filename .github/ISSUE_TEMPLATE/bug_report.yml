@@ -1,0 +1,49 @@
+name: Bug report
+description: Report a verification bug, soundness issue, validation defect, or crash.
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: Clear description of the bug and why the observed behavior is incorrect.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected package
+      options:
+        - "@rulecanvas/core"
+        - "@rulecanvas/agent-gate"
+        - "@rulecanvas/interlock-sim"
+        - "Benchmarks / CI / Tooling"
+        - "Documentation"
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Provide a minimal model JSON, TypeScript snippet, or FC_SEED value that reproduces the issue.
+      placeholder: |
+        import { verifyModel } from '@rulecanvas/core';
+        // Minimal model and options
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs. actual result
+      description: Describe the expected verdict/error and what was actually returned.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Node.js version, pnpm version, and OS.
+      placeholder: "Node v24.x, pnpm 12.x, macOS / Linux"
+    validations:
+      required: true

@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build core package
+        run: pnpm build
+
+      - name: Typecheck workspace
+        run: pnpm typecheck
+
+      - name: Strict ES2022 core typecheck
+        run: pnpm --filter @rulecanvas/core exec tsc --noEmit -p tsconfig.json
+
+      - name: Run unit, property, replay, and scenario tests
+        run: pnpm test
+
+      - name: Run deterministic seeded property-based tests
+        run: FC_SEED=918273645 pnpm --filter @rulecanvas/core exec vitest run tests/properties.test.ts
+
+      - name: Verify architecture boundaries
+        run: pnpm verify:boundaries
+
+      - name: Enforce anti-skip test hygiene
+        run: pnpm verify:hygiene
+
+      - name: Verify workspace configuration tracking
+        run: |
+          git ls-files --error-unmatch \
+            .kiro/hooks/verify-core.json \
+            .kiro/specs/README.md \
+            .kiro/steering/architecture-boundaries.md \
+            .kiro/steering/engine-correctness.md >/dev/null
+          for p in .kiro .kiro/specs .kiro/steering .kiro/hooks; do
+            rc=0
+            git check-ignore -q "$p" || rc=$?
+            if [ "$rc" -ne 1 ]; then
+              echo "ERROR: $p is git-ignored or check-ignore failed (rc=$rc)" >&2
+              exit 1
+            fi
+          done
+
+      - name: Run deterministic benchmark suite
+        run: pnpm bench

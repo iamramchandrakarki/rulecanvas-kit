@@ -1,0 +1,11 @@
+{
+  "name": "@rulecanvas/agent-gate",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@rulecanvas/core": "workspace:*"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  }
+}
