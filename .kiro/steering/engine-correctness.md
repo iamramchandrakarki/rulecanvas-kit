@@ -1,6 +1,6 @@
 ---
 inclusion: fileMatch
-fileMatch: "packages/rulecanvas-core/**"
+fileMatchPattern: "packages/rulecanvas-core/**"
 ---
 
 # Core Engine Correctness Invariants

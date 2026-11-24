@@ -17,10 +17,11 @@ inclusion: always
 
 ## Workspace Layering
 - `packages/rulecanvas-core`: domain-agnostic formal model validation, exact BFS verification, and deterministic step/trace replay.
+- `packages/rulecanvas-ui` (`@rulecanvas/ui`): pure ES2022 domain-neutral formatters, replay controller, and inspection renderers with `@rulecanvas/core` (`workspace:*`) as its sole runtime dependency; no `apps/*` imports, host clocks, randomness, DOM/React, or domain terminology.
 - `apps/*` (`@rulecanvas/agent-gate`, `@rulecanvas/interlock-sim`): domain models, scenarios, and domain tests consuming `@rulecanvas/core` via `workspace:*`.
-- Never import from `apps/*` into `packages/rulecanvas-core`.
+- Never import from `apps/*` into `packages/rulecanvas-core` or `packages/rulecanvas-ui`.
 
 ## Verification & Honesty Discipline
 - Never fabricate spec execution history or completed checkboxes in `.kiro/specs/`.
 - Keep architectural and core engine specifications under `docs/ARCHITECTURE.md` and `docs/specs/`.
-- Any change to `packages/rulecanvas-core` must pass `pnpm build`, `pnpm typecheck`, and `pnpm verify:boundaries`.
+- Any change to `packages/rulecanvas-core` or `packages/rulecanvas-ui` must pass `pnpm build`, `pnpm typecheck`, and `pnpm verify:boundaries`.

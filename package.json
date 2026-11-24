@@ -12,7 +12,7 @@
     ]
   },
   "scripts": {
-    "build": "pnpm --filter @rulecanvas/core build",
+    "build": "pnpm --filter @rulecanvas/core build && pnpm --filter @rulecanvas/ui build",
     "typecheck": "pnpm build && pnpm -r typecheck",
     "test": "pnpm build && vitest run",
     "verify:boundaries": "pnpm build && vitest run packages/rulecanvas-core/tests/boundaries.test.ts",

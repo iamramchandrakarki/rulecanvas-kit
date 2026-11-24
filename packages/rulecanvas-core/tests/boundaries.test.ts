@@ -9,6 +9,8 @@ const THIS_DIR = path.dirname(fileURLToPath(import.meta.url));
 const CORE_DIR = path.resolve(THIS_DIR, '..');
 const CORE_SRC_DIR = path.join(CORE_DIR, 'src');
 const REPO_ROOT = path.resolve(CORE_DIR, '..', '..');
+const UI_DIR = path.join(REPO_ROOT, 'packages', 'rulecanvas-ui');
+const UI_SRC_DIR = path.join(UI_DIR, 'src');
 
 function walkFiles(dir: string, filter?: (filePath: string) => boolean): string[] {
   if (!existsSync(dir)) return [];
@@ -48,31 +50,44 @@ function walkAst(node: unknown, visitor: (n: AstNode, parent: AstNode | null, pa
   }
 }
 
+function getStaticStringValue(node: AstNode | undefined): string | null {
+  if (!node) return null;
+  if (node.type === 'Literal' && typeof node.value === 'string') {
+    return node.value;
+  }
+  if (
+    node.type === 'TemplateLiteral' &&
+    Array.isArray(node.expressions) &&
+    node.expressions.length === 0 &&
+    Array.isArray(node.quasis) &&
+    node.quasis.length === 1
+  ) {
+    const q = node.quasis[0] as { value?: { cooked?: string; raw?: string } };
+    return q.value?.cooked ?? q.value?.raw ?? null;
+  }
+  return null;
+}
+
 function getMemberPropName(node: AstNode): string | null {
   const prop = node.property as AstNode | undefined;
   if (!prop) return null;
   if (!node.computed && prop.type === 'Identifier' && typeof prop.name === 'string') {
     return prop.name;
   }
-  if (node.computed && prop.type === 'Literal' && typeof prop.value === 'string') {
-    return prop.value;
-  }
-  if (
-    node.computed &&
-    prop.type === 'TemplateLiteral' &&
-    Array.isArray(prop.expressions) &&
-    prop.expressions.length === 0 &&
-    Array.isArray(prop.quasis) &&
-    prop.quasis.length === 1
-  ) {
-    const q = prop.quasis[0] as { value?: { cooked?: string; raw?: string } };
-    return q.value?.cooked ?? q.value?.raw ?? null;
+  if (node.computed) {
+    return getStaticStringValue(prop);
   }
   return null;
 }
 
-function checkCoreImportsInSource(filePath: string, source: string): string[] {
+function checkPackageImportsInSource(
+  filePath: string,
+  source: string,
+  pkgSrcDir: string,
+  allowedBareSpecifiers: ReadonlySet<string>,
+): string[] {
   const rel = path.relative(REPO_ROOT, filePath);
+  const pkgSrcRel = path.relative(REPO_ROOT, pkgSrcDir);
   const parsed = parseSync(filePath, source);
   const violations: string[] = [];
 
@@ -91,13 +106,15 @@ function checkCoreImportsInSource(filePath: string, source: string): string[] {
       return;
     }
     if (!spec.startsWith('./') && !spec.startsWith('../')) {
-      violations.push(`${rel}: forbidden bare specifier "${spec}"`);
+      if (!allowedBareSpecifiers.has(spec)) {
+        violations.push(`${rel}: forbidden bare specifier "${spec}"`);
+      }
       return;
     }
     const resolved = path.resolve(path.dirname(filePath), spec);
-    const relToCoreSrc = path.relative(CORE_SRC_DIR, resolved);
-    if (relToCoreSrc.startsWith('..') || path.isAbsolute(relToCoreSrc)) {
-      violations.push(`${rel}: relative specifier "${spec}" escapes packages/rulecanvas-core/src`);
+    const relToPkgSrc = path.relative(pkgSrcDir, resolved);
+    if (relToPkgSrc.startsWith('..') || path.isAbsolute(relToPkgSrc)) {
+      violations.push(`${rel}: relative specifier "${spec}" escapes ${pkgSrcRel}`);
     }
   };
 
@@ -140,6 +157,16 @@ function checkCoreImportsInSource(filePath: string, source: string): string[] {
   return violations;
 }
 
+function checkCoreImportsInSource(filePath: string, source: string): string[] {
+  return checkPackageImportsInSource(filePath, source, CORE_SRC_DIR, new Set());
+}
+
+const UI_ALLOWED_BARE_SPECIFIERS = new Set(['@rulecanvas/core']);
+
+function checkUiImportsInSource(filePath: string, source: string): string[] {
+  return checkPackageImportsInSource(filePath, source, UI_SRC_DIR, UI_ALLOWED_BARE_SPECIFIERS);
+}
+
 const FORBIDDEN_GLOBALS = new Set([
   'Date',
   'performance',
@@ -170,19 +197,11 @@ function getObjectPatternPropName(prop: AstNode): string | null {
   if (!prop.computed && key.type === 'Identifier' && typeof key.name === 'string') {
     return key.name;
   }
-  if (key.type === 'Literal' && typeof key.value === 'string') {
+  if (!prop.computed && key.type === 'Literal' && typeof key.value === 'string') {
     return key.value;
   }
-  if (
-    prop.computed &&
-    key.type === 'TemplateLiteral' &&
-    Array.isArray(key.expressions) &&
-    key.expressions.length === 0 &&
-    Array.isArray(key.quasis) &&
-    key.quasis.length === 1
-  ) {
-    const q = key.quasis[0] as { value?: { cooked?: string; raw?: string } };
-    return q.value?.cooked ?? q.value?.raw ?? null;
+  if (prop.computed) {
+    return getStaticStringValue(key);
   }
   return null;
 }
@@ -198,6 +217,310 @@ function objectPatternDestructuresRandom(pattern: AstNode | undefined): boolean 
   return false;
 }
 
+function unwrapExpression(node: AstNode | undefined): AstNode | undefined {
+  let curr = node;
+  while (
+    curr &&
+    (curr.type === 'ParenthesizedExpression' ||
+      curr.type === 'TSAsExpression' ||
+      curr.type === 'TSTypeAssertion' ||
+      curr.type === 'TSSatisfiesExpression' ||
+      curr.type === 'TSNonNullExpression')
+  ) {
+    curr = curr.expression as AstNode | undefined;
+  }
+  return curr;
+}
+
+interface ScopeFrame {
+  readonly kind: 'function' | 'block';
+  readonly parent: ScopeFrame | null;
+  readonly declared: Set<string>;
+  readonly varDeclared: Set<string>;
+  readonly fnDeclared: Set<string>;
+  readonly mathAlias: Map<string, boolean>;
+}
+
+function resolveVarScope(scope: ScopeFrame): ScopeFrame {
+  let curr: ScopeFrame = scope;
+  while (curr.kind !== 'function' && curr.parent !== null) {
+    curr = curr.parent;
+  }
+  return curr;
+}
+
+function findOwnerScope(scope: ScopeFrame, name: string): ScopeFrame | null {
+  let curr: ScopeFrame | null = scope;
+  while (curr !== null) {
+    if (curr.declared.has(name)) {
+      return curr;
+    }
+    curr = curr.parent;
+  }
+  return null;
+}
+
+function isMathAliasExpr(node: AstNode | undefined, scope: ScopeFrame): boolean {
+  const expr = unwrapExpression(node);
+  if (!expr) return false;
+  if (expr.type === 'Identifier' && typeof expr.name === 'string') {
+    const owner = findOwnerScope(scope, expr.name);
+    return owner !== null && owner.mathAlias.get(expr.name) === true;
+  }
+  if (expr.type === 'SequenceExpression' && Array.isArray(expr.expressions) && expr.expressions.length > 0) {
+    return isMathAliasExpr(expr.expressions[expr.expressions.length - 1] as AstNode | undefined, scope);
+  }
+  if (expr.type === 'ConditionalExpression') {
+    return (
+      isMathAliasExpr(expr.consequent as AstNode | undefined, scope) ||
+      isMathAliasExpr(expr.alternate as AstNode | undefined, scope)
+    );
+  }
+  if (expr.type === 'LogicalExpression') {
+    return (
+      isMathAliasExpr(expr.left as AstNode | undefined, scope) ||
+      isMathAliasExpr(expr.right as AstNode | undefined, scope)
+    );
+  }
+  return false;
+}
+
+function collectPatternBoundNames(pattern: AstNode | undefined, out: string[]): void {
+  if (!pattern) return;
+  if (pattern.type === 'Identifier' && typeof pattern.name === 'string') {
+    out.push(pattern.name);
+    return;
+  }
+  if (pattern.type === 'AssignmentPattern') {
+    collectPatternBoundNames(pattern.left as AstNode | undefined, out);
+    return;
+  }
+  if (pattern.type === 'RestElement') {
+    collectPatternBoundNames(pattern.argument as AstNode | undefined, out);
+    return;
+  }
+  if (pattern.type === 'TSParameterProperty') {
+    collectPatternBoundNames(pattern.parameter as AstNode | undefined, out);
+    return;
+  }
+  if (pattern.type === 'ArrayPattern' && Array.isArray(pattern.elements)) {
+    for (const elem of pattern.elements) {
+      collectPatternBoundNames(elem as AstNode | undefined, out);
+    }
+    return;
+  }
+  if (pattern.type === 'ObjectPattern' && Array.isArray(pattern.properties)) {
+    for (const rawProp of pattern.properties) {
+      const prop = rawProp as AstNode | undefined;
+      if (!prop) continue;
+      if (prop.type === 'Property') {
+        collectPatternBoundNames(prop.value as AstNode | undefined, out);
+      } else if (prop.type === 'RestElement') {
+        collectPatternBoundNames(prop.argument as AstNode | undefined, out);
+      }
+    }
+  }
+}
+
+function createChildScope(kind: 'function' | 'block', parent: ScopeFrame): ScopeFrame {
+  return {
+    kind,
+    parent,
+    declared: new Set(),
+    varDeclared: new Set(),
+    fnDeclared: new Set(),
+    mathAlias: new Map(),
+  };
+}
+
+interface FunctionBodyLink {
+  readonly paramScope: ScopeFrame;
+  readonly bodyScope: ScopeFrame;
+}
+
+function buildLexicalScopes(program: AstNode): {
+  readonly moduleScope: ScopeFrame;
+  readonly nodeScopes: WeakMap<AstNode, ScopeFrame>;
+  readonly functionBodyLinks: readonly FunctionBodyLink[];
+} {
+  const globalScope: ScopeFrame = {
+    kind: 'function',
+    parent: null,
+    declared: new Set(['Math']),
+    varDeclared: new Set(),
+    fnDeclared: new Set(),
+    mathAlias: new Map([['Math', true]]),
+  };
+  const moduleScope = createChildScope('function', globalScope);
+  const nodeScopes = new WeakMap<AstNode, ScopeFrame>();
+  const functionBodyLinks: FunctionBodyLink[] = [];
+  nodeScopes.set(program, moduleScope);
+
+  const visit = (node: unknown, scope: ScopeFrame): void => {
+    if (node === null || node === undefined || typeof node !== 'object') return;
+    if (Array.isArray(node)) {
+      for (const item of node) {
+        visit(item, scope);
+      }
+      return;
+    }
+    const ast = node as AstNode;
+    if (typeof ast.type !== 'string') return;
+
+    const existingScope = nodeScopes.get(ast);
+    let innerScope = existingScope ?? scope;
+
+    if (ast.type === 'SwitchStatement') {
+      if (Array.isArray(ast.cases)) {
+        const casesScope = createChildScope('block', innerScope);
+        for (const rawCase of ast.cases) {
+          const switchCase = rawCase as AstNode | undefined;
+          if (switchCase && typeof switchCase.type === 'string') {
+            nodeScopes.set(switchCase, casesScope);
+          }
+        }
+      }
+    } else if (ast.type === 'TSModuleDeclaration' && ast.declare === true) {
+      return;
+    } else if (
+      ast.type === 'StaticBlock' ||
+      (ast.type === 'TSModuleDeclaration' && ast.declare !== true)
+    ) {
+      innerScope = createChildScope('function', scope);
+      nodeScopes.set(ast, innerScope);
+    } else if (
+      existingScope === undefined &&
+      (ast.type === 'BlockStatement' ||
+        ast.type === 'ForStatement' ||
+        ast.type === 'ForInStatement' ||
+        ast.type === 'ForOfStatement')
+    ) {
+      innerScope = createChildScope('block', scope);
+      nodeScopes.set(ast, innerScope);
+    } else if (ast.type === 'CatchClause') {
+      innerScope = createChildScope('block', scope);
+      nodeScopes.set(ast, innerScope);
+      const paramNames: string[] = [];
+      collectPatternBoundNames(ast.param as AstNode | undefined, paramNames);
+      for (const name of paramNames) {
+        innerScope.declared.add(name);
+      }
+    } else if (
+      ast.type === 'FunctionDeclaration' ||
+      ast.type === 'FunctionExpression' ||
+      ast.type === 'ArrowFunctionExpression'
+    ) {
+      if (ast.type === 'FunctionDeclaration' && ast.declare === true) {
+        return;
+      }
+      const fnId = ast.id as AstNode | undefined;
+      if (ast.type === 'FunctionDeclaration' && fnId?.type === 'Identifier' && typeof fnId.name === 'string') {
+        scope.declared.add(fnId.name);
+        scope.fnDeclared.add(fnId.name);
+      }
+      innerScope = createChildScope('function', scope);
+      nodeScopes.set(ast, innerScope);
+      if (ast.type === 'FunctionExpression' && fnId?.type === 'Identifier' && typeof fnId.name === 'string') {
+        innerScope.declared.add(fnId.name);
+      }
+      if (Array.isArray(ast.params)) {
+        const paramNames: string[] = [];
+        for (const param of ast.params) {
+          collectPatternBoundNames(param as AstNode | undefined, paramNames);
+        }
+        for (const name of paramNames) {
+          innerScope.declared.add(name);
+        }
+      }
+      const fnBody = ast.body as AstNode | undefined;
+      if (fnBody && fnBody.type === 'BlockStatement') {
+        const bodyScope = createChildScope('function', innerScope);
+        nodeScopes.set(fnBody, bodyScope);
+        functionBodyLinks.push({ paramScope: innerScope, bodyScope });
+      }
+    } else if (
+      (ast.type === 'ClassDeclaration' || ast.type === 'TSEnumDeclaration') &&
+      ast.declare !== true
+    ) {
+      const declId = ast.id as AstNode | undefined;
+      if (declId?.type === 'Identifier' && typeof declId.name === 'string') {
+        scope.declared.add(declId.name);
+      }
+    } else if (ast.type === 'ClassExpression') {
+      const classId = ast.id as AstNode | undefined;
+      if (classId?.type === 'Identifier' && typeof classId.name === 'string') {
+        innerScope = createChildScope('block', scope);
+        innerScope.declared.add(classId.name);
+        nodeScopes.set(ast, innerScope);
+      }
+    } else if (ast.type === 'ImportDeclaration' && ast.importKind !== 'type' && Array.isArray(ast.specifiers)) {
+      for (const rawSpec of ast.specifiers) {
+        const spec = rawSpec as AstNode | undefined;
+        if (!spec || spec.importKind === 'type') continue;
+        const local = spec.local as AstNode | undefined;
+        if (local?.type === 'Identifier' && typeof local.name === 'string') {
+          moduleScope.declared.add(local.name);
+        }
+      }
+    } else if (ast.type === 'VariableDeclaration' && ast.declare !== true && Array.isArray(ast.declarations)) {
+      const isVar = ast.kind === 'var';
+      const targetScope = isVar ? resolveVarScope(innerScope) : innerScope;
+      for (const rawDecl of ast.declarations) {
+        const decl = rawDecl as AstNode | undefined;
+        if (!decl) continue;
+        const names: string[] = [];
+        collectPatternBoundNames(decl.id as AstNode | undefined, names);
+        for (const name of names) {
+          targetScope.declared.add(name);
+          if (isVar) {
+            targetScope.varDeclared.add(name);
+          }
+        }
+      }
+    }
+
+    for (const key of Object.keys(ast)) {
+      if (key === 'type' || key === 'start' || key === 'end') continue;
+      visit(ast[key], innerScope);
+    }
+  };
+
+  visit(program, moduleScope);
+  return { moduleScope, nodeScopes, functionBodyLinks };
+}
+
+function walkProgramWithScopes(
+  program: AstNode,
+  nodeScopes: WeakMap<AstNode, ScopeFrame>,
+  moduleScope: ScopeFrame,
+  visitor: (ast: AstNode, scope: ScopeFrame, parent: AstNode | null, parentKey: string | null) => void,
+): void {
+  const visit = (
+    node: unknown,
+    scope: ScopeFrame,
+    parent: AstNode | null,
+    parentKey: string | null,
+  ): void => {
+    if (node === null || node === undefined || typeof node !== 'object') return;
+    if (Array.isArray(node)) {
+      for (const item of node) {
+        visit(item, scope, parent, parentKey);
+      }
+      return;
+    }
+    const ast = node as AstNode;
+    if (typeof ast.type !== 'string') return;
+    const activeScope = nodeScopes.get(ast) ?? scope;
+    visitor(ast, activeScope, parent, parentKey);
+    for (const key of Object.keys(ast)) {
+      if (key === 'type' || key === 'start' || key === 'end') continue;
+      visit(ast[key], activeScope, ast, key);
+    }
+  };
+
+  visit(program, moduleScope, null, null);
+}
+
 function checkForbiddenApisInSource(filePath: string, source: string): string[] {
   const rel = path.relative(REPO_ROOT, filePath);
   const parsed = parseSync(filePath, source);
@@ -207,32 +530,114 @@ function checkForbiddenApisInSource(filePath: string, source: string): string[] 
     return [`${rel}: TypeScript parse error (${parsed.errors[0]!.message})`];
   }
 
-  walkAst(parsed.program, (node, parent, parentKey) => {
-    if (node.type === 'MemberExpression') {
-      const obj = node.object as AstNode | undefined;
-      const propName = getMemberPropName(node);
-      if (obj?.type === 'Identifier' && obj.name === 'Math' && propName === 'random') {
+  const programAst = parsed.program as unknown as AstNode;
+  const { moduleScope, nodeScopes, functionBodyLinks } = buildLexicalScopes(programAst);
+
+  // Pass 2: fixed-point propagation of Math aliases across resolved lexical scopes
+  let changed = true;
+  while (changed) {
+    changed = false;
+    walkProgramWithScopes(programAst, nodeScopes, moduleScope, (ast, scope) => {
+      if (ast.type === 'VariableDeclarator') {
+        const id = ast.id as AstNode | undefined;
+        const init = ast.init as AstNode | undefined;
+        if (id?.type === 'Identifier' && typeof id.name === 'string' && isMathAliasExpr(init, scope)) {
+          const owner = findOwnerScope(scope, id.name);
+          if (owner !== null && owner.mathAlias.get(id.name) !== true) {
+            owner.mathAlias.set(id.name, true);
+            changed = true;
+          }
+        }
+      } else if (ast.type === 'AssignmentExpression') {
+        const left = ast.left as AstNode | undefined;
+        const right = ast.right as AstNode | undefined;
+        if (left?.type === 'Identifier' && typeof left.name === 'string' && isMathAliasExpr(right, scope)) {
+          const owner = findOwnerScope(scope, left.name);
+          if (owner !== null && owner.mathAlias.get(left.name) !== true) {
+            owner.mathAlias.set(left.name, true);
+            changed = true;
+          }
+        }
+      } else if (ast.type === 'AssignmentPattern') {
+        const left = ast.left as AstNode | undefined;
+        const right = ast.right as AstNode | undefined;
+        if (left?.type === 'Identifier' && typeof left.name === 'string' && isMathAliasExpr(right, scope)) {
+          const owner = findOwnerScope(scope, left.name);
+          if (owner !== null && owner.mathAlias.get(left.name) !== true) {
+            owner.mathAlias.set(left.name, true);
+            changed = true;
+          }
+        }
+      }
+    });
+
+    // Carry parameter alias marker into function body `var` declarations of the same name
+    for (const { paramScope, bodyScope } of functionBodyLinks) {
+      for (const name of bodyScope.varDeclared) {
+        if (
+          paramScope.declared.has(name) &&
+          !bodyScope.fnDeclared.has(name) &&
+          paramScope.mathAlias.get(name) === true &&
+          bodyScope.mathAlias.get(name) !== true
+        ) {
+          bodyScope.mathAlias.set(name, true);
+          changed = true;
+        }
+      }
+    }
+  }
+
+  // Pass 3: check forbidden uses using resolved alias scopes
+  walkProgramWithScopes(programAst, nodeScopes, moduleScope, (ast, scope, parent, parentKey) => {
+    if (ast.type === 'MemberExpression') {
+      const propName = getMemberPropName(ast);
+      if (isMathAliasExpr(ast.object as AstNode | undefined, scope) && propName === 'random') {
         found.add('Math.random');
       }
       return;
     }
-    if (node.type === 'VariableDeclarator') {
-      const init = node.init as AstNode | undefined;
-      const id = node.id as AstNode | undefined;
-      if (init?.type === 'Identifier' && init.name === 'Math' && objectPatternDestructuresRandom(id)) {
+    if (ast.type === 'CallExpression') {
+      const callee = unwrapExpression(ast.callee as AstNode | undefined);
+      if (callee?.type === 'MemberExpression') {
+        const calleeObj = unwrapExpression(callee.object as AstNode | undefined);
+        const calleeProp = getMemberPropName(callee);
+        if (calleeObj?.type === 'Identifier' && calleeObj.name === 'Reflect' && calleeProp === 'get') {
+          const args = ast.arguments as AstNode[] | undefined;
+          const target = args?.[0];
+          const keyArg = unwrapExpression(args?.[1]);
+          if (isMathAliasExpr(target, scope) && getStaticStringValue(keyArg) === 'random') {
+            found.add('Math.random');
+          }
+        }
+      }
+    }
+    if (ast.type === 'VariableDeclarator') {
+      if (
+        isMathAliasExpr(ast.init as AstNode | undefined, scope) &&
+        objectPatternDestructuresRandom(ast.id as AstNode | undefined)
+      ) {
         found.add('Math.random');
       }
     }
-    if (node.type === 'AssignmentExpression') {
-      const right = node.right as AstNode | undefined;
-      const left = node.left as AstNode | undefined;
-      if (right?.type === 'Identifier' && right.name === 'Math' && objectPatternDestructuresRandom(left)) {
+    if (ast.type === 'AssignmentExpression') {
+      if (
+        isMathAliasExpr(ast.right as AstNode | undefined, scope) &&
+        objectPatternDestructuresRandom(ast.left as AstNode | undefined)
+      ) {
         found.add('Math.random');
       }
     }
-    if (node.type === 'Identifier' && typeof node.name === 'string') {
-      if (FORBIDDEN_GLOBALS.has(node.name) && !isNonReferenceIdentifier(parent, parentKey)) {
-        found.add(node.name);
+    if (ast.type === 'AssignmentPattern') {
+      if (
+        isMathAliasExpr(ast.right as AstNode | undefined, scope) &&
+        objectPatternDestructuresRandom(ast.left as AstNode | undefined)
+      ) {
+        found.add('Math.random');
+      }
+    }
+    if (ast.type === 'Identifier' && typeof ast.name === 'string') {
+      if (FORBIDDEN_GLOBALS.has(ast.name) && !isNonReferenceIdentifier(parent, parentKey)) {
+        found.add(ast.name);
       }
     }
   });
@@ -283,11 +688,35 @@ describe('architecture and honesty boundaries', () => {
     }
     expect(violations).toEqual([]);
 
-    // Self-check: AST API checker catches spaced, computed, multiline, and destructured spellings
+    // Self-check: AST API checker catches spaced, computed, multiline, destructured, and aliased spellings
     expect(checkForbiddenApisInSource(path.join(CORE_SRC_DIR, '__probe__.ts'), 'const r = Math . random();')).toHaveLength(1);
     expect(checkForbiddenApisInSource(path.join(CORE_SRC_DIR, '__probe__.ts'), "const r = Math['random']();")).toHaveLength(1);
     expect(checkForbiddenApisInSource(path.join(CORE_SRC_DIR, '__probe__.ts'), 'const { random: r } = Math;')).toHaveLength(1);
     expect(checkForbiddenApisInSource(path.join(CORE_SRC_DIR, '__probe__.ts'), 'const { "random": r } = Math;')).toHaveLength(1);
+    expect(checkForbiddenApisInSource(path.join(CORE_SRC_DIR, '__probe__.ts'), 'const m = Math; m.random();')).toHaveLength(1);
+    expect(checkForbiddenApisInSource(path.join(CORE_SRC_DIR, '__probe__.ts'), 'const a = Math; const b = a; b["random"]();')).toHaveLength(1);
+    expect(checkForbiddenApisInSource(path.join(CORE_SRC_DIR, '__probe__.ts'), 'const m = Math; const { random: r } = m;')).toHaveLength(1);
+    expect(checkForbiddenApisInSource(path.join(CORE_SRC_DIR, '__probe__.ts'), "const m = Math; Reflect.get(m, 'random');")).toHaveLength(1);
+    expect(checkForbiddenApisInSource(path.join(CORE_SRC_DIR, '__probe__.ts'), 'const m = Math; function f(m: { random(): number }) { return m.random(); }')).toEqual([]);
+    expect(checkForbiddenApisInSource(path.join(CORE_SRC_DIR, '__probe__.ts'), 'const m = Math; function f() { return m.random(); }')).toHaveLength(1);
+    expect(checkForbiddenApisInSource(path.join(CORE_SRC_DIR, '__probe__.ts'), 'function f() { return m.random(); } const m = Math; f();')).toHaveLength(1);
+    expect(checkForbiddenApisInSource(path.join(CORE_SRC_DIR, '__probe__.ts'), 'if (true) { var m = Math; } m.random();')).toHaveLength(1);
+    expect(checkForbiddenApisInSource(path.join(CORE_SRC_DIR, '__probe__.ts'), 'if (true) { const m = Math; } const m = { random: () => 0 }; m.random();')).toEqual([]);
+    expect(checkForbiddenApisInSource(path.join(CORE_SRC_DIR, '__probe__.ts'), 'const m = Math; switch (m.random()) { case 0: let m = { random: () => 0 }; break; }')).toHaveLength(1);
+    expect(checkForbiddenApisInSource(path.join(CORE_SRC_DIR, '__probe__.ts'), 'const m = Math; switch (0) { case 0: let m = { random: () => 0 }; m.random(); break; }')).toEqual([]);
+    expect(checkForbiddenApisInSource(path.join(CORE_SRC_DIR, '__probe__.ts'), 'const m = Math; function f(x = m.random()) { var m = { random: () => 0 }; return x; }')).toHaveLength(1);
+    expect(checkForbiddenApisInSource(path.join(CORE_SRC_DIR, '__probe__.ts'), 'const m = Math; function f(x = m.random()) { var m = { random: () => 0 }; return m.random(); }')).toHaveLength(1);
+    expect(checkForbiddenApisInSource(path.join(CORE_SRC_DIR, '__probe__.ts'), 'function f(m = Math) { return m.random(); }')).toHaveLength(1);
+    expect(checkForbiddenApisInSource(path.join(CORE_SRC_DIR, '__probe__.ts'), 'function f(m = Math) { var m = m; return m.random(); } f();')).toHaveLength(1);
+    expect(checkForbiddenApisInSource(path.join(CORE_SRC_DIR, '__probe__.ts'), 'function f({ random } = Math) { return random(); } f();')).toHaveLength(1);
+    expect(checkForbiddenApisInSource(path.join(CORE_SRC_DIR, '__probe__.ts'), 'export {}; const Math = { random: () => 0 }; Math.random();')).toEqual([]);
+    expect(checkForbiddenApisInSource(path.join(CORE_SRC_DIR, '__probe__.ts'), "import type { Math } from './types.js'; Math.random();")).toHaveLength(1);
+    expect(checkForbiddenApisInSource(path.join(CORE_SRC_DIR, '__probe__.ts'), "import { type Math } from './types.js'; Math.random();")).toHaveLength(1);
+    expect(checkForbiddenApisInSource(path.join(CORE_SRC_DIR, '__probe__.ts'), 'declare const Math: { random(): number }; Math.random();')).toHaveLength(1);
+    expect(checkForbiddenApisInSource(path.join(CORE_SRC_DIR, '__probe__.ts'), 'class C { static { var Math = { random: () => 0 }; } } Math.random();')).toHaveLength(1);
+    expect(checkForbiddenApisInSource(path.join(CORE_SRC_DIR, '__probe__.ts'), 'function f(m = Math) { var m; function m() {} return m.random; } f();')).toEqual([]);
+    expect(checkForbiddenApisInSource(path.join(CORE_SRC_DIR, '__probe__.ts'), '(0, Math).random();')).toHaveLength(1);
+    expect(checkForbiddenApisInSource(path.join(CORE_SRC_DIR, '__probe__.ts'), 'const m = Math; Reflect.get(m, `random`);')).toHaveLength(1);
     expect(checkForbiddenApisInSource(path.join(CORE_SRC_DIR, '__probe__.ts'), 'const t = Date\n  .now();')).toHaveLength(1);
 
     // Self-check: AST test-hygiene checker catches multiline, aliased, namespace-imported, and bare pending calls
@@ -330,6 +759,88 @@ describe('architecture and honesty boundaries', () => {
     const violations: string[] = [];
     for (const filePath of allSrcFiles) {
       const rel = path.relative(CORE_SRC_DIR, filePath);
+      const content = readFileSync(filePath, 'utf8');
+      for (const pattern of domainLeakPatterns) {
+        if (pattern.test(rel)) {
+          violations.push(`filename "${rel}" matches forbidden domain pattern ${pattern}`);
+        }
+        if (pattern.test(content)) {
+          violations.push(`${path.relative(REPO_ROOT, filePath)} content matches forbidden domain pattern ${pattern}`);
+        }
+      }
+    }
+
+    expect(violations).toEqual([]);
+  });
+
+  it('verifies packages/rulecanvas-ui/package.json has @rulecanvas/core (workspace:*) as sole runtime dependency and zero peer or optional dependencies', () => {
+    const pkgPath = path.join(UI_DIR, 'package.json');
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as Record<string, unknown>;
+
+    expect(pkg['dependencies']).toEqual({ '@rulecanvas/core': 'workspace:*' });
+
+    for (const field of ['peerDependencies', 'optionalDependencies'] as const) {
+      const value = pkg[field];
+      if (value !== undefined) {
+        expect(typeof value).toBe('object');
+        expect(Object.keys(value as Record<string, unknown>)).toEqual([]);
+      }
+    }
+  });
+
+  it('forbids node:*, apps/*, dynamic import(), and external bare specifiers other than @rulecanvas/core in packages/rulecanvas-ui/src/**/*.ts', () => {
+    const tsFiles = walkFiles(UI_SRC_DIR, (p) => p.endsWith('.ts'));
+    expect(tsFiles.length).toBeGreaterThan(0);
+
+    const violations: string[] = [];
+    for (const filePath of tsFiles) {
+      violations.push(...checkUiImportsInSource(filePath, readFileSync(filePath, 'utf8')));
+    }
+    expect(violations).toEqual([]);
+
+    // Self-check: allows @rulecanvas/core but rejects node:*, apps/*, and external npm packages
+    expect(checkUiImportsInSource(path.join(UI_SRC_DIR, '__probe__.ts'), "import { replayTrace } from '@rulecanvas/core';")).toEqual([]);
+    expect(checkUiImportsInSource(path.join(UI_SRC_DIR, '__probe__.ts'), "import { readFileSync } from 'node:fs';")).toHaveLength(1);
+    expect(checkUiImportsInSource(path.join(UI_SRC_DIR, '__probe__.ts'), "import { x } from '../../../apps/agent-gate/src/index.js';")).toHaveLength(1);
+    expect(checkUiImportsInSource(path.join(UI_SRC_DIR, '__probe__.ts'), "import React from 'react';")).toHaveLength(1);
+    expect(checkUiImportsInSource(path.join(UI_SRC_DIR, '__probe__.ts'), "const m = import('./format.js');")).toHaveLength(1);
+  });
+
+  it('forbids non-deterministic or host-coupled APIs in packages/rulecanvas-ui/src/**/*.ts', () => {
+    const tsFiles = walkFiles(UI_SRC_DIR, (p) => p.endsWith('.ts'));
+    expect(tsFiles.length).toBeGreaterThan(0);
+
+    const violations: string[] = [];
+    for (const filePath of tsFiles) {
+      violations.push(...checkForbiddenApisInSource(filePath, readFileSync(filePath, 'utf8')));
+    }
+    expect(violations).toEqual([]);
+  });
+
+  it('contains zero domain leaks in packages/rulecanvas-ui/src/** filenames or contents', () => {
+    const allSrcFiles = walkFiles(UI_SRC_DIR);
+    expect(allSrcFiles.length).toBeGreaterThan(0);
+
+    const domainLeakPatterns: readonly RegExp[] = [
+      /airlock/i,
+      /autoclave/i,
+      /bsl/i,
+      /steril/i,
+      /agent/i,
+      /trifecta/i,
+      /launder/i,
+      /approval/i,
+      /exfil/i,
+      /webhook/i,
+      /interlock/i,
+      /valve/i,
+      /door/i,
+      /\bmcp\b/i,
+    ];
+
+    const violations: string[] = [];
+    for (const filePath of allSrcFiles) {
+      const rel = path.relative(UI_SRC_DIR, filePath);
       const content = readFileSync(filePath, 'utf8');
       for (const pattern of domainLeakPatterns) {
         if (pattern.test(rel)) {

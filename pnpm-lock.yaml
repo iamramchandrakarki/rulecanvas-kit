@@ -208,6 +208,12 @@ importers:
 
   packages/rulecanvas-core: {}
 
+  packages/rulecanvas-ui:
+    dependencies:
+      '@rulecanvas/core':
+        specifier: workspace:*
+        version: link:../rulecanvas-core
+
 packages:
 
   '@emnapi/core@2.0.0-beta.2':

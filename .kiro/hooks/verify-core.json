@@ -1,16 +1,14 @@
 {
   "version": "v1",
-  "name": "Verify Core Engine",
-  "description": "Run @rulecanvas/core unit and boundary tests after saving core source or test files.",
-  "when": {
-    "type": "PostFileSave",
-    "patterns": [
-      "packages/rulecanvas-core/src/**/*.ts",
-      "packages/rulecanvas-core/tests/**/*.ts"
-    ]
-  },
-  "then": {
-    "type": "command",
-    "command": "pnpm --filter @rulecanvas/core build && pnpm --filter @rulecanvas/core test"
-  }
+  "hooks": [
+    {
+      "name": "verify-core-engine",
+      "trigger": "PostFileSave",
+      "matcher": "packages/rulecanvas-core/(src|tests)/.*\\.ts$",
+      "action": {
+        "type": "command",
+        "command": "pnpm --filter @rulecanvas/core build && pnpm --filter @rulecanvas/core test"
+      }
+    }
+  ]
 }
