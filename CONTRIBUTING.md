@@ -54,12 +54,7 @@ pnpm verify:hygiene
 pnpm bench
 ```
 
-When Playwright and Chromium are installed locally, also run the browser regression suite (optionally sharing `BOOKING_FIXTURE_DIST` with `pnpm verify:pack`):
-
-```bash
-BOOKING_FIXTURE_DIST=/tmp/rulecanvas-booking-demo pnpm verify:pack
-BOOKING_FIXTURE_DIST=/tmp/rulecanvas-booking-demo pnpm test:browser
-```
+Run the [browser regression suite](./README.md#build-pack-and-verification-instructions) with the pinned Playwright and axe versions. Share `BOOKING_FIXTURE_DIST` between the package and browser gates to exercise the worker built from the tarballs.
 
 ## Workspace Layering & Packaging Invariants
 

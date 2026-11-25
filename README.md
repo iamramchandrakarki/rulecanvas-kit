@@ -193,7 +193,7 @@ RuleCanvasKit powers two domain-separated React 19 + Vite workbenches built on t
 - **Reciprocal same-origin navigation**: `WorkbenchNavigation` links between `AgentGate` and `InterlockSim` (`../interlock-sim/` and `../agent-gate/` by default for sibling static deployments, configurable at build time via `VITE_INTERLOCK_SIM_URL` and `VITE_AGENT_GATE_URL`, and validated against the deployment path prefix).
 - **Preset URL query routing with discard protection**: Both apps synchronize active presets with `?preset=...` via `useWorkbenchRoute`, prompting with an accessible `role="alertdialog"` confirmation and focus restoration when switching presets or comparison rows while JSON or model edits are dirty.
 - **Snapshot-bound Web Worker verification**: Verification runs in a Vite module worker via `@rulecanvas/workbench/verify` and `useVerificationSnapshot`, with automatic cancellation of superseded runs, synchronous main-thread fallback when Web Workers are unavailable, and explicit `OUTDATED:` status separation after edits.
-- **Portable JSON import/export**: Uses `@rulecanvas/workbench/model-json` with RFC 8259 raw integer pre-validation and structural checks (`DEFAULT_MODEL_JSON_LIMITS`: 512,000 UTF-16 code units / 10,000 nodes / depth 64).
+- **Portable JSON import/export**: Both apps use the shared codec for portable exports. InterlockSim also uses it for imports with last-value handling for duplicate keys. AgentGate retains its previous import limits for existing model files. Both import paths check raw integer literals before parsing.
 
 ### AgentGate (`apps/agent-gate`)
 
@@ -261,15 +261,16 @@ To run the headless Chromium browser regression gate (`pnpm test:browser`) again
 
 ```bash
 qa_dir=$(mktemp -d)
-npm install --no-save --prefix "$qa_dir" playwright@1.65.1
+npm install --no-save --prefix "$qa_dir" playwright@1.65.1 @axe-core/playwright@4.14.1
 "$qa_dir/node_modules/.bin/playwright" install chromium
 BOOKING_FIXTURE_DIST="$qa_dir/booking" pnpm verify:pack
 PLAYWRIGHT_MODULE="$qa_dir/node_modules/playwright/index.mjs" \
+  AXE_PLAYWRIGHT_MODULE="$qa_dir/node_modules/@axe-core/playwright/dist/index.mjs" \
   BOOKING_FIXTURE_DIST="$qa_dir/booking" \
   SCREENSHOT_DIR="$qa_dir/screenshots" pnpm test:browser
 ```
 
-Note: `tests/browser/workbench-e2e.mjs` resolves Playwright from `PLAYWRIGHT_MODULE`, `'playwright'`, or the local Homebrew Playwright path, and honors `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` and `SCREENSHOT_DIR`.
+The browser gate checks both workbench journeys, keyboard operation, four viewport widths down to 375 CSS pixels, and axe WCAG A/AA rules. It also checks the built booking worker when `BOOKING_FIXTURE_DIST` is set.
 
 ## Known Limitations
 
