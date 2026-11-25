@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Packaging, Export, and Browser Regression Gates**:
   - `pnpm verify:exports` (`scripts/verify-exports.mjs`) validating all 4 library packages, 6 public ESM entry points, and plain Node/`tsx` SSR imports of both `apps/*/src/App.tsx` modules without DOM globals.
   - `pnpm verify:pack` (`scripts/verify-pack.mjs`) verifying map-free `build:pack` tarballs against a positive archive allowlist (`package.json`, `README.md`, `LICENSE`, `dist/**/*.{js,d.ts,d.mts}`), rewritten `workspace:*` dependencies, offline pinned installation into an isolated third-app booking consumer, strict `tsc --noEmit` (`NodeNext` and `Bundler`), and Vite subpath (`/booking-demo/`) worker bundling.
-  - `pnpm test:browser` (`tests/browser/workbench-e2e.mjs`) running headless Chromium Playwright checks across `1280x800`, `768x1024`, and `390x844` on `/suite/agent-gate/`, `/suite/interlock-sim/`, and optional `/booking-demo/`, verifying dirty JSON/comparison discard dialogs (`role="alertdialog"` with focus restoration), clipboard-fallback dirty reset, same-preset Back/Reselect URL sync, no-Navigation-API fallback, cancellation, and no-Worker fallback.
+  - `pnpm test:browser` runs both production workbenches and the packed booking worker in Chromium. It checks domain replay, keyboard operation, WCAG A/AA axe rules, and responsive layout down to 375 CSS pixels.
 - **Documentation**:
   - Updated `README.md`, `CONTRIBUTING.md`, `docs/ARCHITECTURE.md`, and all four package `README.md` files with exact package exports, integrated workbench workflows, limitations, and build/pack/browser verification commands; added an honest Devpost Skeleton Crew draft and sub-three-minute demo script in [docs/SKELETON_CREW_SUBMISSION.md](./docs/SKELETON_CREW_SUBMISSION.md).
 
@@ -30,6 +30,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Migrated both workbenches onto `@rulecanvas/workbench` and `@rulecanvas/workbench-react`, adding reciprocal `WorkbenchNavigation` (with SSR-safe `VITE_INTERLOCK_SIM_URL` / `VITE_AGENT_GATE_URL` env reads), `?preset=...` URL routing, dirty-editor and comparison-panel preset discard confirmations with focus restoration, and 512k strict export with legacy duplicate-key import compatibility (plus InterlockSim's clean 0-invariant draft export exception and AgentGate's clipboard-fallback dirty reset).
 - **Boundaries & CI (`.github/workflows/ci.yml`, `packages/rulecanvas-core/tests/boundaries.test.ts`)**:
   - Extended AST boundary and manifest DAG checks across all four libraries and both apps, and updated CI with strict per-library `tsc --noEmit`, `pnpm verify:exports`, `pnpm verify:pack`, `pnpm test:browser`, and commit-scoped `SHA256SUMS.txt` archive/screenshot artifacts.
+
+### Fixed
+
+- Legacy browser worker adapters now preserve caller request IDs while exchanging valid versioned envelopes. Result validation rejects inconsistent depth and goal metadata.
+- Preset routing preserves drafts during fragment visits, distinguishes browser history from previous document loads, and dismisses stale prompts when the routing controller is replaced.
+- Both workbenches expose keyboard-focusable scroll regions and support Escape on discard prompts. Narrow layouts keep controls and long diagnostics within the viewport.
 
 ## [0.4.0] - 2026-11-25
 
