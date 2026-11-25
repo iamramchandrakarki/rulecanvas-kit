@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`@rulecanvas/workbench` (`v0.5.0`, private) (`packages/rulecanvas-workbench`)**:
+  - Framework-independent verification transport (`@rulecanvas/workbench/verify`, `@rulecanvas/workbench/verify-worker`) featuring `VERIFY_PROTOCOL_VERSION = 1`, frozen factory clients backed by `WeakSet` provenance (`createVerifyClient`, `isFactoryVerifyClient`), `createLegacyWorkerAdapter`, early `(requestId, generation)` correlation, descriptor-safe detached capture (`captureVerificationRequest`), schema-checked deep-frozen results (`sanitizeAndFreezeVerifyResult`), and worker installation with zero DOM globals at import time (`installVerifyWorker`).
+  - Strict portable JSON codec (`@rulecanvas/workbench/model-json`) with `createModelJsonCodec`, `DEFAULT_MODEL_JSON_LIMITS` (512,000 UTF-16 code units, 10,000 nodes, depth 64, raw container nesting 256), `HARD_CEILING_MODEL_JSON_LIMITS` (2,000,000 UTF-16 code units, 50,000 nodes, depth 64, raw container nesting 256), pre-parse duplicate decoded key scanning (`duplicateKeys: 'reject' | 'last-value'`), RFC 8259 integer checking, and `@rulecanvas/core` validation.
+- **`@rulecanvas/workbench-react` (`v0.5.0`, private) (`packages/rulecanvas-workbench-react`)**:
+  - React 19 peer-only adapters (`StrictIntegerInput`, `useIntegerDraftStore`, `matchesDraftPrefix`, `useVerificationSnapshot`, `VerdictSummary`, `AssumptionsList`) eliminating duplicated verification-state and integer-draft plumbing across workbenches.
+  - Reciprocal same-origin workbench navigation (`WorkbenchNavigation`, `isSafeSameOriginNavigationHref` with segment-boundary `allowedPrefix` checks) and race-safe `?preset=...` URL routing (`createWorkbenchHistoryController`, `useWorkbenchRoute`, `readPresetFromSearch`, `buildCanonicalPresetUrl`) using Navigation API `traverseTo` with a synchronous `history.replaceState` recovery fallback.
+- **Packaging, Export, and Browser Regression Gates**:
+  - `pnpm verify:exports` (`scripts/verify-exports.mjs`) validating all 4 library packages, 6 public ESM entry points, and plain Node/`tsx` SSR imports of both `apps/*/src/App.tsx` modules without DOM globals.
+  - `pnpm verify:pack` (`scripts/verify-pack.mjs`) verifying map-free `build:pack` tarballs against a positive archive allowlist (`package.json`, `README.md`, `LICENSE`, `dist/**/*.{js,d.ts,d.mts}`), rewritten `workspace:*` dependencies, offline pinned installation into an isolated third-app booking consumer, strict `tsc --noEmit` (`NodeNext` and `Bundler`), and Vite subpath (`/booking-demo/`) worker bundling.
+  - `pnpm test:browser` (`tests/browser/workbench-e2e.mjs`) running headless Chromium Playwright checks across `1280x800`, `768x1024`, and `390x844` on `/suite/agent-gate/`, `/suite/interlock-sim/`, and optional `/booking-demo/`, verifying dirty JSON/comparison discard dialogs (`role="alertdialog"` with focus restoration), clipboard-fallback dirty reset, same-preset Back/Reselect URL sync, no-Navigation-API fallback, cancellation, and no-Worker fallback.
+- **Documentation**:
+  - Updated `README.md`, `CONTRIBUTING.md`, `docs/ARCHITECTURE.md`, and all four package `README.md` files with exact package exports, integrated workbench workflows, limitations, and build/pack/browser verification commands; added an honest Devpost Skeleton Crew draft and sub-three-minute demo script in [docs/SKELETON_CREW_SUBMISSION.md](./docs/SKELETON_CREW_SUBMISSION.md).
+
+### Changed
+
+- **`@rulecanvas/ui` (`packages/rulecanvas-ui`)**:
+  - Extracted `parseStrictIntegerDraft`, `indexModelDiagnostics` (null-prototype diagnostic map), and `getErrorsForPathPrefix` into `packages/rulecanvas-ui/src/diagnostics.ts`.
+- **`apps/agent-gate` & `apps/interlock-sim`**:
+  - Migrated both workbenches onto `@rulecanvas/workbench` and `@rulecanvas/workbench-react`, adding reciprocal `WorkbenchNavigation` (with SSR-safe `VITE_INTERLOCK_SIM_URL` / `VITE_AGENT_GATE_URL` env reads), `?preset=...` URL routing, dirty-editor and comparison-panel preset discard confirmations with focus restoration, and 512k strict export with legacy duplicate-key import compatibility (plus InterlockSim's clean 0-invariant draft export exception and AgentGate's clipboard-fallback dirty reset).
+- **Boundaries & CI (`.github/workflows/ci.yml`, `packages/rulecanvas-core/tests/boundaries.test.ts`)**:
+  - Extended AST boundary and manifest DAG checks across all four libraries and both apps, and updated CI with strict per-library `tsc --noEmit`, `pnpm verify:exports`, `pnpm verify:pack`, `pnpm test:browser`, and commit-scoped `SHA256SUMS.txt` archive/screenshot artifacts.
+
 ## [0.4.0] - 2026-11-25
 
 See [docs/releases/v0.4.0.md](./docs/releases/v0.4.0.md) for usage, verification limits, and the release checks.
