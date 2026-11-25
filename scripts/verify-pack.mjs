@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   cpSync,
   existsSync,
@@ -6,7 +7,6 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
-  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -82,12 +82,12 @@ try {
       assert(!entry.includes('.planning'), `${lib.name}: tarball leaked planning path (${entry})`);
     }
 
-    // Extract into consumer/node_modules/@rulecanvas/<short> (zero workspace symlinks!)
-    const extractDir = path.join(consumerDir, 'node_modules', ...lib.name.split('/'));
-    mkdirSync(extractDir, { recursive: true });
-    execFileSync('tar', ['-xzf', tgzPath, '--strip-components=1', '-C', extractDir]);
+    // Inspect tarball contents in an isolated inspection dir (install happens via pnpm below)
+    const inspectDir = path.join(tmpRoot, 'inspect', ...lib.name.split('/'));
+    mkdirSync(inspectDir, { recursive: true });
+    execFileSync('tar', ['-xzf', tgzPath, '--strip-components=1', '-C', inspectDir]);
 
-    const packedPkg = JSON.parse(readFileSync(path.join(extractDir, 'package.json'), 'utf8'));
+    const packedPkg = JSON.parse(readFileSync(path.join(inspectDir, 'package.json'), 'utf8'));
     const depJson = JSON.stringify(packedPkg.dependencies ?? {});
     assert(!depJson.includes('workspace:'), `${lib.name}: workspace:* range not rewritten in tarball`);
 
@@ -103,58 +103,66 @@ try {
     }
 
     for (const [subpath, target] of Object.entries(packedPkg.exports ?? {})) {
-      const jsFile = path.resolve(extractDir, target.import);
-      const dtsFile = path.resolve(extractDir, target.types);
+      const jsFile = path.resolve(inspectDir, target.import);
+      const dtsFile = path.resolve(inspectDir, target.types);
       assert(existsSync(jsFile), `${lib.name} ${subpath}: missing ${target.import} in tarball`);
       assert(existsSync(dtsFile), `${lib.name} ${subpath}: missing ${target.types} in tarball`);
     }
 
-    for (const builtFile of walkFiles(path.join(extractDir, 'dist'))) {
+    for (const builtFile of walkFiles(path.join(inspectDir, 'dist'))) {
       const text = readFileSync(builtFile, 'utf8');
       assert(
         !text.includes('sourceMappingURL'),
-        `${lib.name}: dangling sourceMappingURL in ${path.relative(extractDir, builtFile)}`,
+        `${lib.name}: dangling sourceMappingURL in ${path.relative(inspectDir, builtFile)}`,
       );
     }
   }
 
-  // 3. Copy pinned React 19, types, and transitive type/runtime peers from offline pnpm store (zero workspace symlinks)
-  const agentGateNodeModules = path.join(REPO_ROOT, 'apps/agent-gate/node_modules');
-  const copyPkgTree = (srcPkgDir, dstName) => {
-    const dst = path.join(consumerDir, 'node_modules', dstName);
-    if (!existsSync(srcPkgDir) || existsSync(dst)) return;
-    mkdirSync(path.dirname(dst), { recursive: true });
-    cpSync(srcPkgDir, dst, { recursive: true, dereference: true });
-    // Copy sibling transitive deps from pnpm virtual store (e.g. csstype for @types/react, scheduler for react-dom)
-    const real = realpathSync(srcPkgDir);
-    const parentStoreNm = dstName.startsWith('@') ? path.resolve(real, '../..') : path.resolve(real, '..');
-    if (path.basename(parentStoreNm) === 'node_modules' && existsSync(parentStoreNm)) {
-      for (const sibling of readdirSync(parentStoreNm)) {
-        if (sibling.startsWith('.')) continue;
-        const sibPath = path.join(parentStoreNm, sibling);
-        if (sibling.startsWith('@')) {
-          for (const scoped of readdirSync(sibPath)) {
-            const scopedName = `${sibling}/${scoped}`;
-            const dstSib = path.join(consumerDir, 'node_modules', scopedName);
-            if (!existsSync(dstSib)) {
-              mkdirSync(path.dirname(dstSib), { recursive: true });
-              cpSync(path.join(sibPath, scoped), dstSib, { recursive: true, dereference: true });
-            }
-          }
-        } else {
-          const dstSib = path.join(consumerDir, 'node_modules', sibling);
-          if (!existsSync(dstSib)) {
-            cpSync(sibPath, dstSib, { recursive: true, dereference: true });
-          }
-        }
-      }
+  // Optional: copy packed tarballs + SHA-256 checksums for CI release evidence
+  if (process.env.PACK_ARCHIVE_DIR) {
+    mkdirSync(process.env.PACK_ARCHIVE_DIR, { recursive: true });
+    const checksumLines = [];
+    for (const lib of LIB_PACKAGES) {
+      const tgzPath = packedTarballs.get(lib.name);
+      const base = path.basename(tgzPath);
+      const dst = path.join(process.env.PACK_ARCHIVE_DIR, base);
+      cpSync(tgzPath, dst);
+      const hash = createHash('sha256').update(readFileSync(dst)).digest('hex');
+      checksumLines.push(`${hash}  ${base}`);
     }
-  };
-  for (const dep of ['react', 'react-dom', '@types/react', '@types/react-dom']) {
-    copyPkgTree(path.join(agentGateNodeModules, dep), dep);
+    writeFileSync(
+      path.join(process.env.PACK_ARCHIVE_DIR, 'SHA256SUMS.txt'),
+      `${checksumLines.join('\n')}\n`,
+    );
   }
 
-  // 4. Write minimal independent third-application booking-model fixture
+  // 3. Read exact installed versions for offline pnpm consumer install (zero workspace symlinks)
+  const readInstalledVersion = (pkgJsonPath) =>
+    JSON.parse(readFileSync(pkgJsonPath, 'utf8')).version;
+  const reactVer = readInstalledVersion(
+    path.join(REPO_ROOT, 'apps/agent-gate/node_modules/react/package.json'),
+  );
+  const reactDomVer = readInstalledVersion(
+    path.join(REPO_ROOT, 'apps/agent-gate/node_modules/react-dom/package.json'),
+  );
+  const typesReactVer = readInstalledVersion(
+    path.join(REPO_ROOT, 'apps/agent-gate/node_modules/@types/react/package.json'),
+  );
+  const typesReactDomVer = readInstalledVersion(
+    path.join(REPO_ROOT, 'apps/agent-gate/node_modules/@types/react-dom/package.json'),
+  );
+  const tsVer = readInstalledVersion(
+    path.join(REPO_ROOT, 'node_modules/typescript/package.json'),
+  );
+  const viteVer = readInstalledVersion(
+    path.join(REPO_ROOT, 'apps/agent-gate/node_modules/vite/package.json'),
+  );
+
+  const tarballSpecs = Object.fromEntries(
+    LIB_PACKAGES.map((lib) => [lib.name, `file:${packedTarballs.get(lib.name)}`]),
+  );
+
+  // 4. Write minimal independent third-application booking-model fixture & install via pnpm --offline
   writeFileSync(
     path.join(consumerDir, 'package.json'),
     JSON.stringify(
@@ -162,11 +170,38 @@ try {
         name: 'booking-third-app-fixture',
         private: true,
         type: 'module',
+        dependencies: {
+          ...tarballSpecs,
+          react: reactVer,
+          'react-dom': reactDomVer,
+        },
+        devDependencies: {
+          '@types/react': typesReactVer,
+          '@types/react-dom': typesReactDomVer,
+          typescript: tsVer,
+          vite: viteVer,
+        },
       },
       null,
       2,
     ),
   );
+  const overrideLines = LIB_PACKAGES.map(
+    (lib) => `  "${lib.name}": "file:${packedTarballs.get(lib.name)}"`,
+  ).join('\n');
+  writeFileSync(
+    path.join(consumerDir, 'pnpm-workspace.yaml'),
+    `overrides:\n${overrideLines}\n`,
+  );
+  execFileSync(
+    'pnpm',
+    ['install', '--offline', '--ignore-scripts', '--lockfile-only', '--no-frozen-lockfile'],
+    { cwd: consumerDir, stdio: 'inherit' },
+  );
+  execFileSync('pnpm', ['install', '--offline', '--ignore-scripts', '--frozen-lockfile'], {
+    cwd: consumerDir,
+    stdio: 'inherit',
+  });
 
   writeFileSync(
     path.join(consumerDir, 'booking-model.ts'),
@@ -248,7 +283,11 @@ export function BookingApp() {
     verification.snapshot !== null ? buildVerdictSummaryView(verification.snapshot.result) : null;
   const exported = codec.encode(bookingModel);
   return (
-    <main data-export-ok={exported.ok ? 'true' : 'false'}>
+    <main
+      data-export-ok={exported.ok ? 'true' : 'false'}
+      data-execution-mode={verification.snapshot?.executionMode}
+      data-verification-revision={verification.snapshot?.revision}
+    >
       <h1>{bookingModel.name}</h1>
       <button
         type="button"
@@ -351,8 +390,8 @@ console.log('Isolated tarball Node ESM smoke passed.');
     stdio: 'inherit',
   });
 
-  // 6. Verify TypeScript declarations under BOTH NodeNext and Bundler resolution
-  const tscBin = path.join(REPO_ROOT, 'node_modules/.bin/tsc');
+  // 6. Verify TypeScript declarations under BOTH NodeNext and Bundler resolution using consumer's installed tsc
+  const tscBin = path.join(consumerDir, 'node_modules/.bin/tsc');
   for (const [label, opts] of [
     ['NodeNext', { module: 'NodeNext', moduleResolution: 'NodeNext' }],
     ['Bundler', { module: 'ESNext', moduleResolution: 'Bundler' }],
@@ -379,14 +418,18 @@ console.log('Isolated tarball Node ESM smoke passed.');
     });
   }
 
-  // 7. Production Vite build under subpath /booking-demo/ verifying worker emission
-  const viteBin = path.join(REPO_ROOT, 'apps/agent-gate/node_modules/.bin/vite');
+  // 7. Production Vite build under subpath /booking-demo/ using consumer's installed vite
+  const viteBin = path.join(consumerDir, 'node_modules/.bin/vite');
   execFileSync(viteBin, ['build'], { cwd: consumerDir, stdio: 'inherit' });
   const distAssets = readdirSync(path.join(consumerDir, 'dist/assets'));
   assert(
     distAssets.some((f) => f.includes('verify.entry') && f.endsWith('.js')),
     `expected emitted worker bundle in third-app dist/assets, got: ${distAssets.join(', ')}`,
   );
+
+  if (process.env.BOOKING_FIXTURE_DIST) {
+    cpSync(path.join(consumerDir, 'dist'), process.env.BOOKING_FIXTURE_DIST, { recursive: true });
+  }
 
   console.log(
     `verify:pack passed: all 4 tarballs map-free & allowlisted, Node ESM smoke passed, NodeNext + Bundler tsc passed, and third-app Vite subpath worker build emitted (${distAssets.join(', ')}).`,

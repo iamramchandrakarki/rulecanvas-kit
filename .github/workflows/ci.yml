@@ -25,14 +25,8 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build shared packages
+      - name: Build shared packages and both applications
         run: pnpm build
-
-      - name: Build AgentGate workbench
-        run: pnpm --filter @rulecanvas/agent-gate build
-
-      - name: Build InterlockSim workbench
-        run: pnpm --filter @rulecanvas/interlock-sim build
 
       - name: Typecheck workspace
         run: pnpm typecheck
@@ -53,6 +47,9 @@ jobs:
         run: pnpm verify:exports
 
       - name: Verify package archives and third-app consumer
+        env:
+          PACK_ARCHIVE_DIR: ${{ runner.temp }}/rulecanvas-archives-${{ github.sha }}
+          BOOKING_FIXTURE_DIST: ${{ runner.temp }}/rulecanvas-booking-${{ github.sha }}
         run: pnpm verify:pack
 
       - name: Run unit, property, replay, and scenario tests
@@ -85,3 +82,35 @@ jobs:
 
       - name: Run deterministic benchmark suite
         run: pnpm bench
+
+      - name: Install Playwright Chromium for browser E2E gate
+        run: |
+          mkdir -p "${{ runner.temp }}/pw"
+          npm install --no-save --prefix "${{ runner.temp }}/pw" playwright@1.58.2
+          "${{ runner.temp }}/pw/node_modules/.bin/playwright" install --with-deps chromium
+
+      - name: Run Playwright browser regression gate
+        env:
+          PLAYWRIGHT_MODULE: ${{ runner.temp }}/pw/node_modules/playwright/index.mjs
+          SCREENSHOT_DIR: ${{ runner.temp }}/rulecanvas-screenshots-${{ github.sha }}
+          BOOKING_FIXTURE_DIST: ${{ runner.temp }}/rulecanvas-booking-${{ github.sha }}
+        run: pnpm test:browser
+
+      - name: Archive independently deployable production builds
+        env:
+          ARCHIVE_DIR: ${{ runner.temp }}/rulecanvas-archives-${{ github.sha }}
+        run: |
+          for app in agent-gate interlock-sim; do
+            tar -czf "$ARCHIVE_DIR/$app-static.tar.gz" -C "apps/$app/dist" .
+          done
+          cd "$ARCHIVE_DIR"
+          sha256sum agent-gate-static.tar.gz interlock-sim-static.tar.gz >> SHA256SUMS.txt
+
+      - name: Upload commit-scoped browser screenshots and archives
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase6-release-evidence-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/rulecanvas-screenshots-${{ github.sha }}
+            ${{ runner.temp }}/rulecanvas-archives-${{ github.sha }}
+          retention-days: 14

@@ -51,6 +51,12 @@ function startStaticSubpathServer() {
     { prefix: '/suite/agent-gate/', dir: AGENT_GATE_DIST },
     { prefix: '/suite/interlock-sim/', dir: INTERLOCK_SIM_DIST },
   ];
+  if (process.env.BOOKING_FIXTURE_DIST) {
+    const dir = path.resolve(process.env.BOOKING_FIXTURE_DIST);
+    assert(existsSync(path.join(dir, 'index.html')), 'Packed booking production fixture is missing');
+    mounts.push({ prefix: '/booking-demo/', dir });
+  }
+
 
   const server = createServer((req, res) => {
     const reqUrl = new URL(req.url ?? '/', 'http://127.0.0.1');
@@ -133,6 +139,8 @@ try {
   // Preset URL handling & comparison matrix
   await page.selectOption('#preset-select', 'principled-fix');
   await page.getByText('Goal reachable: Yes').first().waitFor({ state: 'visible' });
+  assert(!(await page.getByText('OUTDATED:', { exact: false }).first().isVisible()),
+    'Fresh AgentGate verdict marked outdated');
   assert(page.url().includes('preset=principled-fix'), `Expected preset=principled-fix in URL: ${page.url()}`);
 
   await page.getByRole('button', { name: 'Compare All 5 Presets' }).click();
@@ -182,6 +190,8 @@ try {
   await page.getByText('OUTDATED: VIOLATED').first().waitFor({ state: 'visible' });
   await page.getByRole('button', { name: 'Verify Interlock Model' }).click();
   await page.getByText('Goal reachable: Yes').first().waitFor({ state: 'visible' });
+  assert(!(await page.getByText('OUTDATED:', { exact: false }).first().isVisible()),
+    'Fresh InterlockSim verdict marked outdated');
   assert((await page.locator('body').innerText()).includes('29'), 'Expected 29 states after repair');
 
   // Preset URL direct load (?preset=vacuous)
@@ -201,6 +211,100 @@ try {
   await page.locator('nav a', { hasText: 'AgentGate' }).click();
   await page.waitForURL('**/suite/agent-gate/**');
   await page.getByText('VIOLATED', { exact: false }).first().waitFor({ state: 'visible' });
+
+  // --- 3. Dirty JSON draft protection + alertdialog focus management ---
+  await page.getByRole('tab', { name: 'JSON' }).click();
+  const jsonArea = page.locator('#model-json-textarea');
+  await jsonArea.waitFor({ state: 'visible' });
+  const originalJson = await jsonArea.inputValue();
+  await jsonArea.fill(`${originalJson}\n `);
+  await page.locator('#preset-select').selectOption('naive-patch-a');
+  await page.getByRole('alertdialog').waitFor({ state: 'visible' });
+  const focusedInDialog = await page.evaluate(() => document.activeElement?.textContent?.trim() ?? '');
+  assert(
+    focusedInDialog === 'Stay Here',
+    `Expected alertdialog to focus "Stay Here" button, got "${focusedInDialog}"`,
+  );
+  await page.getByRole('button', { name: 'Stay Here' }).click();
+  assert(
+    (await jsonArea.inputValue()) === `${originalJson}\n `,
+    'Dirty JSON draft was lost after declining discard prompt',
+  );
+
+  // --- 4. No-Navigation-API fallback recovery (fresh-session replaceState) ---
+  const fallbackPage = await context.newPage();
+  fallbackPage.on('console', (msg) => {
+    if (msg.type() === 'error') consoleErrors.push(`fallback console: ${msg.text()}`);
+  });
+  fallbackPage.on('pageerror', (err) => pageErrors.push(`fallback pageerror: ${err.message}`));
+  await fallbackPage.addInitScript(() => {
+    try {
+      Object.defineProperty(window, 'navigation', {
+        value: undefined,
+        configurable: true,
+        writable: true,
+      });
+    } catch {
+      // ignore
+    }
+  });
+  await fallbackPage.goto(`${baseUrl}/suite/agent-gate/?preset=broken`, { waitUntil: 'networkidle' });
+  await fallbackPage.locator('#preset-select').selectOption('naive-patch-a');
+  await fallbackPage.waitForURL('**/suite/agent-gate/?preset=naive-patch-a');
+  await fallbackPage.getByRole('tab', { name: 'Schema & State' }).click();
+  await fallbackPage.locator('#model-name-input').fill('NoNavApi Dirty Edit');
+  await fallbackPage.goBack();
+  await fallbackPage.getByRole('alertdialog').waitFor({ state: 'visible' });
+  await fallbackPage.getByRole('button', { name: 'Stay Here' }).click();
+  assert(
+    fallbackPage.url().includes('preset=naive-patch-a'),
+    `No-Navigation-API fallback failed to restore URL: ${fallbackPage.url()}`,
+  );
+  assert(
+    (await fallbackPage.locator('#model-name-input').inputValue()) === 'NoNavApi Dirty Edit',
+    'No-Navigation-API fallback lost dirty editor state',
+  );
+  await fallbackPage.close();
+
+  // Check cancellation and no-Worker fallback through both production applications.
+  for (const [app, verifyButton] of [
+    ['agent-gate', 'Verify Policy'],
+    ['interlock-sim', 'Verify Interlock Model'],
+  ]) {
+    const faultPage = await context.newPage();
+    await faultPage.addInitScript(() => {
+      window.Worker = class {
+        postMessage() {}
+        terminate() {}
+      };
+    });
+    await faultPage.goto(`${baseUrl}/suite/${app}/`);
+    await faultPage.getByRole('button', { name: verifyButton }).click();
+    await faultPage.getByRole('button', { name: 'Cancel Verification' }).click();
+    await faultPage.getByText('Verification Cancelled', { exact: false }).last().waitFor();
+    await faultPage.close();
+
+    const syncPage = await context.newPage();
+    await syncPage.addInitScript(() => { window.Worker = undefined; });
+    await syncPage.goto(`${baseUrl}/suite/${app}/`);
+    await syncPage.getByRole('button', { name: verifyButton }).click();
+    await syncPage.getByText('Execution: Main thread (Web Workers unavailable)', { exact: true }).waitFor();
+    await syncPage.locator('section[data-status="VIOLATED"]').waitFor();
+    await syncPage.close();
+  }
+
+  // Exercise the module worker built from the isolated tarball installation.
+  if (process.env.BOOKING_FIXTURE_DIST) {
+    await page.goto(`${baseUrl}/booking-demo/`, { waitUntil: 'networkidle' });
+    await page.getByRole('heading', { name: 'Room Booking Fixture' }).waitFor();
+    assert(
+      (await page.locator('main').getAttribute('data-export-ok')) === 'true',
+      'Packed booking fixture could not export its model',
+    );
+    await page.getByRole('button', { name: 'Verify Booking Model' }).click();
+    await page.locator('main[data-verification-revision="1"][data-execution-mode="worker"]').waitFor();
+    await page.locator('main [data-status="VERIFIED"]').first().waitFor();
+  }
 
   assert(consoleErrors.length === 0, `Console errors: ${consoleErrors.join('; ')}`);
   assert(pageErrors.length === 0, `Page errors: ${pageErrors.join('; ')}`);

@@ -130,9 +130,9 @@ index.ts              (re-exports public modules from format.ts, replay-controll
 
 `@rulecanvas/workbench` compiles under strict ES2022 (`"lib": ["ES2022"]`, `"types": []`) and exposes three explicit subpath entry points:
 
-- `@rulecanvas/workbench/verify`: `createVerifyClient({ execution })` supporting `main-thread` and `app-worker` execution modes (`asyncStartupError: 'report' | 'fallback'`), monotonic request-ID superseding, optional worker restart on supersede, `createLegacyWorkerAdapter`, `isFactoryVerifyClient`, and `isWebWorkerSupported`. All requests undergo descriptor-safe detached capture before execution, and all `VerifyResult` responses are sanitized against the `@rulecanvas/core` schema and deeply frozen before delivery.
+- `@rulecanvas/workbench/verify`: `createVerifyClient({ execution })` supporting `main-thread`, `app-worker`, and `injected-worker` execution policies (`asyncStartupError: 'report' | 'fallback'`), monotonic request-ID superseding, optional worker restart on supersede, `createLegacyWorkerAdapter`, `isFactoryVerifyClient`, and `isWebWorkerSupported`. All requests undergo descriptor-safe detached capture before execution, and all `VerifyResult` responses are sanitized against the `@rulecanvas/core` schema and deeply frozen before delivery.
 - `@rulecanvas/workbench/verify-worker`: `VERIFY_PROTOCOL_VERSION` and `installVerifyWorker(port)` against a structural message port with zero DOM globals at import time.
-- `@rulecanvas/workbench/model-json`: `createModelJsonCodec(limits?)` with `DEFAULT_MODEL_JSON_LIMITS` (512 KiB / 10,000 nodes / depth 64 / 256 errors) and `HARD_CEILING_MODEL_JSON_LIMITS` (2 MiB / 50,000 nodes / depth 64 / 256 errors). Performs pre-parse duplicate decoded key detection, RFC 8259 numeric literal scanning, recursive reserved-key/accessor/cycle/non-enumerable rejection, value-occurrence visit budgeting, and full `@rulecanvas/core` validation.
+- `@rulecanvas/workbench/model-json`: `createModelJsonCodec(limits?)` with `DEFAULT_MODEL_JSON_LIMITS` (512,000 UTF-16 code units / 10,000 nodes / structural depth 64 / raw container nesting 256) and `HARD_CEILING_MODEL_JSON_LIMITS` (2,000,000 UTF-16 code units / 50,000 nodes / structural depth 64 / raw container nesting 256). Performs pre-parse duplicate decoded key detection, RFC 8259 numeric literal scanning, recursive reserved-key/accessor/cycle/non-enumerable rejection, value-occurrence visit budgeting, and full `@rulecanvas/core` validation.
 
 ## React 19 Workbench Adapters (`packages/rulecanvas-workbench-react`)
 
@@ -147,5 +147,15 @@ index.ts              (re-exports public modules from format.ts, replay-controll
 ## Packaging and End-to-End Verification Gates
 
 - `pnpm verify:exports`: Verifies all four library packages and six public ESM entry points import cleanly in pure Node.js without DOM globals.
-- `pnpm verify:pack`: Builds map-free publishable archives (`build:pack`), checks archive allowlists (`dist/`, `README.md`, `LICENSE`), zero `.map` / `sourceMappingURL` / `src/` / `tests/` leakage, rewritten `workspace:*` ranges, installs packed tarballs offline into an isolated temporary consumer with a minimal third-application model, and validates pure Node ESM execution, strict `tsc --noEmit` (`skipLibCheck: false`) under both `NodeNext` and `Bundler`, and Vite subpath bundling.
-- `pnpm test:browser`: Serves both production builds under same-origin subpaths (`/suite/agent-gate/` and `/suite/interlock-sim/`) and runs headless Chromium Playwright regression checks across desktop (`1280x800`), tablet (`768x1024`), and mobile (`390x844`) viewports.
+- `pnpm verify:pack`: Builds map-free package archives (`build:pack`), checks archive allowlists (`dist/`, `README.md`, `LICENSE`), zero `.map` / `sourceMappingURL` / `src/` / `tests/` leakage, rewritten `workspace:*` ranges, installs packed tarballs offline with a frozen fixture lockfile into an isolated temporary consumer with a minimal third-application model, and validates pure Node ESM execution, strict `tsc --noEmit` (`skipLibCheck: false`) under both `NodeNext` and `Bundler`, and Vite subpath bundling.
+- `pnpm test:browser`: Serves both production builds under same-origin subpaths (`/suite/agent-gate/` and `/suite/interlock-sim/`) and runs headless Chromium Playwright regression checks across desktop (`1280x800`), tablet (`768x1024`), and mobile (`390x844`) viewports. When `BOOKING_FIXTURE_DIST` points to the packed consumer build, the suite also verifies that its module worker loads and returns a verdict under `/booking-demo/`.
+
+
+The workbench apps publish separate static build directories. To check the packaged consumer with the browser suite locally, use the same scratch output path for both commands:
+
+```bash
+BOOKING_FIXTURE_DIST=/tmp/rulecanvas-booking-demo pnpm verify:pack
+BOOKING_FIXTURE_DIST=/tmp/rulecanvas-booking-demo pnpm test:browser
+```
+
+Each successful CI build retains a checksummed archive for each app. To roll an app back, restore that app's last green archive to its existing static entry path and retain the counterpart's deployment. For a source rollback, revert the affected app's adoption and any app-specific follow-up changes, then build both apps and run their production smoke tests. The release tags identify immutable baselines.
