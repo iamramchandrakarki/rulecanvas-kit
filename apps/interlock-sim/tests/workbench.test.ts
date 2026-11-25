@@ -1135,6 +1135,53 @@ describe('InterlockSim workbench architecture, semantics, security, and UI', () 
       expect(highBudgetExport.error.code).toBe('JSON_EXPORT_ERROR');
     }
 
+    // 65-invariant model must NOT qualify for the zero-invariant draft export exception
+    const tooManyInvariantsModel: TransitionSystemModel = {
+      ...bsl3AirlockFixedModel,
+      invariants: Array.from({ length: 65 }, (_, i) => ({
+        id: `inv_${i}`,
+        label: `Invariant ${i}`,
+        holds: { op: 'lit', value: true },
+      })),
+    };
+    const tooManyInvExport = tryExportModelJson(tooManyInvariantsModel);
+    expect(tooManyInvExport.ok).toBe(false);
+    if (!tooManyInvExport.ok) {
+      expect(tooManyInvExport.error.code).toBe('JSON_EXPORT_ERROR');
+    }
+
+    // ~502 KB zero-invariant draft (exceeds 512 KB pretty, fits compact) must export cleanly via compact fallback
+    const compactZeroInvDraft: TransitionSystemModel = {
+      ...bsl3AirlockFixedModel,
+      invariants: [],
+      assumptions: [
+        {
+          id: 'asm_zero_compact',
+          category: 'scope',
+          statement: 'Z'.repeat(501_500),
+          notModeled: 'Timing',
+        },
+      ],
+    };
+    expect(JSON.stringify(compactZeroInvDraft, null, 2).length).toBeGreaterThan(512_000);
+    const zeroCompactExport = tryExportModelJson(compactZeroInvDraft);
+    expect(zeroCompactExport.ok).toBe(true);
+    if (zeroCompactExport.ok) {
+      expect(zeroCompactExport.text.length).toBeLessThanOrEqual(512_000);
+    }
+
+    // Legacy import wrapper preserves last-value semantics for duplicate keys
+    const baselineJson = exportModelToJson(bsl3AirlockFixedModel);
+    const dupNamePayload = baselineJson.replace(
+      `"name": ${JSON.stringify(bsl3AirlockFixedModel.name)},`,
+      `"name": "First Name",\n  "name": "Second Name",`,
+    );
+    const legacyDupImport = importModelFromJson(dupNamePayload);
+    expect(legacyDupImport.ok).toBe(true);
+    if (legacyDupImport.ok) {
+      expect(legacyDupImport.model.name).toBe('Second Name');
+    }
+
     // Any model whose export succeeds (near-budget 28 rules x 60 clauses) must re-import cleanly
     const reimportableModel: TransitionSystemModel = {
       ...highBudgetModel,

@@ -442,23 +442,110 @@ export function removeAssumption(
   };
 }
 
-const interlockJsonCodec = createModelJsonCodec(DEFAULT_MODEL_JSON_LIMITS);
+const interlockStrictCodec = createModelJsonCodec(DEFAULT_MODEL_JSON_LIMITS);
+const interlockLegacyImportCodec = createModelJsonCodec(DEFAULT_MODEL_JSON_LIMITS, {
+  duplicateKeys: 'last-value',
+});
+
+function detachZeroInvariantDraftValue(
+  raw: unknown,
+  depth: number,
+  budget: { visited: number },
+  ancestors: Set<object>,
+): unknown {
+  budget.visited += 1;
+  if (depth > DEFAULT_MODEL_JSON_LIMITS.maxDepth || budget.visited > DEFAULT_MODEL_JSON_LIMITS.maxVisits) {
+    throw new TypeError('Draft exceeded structural export budget.');
+  }
+  if (raw === null || typeof raw === 'boolean' || typeof raw === 'string' || typeof raw === 'number') {
+    return Object.is(raw, -0) ? 0 : raw;
+  }
+  if (typeof raw !== 'object') {
+    throw new TypeError('Draft contains unsupported non-JSON value.');
+  }
+  if (ancestors.has(raw)) {
+    throw new TypeError('Draft contains cyclic reference.');
+  }
+  ancestors.add(raw);
+  try {
+    if (Array.isArray(raw)) {
+      const out: unknown[] = [];
+      for (let i = 0; i < raw.length; i += 1) {
+        const desc = Object.getOwnPropertyDescriptor(raw, i);
+        if (desc === undefined || 'get' in desc || 'set' in desc || !desc.enumerable) {
+          throw new TypeError('Draft array contains sparse, accessor, or non-enumerable slot.');
+        }
+        out.push(detachZeroInvariantDraftValue(desc.value, depth + 1, budget, ancestors));
+      }
+      return out;
+    }
+    const proto: unknown = Object.getPrototypeOf(raw);
+    if (proto !== Object.prototype && proto !== null) {
+      throw new TypeError('Draft contains non-plain object.');
+    }
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(raw)) {
+      const desc = Object.getOwnPropertyDescriptor(raw, key);
+      if (desc === undefined || 'get' in desc || 'set' in desc || !desc.enumerable) {
+        throw new TypeError('Draft object contains accessor or non-enumerable property.');
+      }
+      Object.defineProperty(out, key, {
+        value: detachZeroInvariantDraftValue(desc.value, depth + 1, budget, ancestors),
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
+    }
+    return out;
+  } finally {
+    ancestors.delete(raw);
+  }
+}
 
 export function exportModelToJson(model: TransitionSystemModel): string {
-  const res = interlockJsonCodec.encode(model);
+  const res = interlockStrictCodec.encode(model);
   if (res.ok) {
     return res.text;
   }
-  // Preserve baseline draft-export capability ONLY when a structurally clean draft fails solely on core semantic count rules (e.g., zero invariants)
-  const check = interlockJsonCodec.validateValue(model);
-  if (
-    !check.ok &&
-    check.errors.length > 0 &&
-    check.errors.every((err) => err.code === 'INVALID_INVARIANTS_COUNT')
-  ) {
-    const fallback = JSON.stringify(model, null, 2);
-    if (typeof fallback === 'string' && fallback.length <= DEFAULT_MODEL_JSON_LIMITS.maxChars) {
-      return fallback;
+  // Preserve baseline draft-export capability ONLY for clean 0-invariant drafts
+  if (model !== null && typeof model === 'object' && !Array.isArray(model)) {
+    const invDesc = Object.getOwnPropertyDescriptor(model, 'invariants');
+    if (
+      invDesc !== undefined &&
+      !('get' in invDesc) &&
+      !('set' in invDesc) &&
+      invDesc.enumerable === true &&
+      Array.isArray(invDesc.value) &&
+      invDesc.value.length === 0
+    ) {
+      const detached = detachZeroInvariantDraftValue(
+        model,
+        0,
+        { visited: 0 },
+        new Set<object>(),
+      );
+      const check = interlockStrictCodec.validateValue(detached);
+      if (
+        !check.ok &&
+        check.errors.length === 1 &&
+        check.errors[0]!.code === 'INVALID_INVARIANTS_COUNT' &&
+        check.errors[0]!.path === 'invariants'
+      ) {
+        const pretty = JSON.stringify(detached, null, 2);
+        const candidate =
+          pretty.length <= DEFAULT_MODEL_JSON_LIMITS.maxChars ? pretty : JSON.stringify(detached);
+        if (typeof candidate === 'string' && candidate.length <= DEFAULT_MODEL_JSON_LIMITS.maxChars) {
+          const rtCheck = interlockStrictCodec.decode(candidate);
+          if (
+            !rtCheck.ok &&
+            rtCheck.errors.length === 1 &&
+            rtCheck.errors[0]!.code === 'INVALID_INVARIANTS_COUNT' &&
+            rtCheck.errors[0]!.path === 'invariants'
+          ) {
+            return candidate;
+          }
+        }
+      }
     }
   }
   throw new TypeError(res.error.message);
@@ -480,12 +567,12 @@ export function tryExportModelJson(model: TransitionSystemModel): JsonExportResu
 }
 
 export function validateImportedModelValue(candidate: unknown): JsonImportResult {
-  return interlockJsonCodec.validateValue(candidate);
+  return interlockLegacyImportCodec.validateValue(candidate);
 }
 
 export function importModelFromJson(rawText: unknown): JsonImportResult {
   if (typeof rawText !== 'string' && rawText !== null && typeof rawText === 'object') {
-    return interlockJsonCodec.validateValue(rawText);
+    return interlockLegacyImportCodec.validateValue(rawText);
   }
-  return interlockJsonCodec.decode(rawText);
+  return interlockLegacyImportCodec.decode(rawText);
 }
