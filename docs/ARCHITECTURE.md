@@ -1,23 +1,28 @@
 # RuleCanvasKit Architecture
 
-This document describes the technical architecture of `@rulecanvas/core` (`packages/rulecanvas-core`), `@rulecanvas/ui` (`packages/rulecanvas-ui`), and the dependency boundaries across the RuleCanvasKit monorepo.
+This document describes the technical architecture of `@rulecanvas/core` (`packages/rulecanvas-core`), `@rulecanvas/ui` (`packages/rulecanvas-ui`), `@rulecanvas/workbench` (`packages/rulecanvas-workbench`), `@rulecanvas/workbench-react` (`packages/rulecanvas-workbench-react`), and the dependency boundaries across the RuleCanvasKit monorepo.
 
 ## Workspace Layering
 
 ```text
 packages/rulecanvas-core   (@rulecanvas/core — zero runtime dependencies, pure ES2022)
-        ^
-        | workspace:*
-        +---- packages/rulecanvas-ui   (@rulecanvas/ui — depends only on @rulecanvas/core, pure ES2022)
-        |             ^
-        +-------------+---- apps/agent-gate     (@rulecanvas/agent-gate)
-                      +---- apps/interlock-sim  (@rulecanvas/interlock-sim)
+   ^                ^
+   |                +---- packages/rulecanvas-workbench        (@rulecanvas/workbench — core only, pure ES2022)
+   |                |                ^
+   +---- packages/rulecanvas-ui (@rulecanvas/ui — core only, pure ES2022)
+                    ^                |
+                    +----------------+---- packages/rulecanvas-workbench-react (@rulecanvas/workbench-react — React 19 peer)
+                                                   ^
+                                                   +---- apps/agent-gate     (@rulecanvas/agent-gate)
+                                                   +---- apps/interlock-sim  (@rulecanvas/interlock-sim)
 ```
 
 - `packages/rulecanvas-core` contains only domain-agnostic formal model validation, compilation, BFS exploration, and deterministic trace replay.
-- `packages/rulecanvas-ui` contains domain-agnostic AST expression/rule formatters, an immutable counterexample replay and manual step-simulation controller backed by `@rulecanvas/core`, and accessible, XSS-safe view models and semantic HTML renderers.
-- `apps/*` packages define domain-specific schemas, rules, invariants, goals, assumptions, and scenario tests.
-- `packages/rulecanvas-core` and `packages/rulecanvas-ui` must never import from `apps/*`, `node:*`, third-party npm packages, or host-coupled APIs (`Date`, `performance`, `setTimeout`, `setInterval`, `Math.random`, `globalThis`, `eval`, `Function`). `@rulecanvas/ui` may import only relative modules within its own `src/` directory and `@rulecanvas/core`. These rules are enforced automatically by `packages/rulecanvas-core/tests/boundaries.test.ts`.
+- `packages/rulecanvas-ui` contains domain-agnostic AST expression/rule formatters, an immutable counterexample replay and manual step-simulation controller backed by `@rulecanvas/core`, accessible XSS-safe view models and semantic HTML renderers, and strict integer draft / null-prototype diagnostic indexing helpers.
+- `packages/rulecanvas-workbench` contains framework-independent verification worker/main-thread transport (`@rulecanvas/workbench/verify`, `@rulecanvas/workbench/verify-worker`) with detached capture/deep-freeze sanitization, plus a strict portable model JSON codec (`@rulecanvas/workbench/model-json`).
+- `packages/rulecanvas-workbench-react` provides reusable React 19 workbench controls (`StrictIntegerInput`, `useIntegerDraftStore`, `useVerificationSnapshot`, `VerdictSummary`, `AssumptionsList`, `WorkbenchNavigation`, and race-safe preset URL routing via `createWorkbenchHistoryController` / `useWorkbenchRoute`).
+- `apps/*` packages define domain-specific schemas, rules, invariants, goals, assumptions, visual styling, and scenario tests.
+- Every workspace library is strictly acyclic and enforces explicit dependency allowlists: no library may import from `apps/*`, `apps/*` may never import from each other, and `packages/rulecanvas-core`, `packages/rulecanvas-ui`, and `packages/rulecanvas-workbench` never import `node:*`, third-party npm packages, or host-coupled globals (`Date`, `performance`, `setTimeout`, `setInterval`, `Math.random`, `eval`, `Function`). These rules are enforced automatically by `packages/rulecanvas-core/tests/boundaries.test.ts`.
 
 ## Core Module Layout
 
@@ -119,3 +124,28 @@ index.ts              (re-exports public modules from format.ts, replay-controll
 - All execution semantics in `replay-controller.ts` delegate directly to `@rulecanvas/core` (`validateModel`, `getInitialState`, `getEnabledTransitions`, `stepModel`, `replayTrace`), avoiding duplicated validation or evaluation logic.
 - All replay session outputs (including canonical model, snapshots, and trace steps) and error payloads are deeply frozen, total on untrusted `unknown` inputs, enforce replay consistency between `currentState` and trace history, and reject out-of-range or non-safe-integer step indices with `INVALID_STEP_INDEX`.
 - Every HTML renderer escapes all interpolated strings via `escapeHtml`, inspects untrusted payloads strictly via own data descriptors, pairs status badges/symbols with `data-status` attributes rather than relying on color alone, and explicitly flags vacuous fixes (`VERIFIED (GOAL UNREACHABLE)`).
+- `diagnostics.ts` exports `parseStrictIntegerDraft`, `indexModelDiagnostics` (null-prototype diagnostic map), and `getErrorsForPathPrefix` for strict form validation without prototype pollution.
+
+## Framework-Independent Workbench Transport & Codec (`packages/rulecanvas-workbench`)
+
+`@rulecanvas/workbench` compiles under strict ES2022 (`"lib": ["ES2022"]`, `"types": []`) and exposes three explicit subpath entry points:
+
+- `@rulecanvas/workbench/verify`: `createVerifyClient({ execution })` supporting `main-thread` and `app-worker` execution modes (`asyncStartupError: 'report' | 'fallback'`), monotonic request-ID superseding, optional worker restart on supersede, `createLegacyWorkerAdapter`, `isFactoryVerifyClient`, and `isWebWorkerSupported`. All requests undergo descriptor-safe detached capture before execution, and all `VerifyResult` responses are sanitized against the `@rulecanvas/core` schema and deeply frozen before delivery.
+- `@rulecanvas/workbench/verify-worker`: `VERIFY_PROTOCOL_VERSION` and `installVerifyWorker(port)` against a structural message port with zero DOM globals at import time.
+- `@rulecanvas/workbench/model-json`: `createModelJsonCodec(limits?)` with `DEFAULT_MODEL_JSON_LIMITS` (512 KiB / 10,000 nodes / depth 64 / 256 errors) and `HARD_CEILING_MODEL_JSON_LIMITS` (2 MiB / 50,000 nodes / depth 64 / 256 errors). Performs pre-parse duplicate decoded key detection, RFC 8259 numeric literal scanning, recursive reserved-key/accessor/cycle/non-enumerable rejection, value-occurrence visit budgeting, and full `@rulecanvas/core` validation.
+
+## React 19 Workbench Adapters (`packages/rulecanvas-workbench-react`)
+
+`@rulecanvas/workbench-react` declares `react` (`^19.0.0`) strictly as a peer dependency (zero `react-dom` runtime dependency) and exports:
+
+- `StrictIntegerInput`, `useIntegerDraftStore`, `matchesDraftPrefix` for controlled integer draft editing with immediate `aria-invalid` and inline error reporting.
+- `useVerificationSnapshot` for stale-free reactive subscription to `@rulecanvas/workbench/verify` clients.
+- `VerdictSummary` and `AssumptionsList` for accessible status badges and model assumption disclosure.
+- `WorkbenchNavigation` and `isSafeSameOriginNavigationHref` for reciprocal same-origin navigation between RuleCanvasKit workbenches.
+- `createWorkbenchHistoryController`, `useWorkbenchRoute`, `readPresetFromSearch`, and `buildCanonicalPresetUrl` for preset URL query routing (`?preset=...`) with race-safe dirty-editor discard confirmation (`Navigation API traverseTo` when available, with synchronous fresh-session `history.replaceState` recovery fallback).
+
+## Packaging and End-to-End Verification Gates
+
+- `pnpm verify:exports`: Verifies all four library packages and six public ESM entry points import cleanly in pure Node.js without DOM globals.
+- `pnpm verify:pack`: Builds map-free publishable archives (`build:pack`), checks archive allowlists (`dist/`, `README.md`, `LICENSE`), zero `.map` / `sourceMappingURL` / `src/` / `tests/` leakage, rewritten `workspace:*` ranges, installs packed tarballs offline into an isolated temporary consumer with a minimal third-application model, and validates pure Node ESM execution, strict `tsc --noEmit` (`skipLibCheck: false`) under both `NodeNext` and `Bundler`, and Vite subpath bundling.
+- `pnpm test:browser`: Serves both production builds under same-origin subpaths (`/suite/agent-gate/` and `/suite/interlock-sim/`) and runs headless Chromium Playwright regression checks across desktop (`1280x800`), tablet (`768x1024`), and mobile (`390x844`) viewports.

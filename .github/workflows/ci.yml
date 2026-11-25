@@ -25,7 +25,7 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build core package
+      - name: Build shared packages
         run: pnpm build
 
       - name: Build AgentGate workbench
@@ -42,6 +42,18 @@ jobs:
 
       - name: Strict ES2022 UI typecheck
         run: pnpm --filter @rulecanvas/ui exec tsc --noEmit -p tsconfig.json
+
+      - name: Strict ES2022 workbench typecheck
+        run: pnpm --filter @rulecanvas/workbench exec tsc --noEmit -p tsconfig.json
+
+      - name: Strict React workbench adapter typecheck
+        run: pnpm --filter @rulecanvas/workbench-react exec tsc --noEmit -p tsconfig.json
+
+      - name: Verify public package exports
+        run: pnpm verify:exports
+
+      - name: Verify package archives and third-app consumer
+        run: pnpm verify:pack
 
       - name: Run unit, property, replay, and scenario tests
         run: pnpm test

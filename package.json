@@ -17,7 +17,10 @@
     "typecheck": "pnpm run build:libs && pnpm -r typecheck",
     "test": "pnpm run build:libs && vitest run",
     "verify:boundaries": "pnpm run build:libs && vitest run packages/rulecanvas-core/tests/boundaries.test.ts",
+    "verify:exports": "pnpm run build:libs && node scripts/verify-exports.mjs",
+    "verify:pack": "node scripts/verify-pack.mjs",
     "verify:hygiene": "node scripts/check-test-hygiene.mjs",
+    "test:browser": "pnpm run build && node tests/browser/workbench-e2e.mjs",
     "bench": "pnpm run build:libs && tsx packages/rulecanvas-core/bench/run-bench.ts"
   },
   "devDependencies": {
