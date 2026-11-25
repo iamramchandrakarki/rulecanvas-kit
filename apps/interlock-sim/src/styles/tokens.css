@@ -1,6 +1,4 @@
-/* Hallmark · shape: control workbench · genre: modern-minimal · theme: Rim (dealt 2/3, seed bsl-3-bio-containment-airlock-safety-8693·f7bd9427·2026-11-25·r0) · job: simulate · draw: bsl-3-bio-containment-airlock-safety-8693·f7bd9427·2026-11-25·r0
- * hero: schematic · nav: toolbar · footer: notice · imagery: technical diagram · signature: 12px schematic corner ticks
- * axes: dark/grotesk-sans/warm · posture: committed · contrast: pass · fold: pass · v2.0.0 */
+/* InterlockSim dark instrument design tokens */
 
 :root {
   color-scheme: dark;

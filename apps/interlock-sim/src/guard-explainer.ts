@@ -200,9 +200,13 @@ function explainBoolExpr(
       const satisfied = actualValue === expectedValue;
       const summary = satisfied
         ? `Constant ${actualValue ? 'true' : 'false'} satisfies guard.`
-        : expectedValue
+        : depth === 0 && expectedValue
           ? 'Guard is permanently disabled (false).'
-          : 'Constant true violates negated guard (requires false).';
+          : expectedValue
+            ? 'Literal clause is false (requires true).'
+            : depth === 0
+              ? 'Constant true violates negated guard (requires false).'
+              : 'Literal clause is true (requires false).';
       return {
         ok: true,
         clause: Object.freeze({
@@ -529,6 +533,26 @@ function explainBoolExpr(
   }
 }
 
+function readOwnRuleAt(
+  rawRules: unknown,
+  index: number,
+): TransitionSystemModel['rules'][number] | null {
+  if (!Array.isArray(rawRules)) return null;
+  const desc = Object.getOwnPropertyDescriptor(rawRules, index);
+  if (
+    desc === undefined ||
+    Object.hasOwn(desc, 'get') ||
+    Object.hasOwn(desc, 'set') ||
+    desc.get !== undefined ||
+    desc.set !== undefined ||
+    typeof desc.value !== 'object' ||
+    desc.value === null
+  ) {
+    return null;
+  }
+  return desc.value as TransitionSystemModel['rules'][number];
+}
+
 export function explainRuleGuards(
   model: TransitionSystemModel,
   state: StateSnapshot,
@@ -541,19 +565,56 @@ export function explainRuleGuards(
     });
   }
 
-  const coreEnabledById = new Map<string, boolean>();
-  for (const item of coreResult.transitions) {
-    coreEnabledById.set(item.ruleId, item.enabled);
+  let rawRules: unknown = null;
+  let schema: StateSchema | null = null;
+  try {
+    const modelObj = model as unknown as Record<string, unknown>;
+    const rulesDesc = Object.getOwnPropertyDescriptor(modelObj, 'rules');
+    const schemaDesc = Object.getOwnPropertyDescriptor(modelObj, 'schema');
+    if (
+      rulesDesc !== undefined &&
+      !Object.hasOwn(rulesDesc, 'get') &&
+      !Object.hasOwn(rulesDesc, 'set')
+    ) {
+      rawRules = rulesDesc.value;
+    }
+    if (
+      schemaDesc !== undefined &&
+      !Object.hasOwn(schemaDesc, 'get') &&
+      !Object.hasOwn(schemaDesc, 'set') &&
+      typeof schemaDesc.value === 'object' &&
+      schemaDesc.value !== null
+    ) {
+      schema = schemaDesc.value as StateSchema;
+    }
+  } catch {
+    rawRules = null;
+    schema = null;
   }
 
-  const rules: RuleGuardExplanation[] = model.rules.map((rule) => {
-    const coreEnabled = coreEnabledById.get(rule.id) === true;
-    const guardText = formatBoolExpr(rule.guard);
-    const budget: EvalBudget = { visits: 0 };
+  const rules: RuleGuardExplanation[] = coreResult.transitions.map((coreTransition, index) => {
+    const coreEnabled = coreTransition.enabled;
+    const rule = readOwnRuleAt(rawRules, index);
+    if (rule === null || schema === null) {
+      const fallbackReasons = coreEnabled
+        ? []
+        : [`Transition guard evaluated false in engine for ${coreTransition.ruleId}.`];
+      return Object.freeze({
+        ruleId: coreTransition.ruleId,
+        label: coreTransition.label,
+        enabled: coreEnabled,
+        guardText: '<unavailable>',
+        rootClause: null,
+        blockingReasons: Object.freeze(fallbackReasons),
+      });
+    }
 
-    let explained: InternalClauseResult;
+    let guardText = '<unavailable>';
+    let explained: InternalClauseResult = { ok: false, clause: null, reasons: [] };
     try {
-      explained = explainBoolExpr(rule.guard, true, model.schema, state, 0, budget);
+      guardText = formatBoolExpr(rule.guard);
+      const budget: EvalBudget = { visits: 0 };
+      explained = explainBoolExpr(rule.guard, true, schema, state, 0, budget);
     } catch {
       explained = { ok: false, clause: null, reasons: [] };
     }
@@ -567,8 +628,8 @@ export function explainRuleGuards(
         ? []
         : [`Guard evaluated false in engine: ${guardText}.`];
       return Object.freeze({
-        ruleId: rule.id,
-        label: rule.label,
+        ruleId: coreTransition.ruleId,
+        label: coreTransition.label,
         enabled: coreEnabled,
         guardText,
         rootClause: null,
@@ -583,8 +644,8 @@ export function explainRuleGuards(
         : [`Guard evaluated false: ${guardText}.`];
 
     return Object.freeze({
-      ruleId: rule.id,
-      label: rule.label,
+      ruleId: coreTransition.ruleId,
+      label: coreTransition.label,
       enabled: coreEnabled,
       guardText,
       rootClause: explained.clause,

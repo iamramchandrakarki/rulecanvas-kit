@@ -38,6 +38,7 @@ export {
   importModelFromJson,
   indexModelDiagnostics,
   isPrincipledOpenInnerDoorGuard,
+  isRepairableInterlockModel,
   parseStrictIntegerDraft,
   removeAssumption,
   tryExportModelJson,

@@ -632,9 +632,14 @@ export function App({
       <main className="is-workspace">
         <div className="is-column is-column-left">
           <AirlockSchematic
+            schema={replaySession?.model.schema ?? model.schema}
             state={replaySession?.currentState ?? model.initialState}
             changedVars={replaySession?.changedVars ?? []}
             violatedInvariantIds={replaySession?.violatedInvariantIds ?? []}
+            evaluatedInvariantIds={
+              replaySession !== null ? replaySession.model.invariants.map((inv) => inv.id) : []
+            }
+            isEvaluated={replaySession !== null}
             goalReached={replaySession?.goalReached}
             stepNumber={replaySession?.cursor ?? 0}
             modeLabel={

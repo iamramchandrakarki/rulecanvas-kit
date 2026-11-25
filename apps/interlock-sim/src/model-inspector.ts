@@ -262,6 +262,43 @@ function getPrincipledOpenInnerDoorRule(): TransitionRule {
   return bsl3AirlockFixedModel.rules.find((r) => r.id === 'open_inner_door')!;
 }
 
+export function isRepairableInterlockModel(model: TransitionSystemModel): boolean {
+  const schema = model.schema;
+  const outer = Object.hasOwn(schema, 'outerDoor') ? schema['outerDoor'] : undefined;
+  const inner = Object.hasOwn(schema, 'innerDoor') ? schema['innerDoor'] : undefined;
+  const pressure = Object.hasOwn(schema, 'pressure') ? schema['pressure'] : undefined;
+  const uv = Object.hasOwn(schema, 'uvSterilizer') ? schema['uvSterilizer'] : undefined;
+  const occupied = Object.hasOwn(schema, 'occupied') ? schema['occupied'] : undefined;
+  const purge = Object.hasOwn(schema, 'purgeCycles') ? schema['purgeCycles'] : undefined;
+  const override = Object.hasOwn(schema, 'maintenanceOverride')
+    ? schema['maintenanceOverride']
+    : undefined;
+
+  if (
+    outer?.kind !== 'enum' ||
+    !outer.values.includes('closed') ||
+    !outer.values.includes('open') ||
+    inner?.kind !== 'enum' ||
+    !inner.values.includes('closed') ||
+    !inner.values.includes('open') ||
+    pressure?.kind !== 'enum' ||
+    !pressure.values.includes('negative') ||
+    uv?.kind !== 'enum' ||
+    !uv.values.includes('off') ||
+    occupied?.kind !== 'boolean' ||
+    purge?.kind !== 'int' ||
+    purge.min > 1 ||
+    purge.max < 1 ||
+    override?.kind !== 'boolean'
+  ) {
+    return false;
+  }
+
+  const rule = model.rules.find((r) => r.id === 'open_inner_door');
+  if (rule === undefined) return false;
+  return rule.updates.some((u) => u.var === 'innerDoor');
+}
+
 export function isPrincipledOpenInnerDoorGuard(model: TransitionSystemModel): boolean {
   const current = model.rules.find((r) => r.id === 'open_inner_door');
   if (current === undefined) return false;
@@ -272,6 +309,9 @@ export function isPrincipledOpenInnerDoorGuard(model: TransitionSystemModel): bo
 export function applyPrincipledInterlockRepair(
   model: TransitionSystemModel,
 ): TransitionSystemModel {
+  if (!isRepairableInterlockModel(model)) {
+    return model;
+  }
   const reference = getPrincipledOpenInnerDoorRule();
   const index = model.rules.findIndex((r) => r.id === 'open_inner_door');
   if (index < 0) {
@@ -1154,6 +1194,7 @@ function requireExportPlainObject(
   path: string,
   budget: ExportBudget,
   depth: number,
+  allowedKeys?: ReadonlySet<string>,
 ): Record<string, unknown> {
   consumeExportBudget(budget, depth, path);
   if (!isPlainObjectLike(value)) {
@@ -1163,10 +1204,27 @@ function requireExportPlainObject(
     if (typeof key === 'symbol') {
       throw new TypeError(`Cannot export model: symbol property is not allowed at "${path}".`);
     }
+    const childPath = path === '$' ? key : `${path}.${key}`;
     const desc = Object.getOwnPropertyDescriptor(value, key);
-    if (desc !== undefined && isAccessorDescriptor(desc)) {
+    if (desc === undefined) continue;
+    if (isAccessorDescriptor(desc)) {
       throw new TypeError(
-        `Cannot export model: accessor property is not allowed at "${path}.${key}".`,
+        `Cannot export model: accessor property is not allowed at "${childPath}".`,
+      );
+    }
+    if (!desc.enumerable) {
+      throw new TypeError(
+        `Cannot export model: non-enumerable property is not allowed at "${childPath}".`,
+      );
+    }
+    if (RESERVED_KEYS.has(key)) {
+      throw new TypeError(
+        `Cannot export model: reserved key "${key}" is not allowed at "${childPath}".`,
+      );
+    }
+    if (allowedKeys !== undefined && !allowedKeys.has(key)) {
+      throw new TypeError(
+        `Cannot export model: unsupported field "${key}" at "${childPath}".`,
       );
     }
   }
@@ -1219,8 +1277,21 @@ function readExportArrayElements(
   ) {
     throw new TypeError(`Cannot export model: invalid array length descriptor at "${path}".`);
   }
+  const length = lenDesc.value;
+  for (const key of Reflect.ownKeys(raw)) {
+    if (typeof key === 'symbol') {
+      throw new TypeError(`Cannot export model: array symbol property is not allowed at "${path}".`);
+    }
+    if (key === 'length') continue;
+    if (RESERVED_KEYS.has(key)) {
+      throw new TypeError(`Cannot export model: reserved array key "${key}" at "${path}.${key}".`);
+    }
+    if (!isCanonicalArrayIndex(key, length)) {
+      throw new TypeError(`Cannot export model: unsupported array property "${key}" at "${path}.${key}".`);
+    }
+  }
   const out: unknown[] = [];
-  for (let i = 0; i < lenDesc.value; i += 1) {
+  for (let i = 0; i < length; i += 1) {
     consumeExportBudget(budget, depth, `${path}[${i}]`);
     const desc = Object.getOwnPropertyDescriptor(raw, i);
     if (desc === undefined) {
@@ -1279,8 +1350,13 @@ function cloneValueExprForExport(
   depth: number,
   budget: ExportBudget,
 ): ValueExpr {
-  const obj = requireExportPlainObject(raw, path, budget, depth);
-  const op = requireSafeString(readRequiredOwnData(obj, 'op', `${path}.op`), `${path}.op`);
+  const preObj = requireExportPlainObject(raw, path, budget, depth);
+  const op = requireSafeString(readRequiredOwnData(preObj, 'op', `${path}.op`), `${path}.op`);
+  const allowed = VALUE_EXPR_KEYS_BY_OP[op];
+  if (allowed === undefined) {
+    throw new TypeError(`Cannot export model: unsupported value expression op "${op}" at "${path}".`);
+  }
+  const obj = requireExportPlainObject(raw, path, budget, depth, allowed);
   if (op === 'lit') {
     return {
       op: 'lit',
@@ -1296,24 +1372,21 @@ function cloneValueExprForExport(
       name: requireSafeString(readRequiredOwnData(obj, 'name', `${path}.name`), `${path}.name`),
     };
   }
-  if (op === 'add' || op === 'sub') {
-    return {
-      op,
-      left: cloneValueExprForExport(
-        readRequiredOwnData(obj, 'left', `${path}.left`),
-        `${path}.left`,
-        depth + 1,
-        budget,
-      ),
-      right: cloneValueExprForExport(
-        readRequiredOwnData(obj, 'right', `${path}.right`),
-        `${path}.right`,
-        depth + 1,
-        budget,
-      ),
-    };
-  }
-  throw new TypeError(`Cannot export model: unsupported value expression op "${op}" at "${path}".`);
+  return {
+    op: op as 'add' | 'sub',
+    left: cloneValueExprForExport(
+      readRequiredOwnData(obj, 'left', `${path}.left`),
+      `${path}.left`,
+      depth + 1,
+      budget,
+    ),
+    right: cloneValueExprForExport(
+      readRequiredOwnData(obj, 'right', `${path}.right`),
+      `${path}.right`,
+      depth + 1,
+      budget,
+    ),
+  };
 }
 
 function cloneBoolExprForExport(
@@ -1322,8 +1395,15 @@ function cloneBoolExprForExport(
   depth: number,
   budget: ExportBudget,
 ): BoolExpr {
-  const obj = requireExportPlainObject(raw, path, budget, depth);
-  const op = requireSafeString(readRequiredOwnData(obj, 'op', `${path}.op`), `${path}.op`);
+  const preObj = requireExportPlainObject(raw, path, budget, depth);
+  const op = requireSafeString(readRequiredOwnData(preObj, 'op', `${path}.op`), `${path}.op`);
+  const allowed = BOOL_EXPR_KEYS_BY_OP[op];
+  if (allowed === undefined) {
+    throw new TypeError(
+      `Cannot export model: unsupported boolean expression op "${op}" at "${path}".`,
+    );
+  }
+  const obj = requireExportPlainObject(raw, path, budget, depth, allowed);
   if (op === 'lit') {
     return {
       op: 'lit',
@@ -1388,32 +1468,27 @@ function cloneBoolExprForExport(
       ),
     };
   }
-  if (op === 'in') {
-    const rawVals = readExportArrayElements(
-      readRequiredOwnData(obj, 'values', `${path}.values`),
-      `${path}.values`,
-      budget,
-      depth,
-    );
-    return {
-      op: 'in',
-      expr: cloneValueExprForExport(
-        readRequiredOwnData(obj, 'expr', `${path}.expr`),
-        `${path}.expr`,
-        depth + 1,
-        budget,
-      ),
-      values: rawVals.map((v, idx) => requireSafeStateValue(v, `${path}.values[${idx}]`)),
-    };
-  }
-  throw new TypeError(
-    `Cannot export model: unsupported boolean expression op "${op}" at "${path}".`,
+  const rawVals = readExportArrayElements(
+    readRequiredOwnData(obj, 'values', `${path}.values`),
+    `${path}.values`,
+    budget,
+    depth,
   );
+  return {
+    op: 'in',
+    expr: cloneValueExprForExport(
+      readRequiredOwnData(obj, 'expr', `${path}.expr`),
+      `${path}.expr`,
+      depth + 1,
+      budget,
+    ),
+    values: rawVals.map((v, idx) => requireSafeStateValue(v, `${path}.values[${idx}]`)),
+  };
 }
 
 function cloneCanonicalModelForExport(model: TransitionSystemModel): Record<string, unknown> {
   const budget: ExportBudget = { visited: 0 };
-  const root = requireExportPlainObject(model, '$', budget, 0);
+  const root = requireExportPlainObject(model, '$', budget, 0, ROOT_ALLOWED_KEYS);
 
   const out: Record<string, unknown> = {};
   defineSafeDataProp(out, 'id', requireSafeString(readRequiredOwnData(root, 'id', 'id'), 'id'));
@@ -1432,20 +1507,29 @@ function cloneCanonicalModelForExport(model: TransitionSystemModel): Record<stri
   const detachedSchema: Record<string, unknown> = {};
   const schemaVarNames: string[] = [];
   for (const key of Reflect.ownKeys(rawSchema)) {
-    if (typeof key !== 'string' || RESERVED_KEYS.has(key)) continue;
-    const desc = Object.getOwnPropertyDescriptor(rawSchema, key);
-    if (desc === undefined || !desc.enumerable) continue;
-    if (isAccessorDescriptor(desc)) {
-      throw new TypeError(
-        `Cannot export model: accessor property is not allowed at "schema.${key}".`,
-      );
+    if (typeof key !== 'string') {
+      throw new TypeError('Cannot export model: symbol property is not allowed on "schema".');
     }
     const varPath = `schema.${key}`;
-    const defObj = requireExportPlainObject(desc.value, varPath, budget, 2);
+    const desc = Object.getOwnPropertyDescriptor(rawSchema, key);
+    if (desc === undefined) continue;
+    const preDef = requireExportPlainObject(desc.value, varPath, budget, 2);
     const kind = requireSafeString(
-      readRequiredOwnData(defObj, 'kind', `${varPath}.kind`),
+      readRequiredOwnData(preDef, 'kind', `${varPath}.kind`),
       `${varPath}.kind`,
     );
+    const allowedDefKeys =
+      kind === 'boolean'
+        ? VAR_DEF_BOOL_KEYS
+        : kind === 'enum'
+          ? VAR_DEF_ENUM_KEYS
+          : kind === 'int'
+            ? VAR_DEF_INT_KEYS
+            : undefined;
+    if (allowedDefKeys === undefined) {
+      throw new TypeError(`Cannot export model: unsupported variable kind "${kind}" at "${varPath}".`);
+    }
+    const defObj = requireExportPlainObject(desc.value, varPath, budget, 2, allowedDefKeys);
     if (kind === 'boolean') {
       defineSafeDataProp(detachedSchema, key, { kind: 'boolean' });
       schemaVarNames.push(key);
@@ -1458,24 +1542,24 @@ function cloneCanonicalModelForExport(model: TransitionSystemModel): Record<stri
       ).map((v, idx) => requireSafeString(v, `${varPath}.values[${idx}]`));
       defineSafeDataProp(detachedSchema, key, { kind: 'enum', values: enumVals });
       schemaVarNames.push(key);
-    } else if (kind === 'int') {
+    } else {
       defineSafeDataProp(detachedSchema, key, {
         kind: 'int',
         min: requireSafeInt(readRequiredOwnData(defObj, 'min', `${varPath}.min`), `${varPath}.min`),
         max: requireSafeInt(readRequiredOwnData(defObj, 'max', `${varPath}.max`), `${varPath}.max`),
       });
       schemaVarNames.push(key);
-    } else {
-      throw new TypeError(`Cannot export model: unsupported variable kind "${kind}" at "${varPath}".`);
     }
   }
   defineSafeDataProp(out, 'schema', detachedSchema);
 
+  const schemaVarSet = new Set(schemaVarNames);
   const rawInit = requireExportPlainObject(
     readRequiredOwnData(root, 'initialState', 'initialState'),
     'initialState',
     budget,
     1,
+    schemaVarSet.size > 0 ? schemaVarSet : undefined,
   );
   const detachedInit: Record<string, unknown> = {};
   for (const key of schemaVarNames) {
@@ -1494,7 +1578,7 @@ function cloneCanonicalModelForExport(model: TransitionSystemModel): Record<stri
   );
   const detachedRules = rawRules.map((rawRule, idx) => {
     const rulePath = `rules[${idx}]`;
-    const ruleObj = requireExportPlainObject(rawRule, rulePath, budget, 2);
+    const ruleObj = requireExportPlainObject(rawRule, rulePath, budget, 2, RULE_ALLOWED_KEYS);
     const rawUpdates = readExportArrayElements(
       readRequiredOwnData(ruleObj, 'updates', `${rulePath}.updates`),
       `${rulePath}.updates`,
@@ -1515,7 +1599,7 @@ function cloneCanonicalModelForExport(model: TransitionSystemModel): Record<stri
       ),
       updates: rawUpdates.map((rawUpd, updIdx) => {
         const updPath = `${rulePath}.updates[${updIdx}]`;
-        const updObj = requireExportPlainObject(rawUpd, updPath, budget, 4);
+        const updObj = requireExportPlainObject(rawUpd, updPath, budget, 4, UPDATE_ALLOWED_KEYS);
         return {
           var: requireSafeString(
             readRequiredOwnData(updObj, 'var', `${updPath}.var`),
@@ -1541,7 +1625,7 @@ function cloneCanonicalModelForExport(model: TransitionSystemModel): Record<stri
   );
   const detachedInvariants = rawInvariants.map((rawInv, idx) => {
     const invPath = `invariants[${idx}]`;
-    const invObj = requireExportPlainObject(rawInv, invPath, budget, 2);
+    const invObj = requireExportPlainObject(rawInv, invPath, budget, 2, INVARIANT_ALLOWED_KEYS);
     return {
       id: requireSafeString(readRequiredOwnData(invObj, 'id', `${invPath}.id`), `${invPath}.id`),
       label: requireSafeString(
@@ -1560,7 +1644,7 @@ function cloneCanonicalModelForExport(model: TransitionSystemModel): Record<stri
 
   const goalProp = readOptionalOwnData(root, 'goal', 'goal');
   if (goalProp.present && goalProp.value !== undefined) {
-    const goalObj = requireExportPlainObject(goalProp.value, 'goal', budget, 1);
+    const goalObj = requireExportPlainObject(goalProp.value, 'goal', budget, 1, GOAL_ALLOWED_KEYS);
     defineSafeDataProp(out, 'goal', {
       id: requireSafeString(readRequiredOwnData(goalObj, 'id', 'goal.id'), 'goal.id'),
       label: requireSafeString(readRequiredOwnData(goalObj, 'label', 'goal.label'), 'goal.label'),
@@ -1581,7 +1665,7 @@ function cloneCanonicalModelForExport(model: TransitionSystemModel): Record<stri
   );
   const detachedAssumptions = rawAssumptions.map((rawAsm, idx) => {
     const asmPath = `assumptions[${idx}]`;
-    const asmObj = requireExportPlainObject(rawAsm, asmPath, budget, 2);
+    const asmObj = requireExportPlainObject(rawAsm, asmPath, budget, 2, ASSUMPTION_ALLOWED_KEYS);
     return {
       id: requireSafeString(readRequiredOwnData(asmObj, 'id', `${asmPath}.id`), `${asmPath}.id`),
       category: requireSafeString(
@@ -1605,7 +1689,17 @@ function cloneCanonicalModelForExport(model: TransitionSystemModel): Record<stri
 
 export function exportModelToJson(model: TransitionSystemModel): string {
   const canonical = cloneCanonicalModelForExport(model);
-  return JSON.stringify(canonical, null, 2);
+  const pretty = JSON.stringify(canonical, null, 2);
+  if (pretty.length <= MAX_IMPORT_JSON_CHARS) {
+    return pretty;
+  }
+  const compact = JSON.stringify(canonical);
+  if (compact.length <= MAX_IMPORT_JSON_CHARS) {
+    return compact;
+  }
+  throw new TypeError(
+    `Cannot export model: serialized JSON (${compact.length} chars) exceeds maximum portable size of ${MAX_IMPORT_JSON_CHARS} characters.`,
+  );
 }
 
 export function tryExportModelJson(model: TransitionSystemModel): JsonExportResult {
@@ -1627,98 +1721,319 @@ function isJsonWhitespace(ch: string): boolean {
   return ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r';
 }
 
-function isJsonValuePrefix(ch: string): boolean {
-  return isJsonWhitespace(ch) || ch === '[' || ch === '{' || ch === ':' || ch === ',';
+const MAX_JSON_SCAN_DEPTH = 256;
+
+type JsonScanResult =
+  | { readonly ok: true; readonly numberErrors: readonly ValidationError[] }
+  | { readonly ok: false; readonly syntaxError: string };
+
+function skipJsonWhitespace(raw: string, start: number): number {
+  let i = start;
+  while (i < raw.length && isJsonWhitespace(raw[i]!)) {
+    i += 1;
+  }
+  return i;
 }
 
-function isJsonDelimiter(ch: string): boolean {
-  return (
-    isJsonWhitespace(ch) ||
-    ch === ',' ||
-    ch === '}' ||
-    ch === ']' ||
-    ch === ':' ||
-    ch === '[' ||
-    ch === '{' ||
-    ch === '"'
-  );
-}
-
-function validateRawJsonNumbers(rawText: string): ValidationError[] {
-  const errors: ValidationError[] = [];
-  let inString = false;
-  let i = 0;
-
-  while (i < rawText.length) {
-    const ch = rawText[i]!;
-    if (inString) {
-      if (ch === '\\') {
-        i += 2;
+function scanJsonString(raw: string, start: number): { readonly nextIndex: number } | { readonly error: string } {
+  let i = start + 1;
+  while (i < raw.length) {
+    const ch = raw[i]!;
+    const code = raw.charCodeAt(i);
+    if (code < 0x20) {
+      return { error: `Unescaped control character in string at index ${i}.` };
+    }
+    if (ch === '"') {
+      return { nextIndex: i + 1 };
+    }
+    if (ch === '\\') {
+      i += 1;
+      if (i >= raw.length) {
+        return { error: 'Unterminated escape sequence in JSON string.' };
+      }
+      const esc = raw[i]!;
+      if (
+        esc === '"' ||
+        esc === '\\' ||
+        esc === '/' ||
+        esc === 'b' ||
+        esc === 'f' ||
+        esc === 'n' ||
+        esc === 'r' ||
+        esc === 't'
+      ) {
+        i += 1;
         continue;
       }
-      if (ch === '"') {
-        inString = false;
+      if (esc === 'u') {
+        if (i + 4 >= raw.length) {
+          return { error: 'Incomplete unicode escape in JSON string.' };
+        }
+        for (let h = 1; h <= 4; h += 1) {
+          const hex = raw[i + h]!;
+          if (!/^[0-9a-fA-F]$/.test(hex)) {
+            return { error: `Invalid hex digit "${hex}" in unicode escape.` };
+          }
+        }
+        i += 5;
+        continue;
+      }
+      return { error: `Invalid escape "\\${esc}" in JSON string.` };
+    }
+    i += 1;
+  }
+  return { error: 'Unterminated JSON string literal.' };
+}
+
+function scanAndValidateRawJson(raw: string): JsonScanResult {
+  const stack: ('object' | 'array')[] = [];
+  const numberErrors: ValidationError[] = [];
+  let i = skipJsonWhitespace(raw, 0);
+  if (i >= raw.length) {
+    return { ok: false, syntaxError: 'JSON input is empty.' };
+  }
+
+  type ExpectMode = 'value' | 'after-value' | 'key-or-end' | 'key' | 'colon' | 'comma-or-end';
+  let expectMode: ExpectMode = 'value';
+  let rootDone = false;
+
+  while (true) {
+    i = skipJsonWhitespace(raw, i);
+
+    if (rootDone && stack.length === 0) {
+      return i < raw.length
+        ? { ok: false, syntaxError: `Unexpected trailing token at index ${i}.` }
+        : { ok: true, numberErrors };
+    }
+
+    if (i >= raw.length) {
+      return { ok: false, syntaxError: 'Unexpected end of JSON input.' };
+    }
+
+    const ch = raw[i]!;
+
+    if (expectMode === 'colon') {
+      if (ch !== ':') {
+        return { ok: false, syntaxError: `Expected ":" at index ${i}.` };
       }
       i += 1;
+      expectMode = 'value';
+      continue;
+    }
+
+    if (expectMode === 'key-or-end') {
+      if (ch === '}') {
+        if (stack.pop() !== 'object') {
+          return { ok: false, syntaxError: `Mismatched "}" at index ${i}.` };
+        }
+        i += 1;
+        if (stack.length === 0) {
+          rootDone = true;
+        } else {
+          expectMode = 'comma-or-end';
+        }
+        continue;
+      }
+      if (ch !== '"') {
+        return { ok: false, syntaxError: `Expected string key or "}" at index ${i}.` };
+      }
+      const strRes = scanJsonString(raw, i);
+      if ('error' in strRes) {
+        return { ok: false, syntaxError: strRes.error };
+      }
+      i = strRes.nextIndex;
+      expectMode = 'colon';
+      continue;
+    }
+
+    if (expectMode === 'key') {
+      if (ch !== '"') {
+        return { ok: false, syntaxError: `Expected property key string at index ${i}.` };
+      }
+      const strRes = scanJsonString(raw, i);
+      if ('error' in strRes) {
+        return { ok: false, syntaxError: strRes.error };
+      }
+      i = strRes.nextIndex;
+      expectMode = 'colon';
+      continue;
+    }
+
+    if (expectMode === 'comma-or-end') {
+      const parent = stack[stack.length - 1];
+      if (ch === ',') {
+        i += 1;
+        expectMode = parent === 'object' ? 'key' : 'value';
+        continue;
+      }
+      if (ch === '}' && parent === 'object') {
+        stack.pop();
+        i += 1;
+        if (stack.length === 0) {
+          rootDone = true;
+        } else {
+          expectMode = 'comma-or-end';
+        }
+        continue;
+      }
+      if (ch === ']' && parent === 'array') {
+        stack.pop();
+        i += 1;
+        if (stack.length === 0) {
+          rootDone = true;
+        } else {
+          expectMode = 'comma-or-end';
+        }
+        continue;
+      }
+      return { ok: false, syntaxError: `Expected "," or closing delimiter at index ${i}.` };
+    }
+
+    // expectMode === 'value'
+    if (ch === '{') {
+      if (stack.length >= MAX_JSON_SCAN_DEPTH) {
+        return { ok: false, syntaxError: 'JSON nesting exceeds scanner depth limit.' };
+      }
+      stack.push('object');
+      i += 1;
+      expectMode = 'key-or-end';
+      continue;
+    }
+
+    if (ch === '[') {
+      if (stack.length >= MAX_JSON_SCAN_DEPTH) {
+        return { ok: false, syntaxError: 'JSON nesting exceeds scanner depth limit.' };
+      }
+      stack.push('array');
+      i += 1;
+      const nextNonWs = skipJsonWhitespace(raw, i);
+      if (nextNonWs < raw.length && raw[nextNonWs] === ']') {
+        stack.pop();
+        i = nextNonWs + 1;
+        if (stack.length === 0) {
+          rootDone = true;
+        } else {
+          expectMode = 'comma-or-end';
+        }
+      } else {
+        expectMode = 'value';
+      }
       continue;
     }
 
     if (ch === '"') {
-      inString = true;
-      i += 1;
+      const strRes = scanJsonString(raw, i);
+      if ('error' in strRes) {
+        return { ok: false, syntaxError: strRes.error };
+      }
+      i = strRes.nextIndex;
+      if (stack.length === 0) {
+        rootDone = true;
+      } else {
+        expectMode = 'comma-or-end';
+      }
+      continue;
+    }
+
+    if (raw.startsWith('true', i)) {
+      i += 4;
+      if (stack.length === 0) rootDone = true;
+      else expectMode = 'comma-or-end';
+      continue;
+    }
+
+    if (raw.startsWith('false', i)) {
+      i += 5;
+      if (stack.length === 0) rootDone = true;
+      else expectMode = 'comma-or-end';
+      continue;
+    }
+
+    if (raw.startsWith('null', i)) {
+      i += 4;
+      if (stack.length === 0) rootDone = true;
+      else expectMode = 'comma-or-end';
       continue;
     }
 
     if (ch === '-' || (ch >= '0' && ch <= '9')) {
-      if (i > 0 && !isJsonValuePrefix(rawText[i - 1]!)) {
-        i += 1;
-        continue;
-      }
       const start = i;
-      while (i < rawText.length && !isJsonDelimiter(rawText[i]!)) {
+      if (raw[i] === '-') i += 1;
+      if (i >= raw.length || raw[i]! < '0' || raw[i]! > '9') {
+        return { ok: false, syntaxError: `Invalid number token at index ${start}.` };
+      }
+      if (raw[i] === '0') {
         i += 1;
-      }
-
-      const token = rawText.slice(start, i);
-      if (!RFC8259_JSON_NUMBER_RE.test(token)) {
-        continue;
-      }
-
-      if (token.includes('.') || token.includes('e') || token.includes('E')) {
-        errors.push({
-          code: 'NON_INTEGER_JSON_NUMBER',
-          path: '$',
-          message: `Invalid non-integer JSON number token "${token}".`,
-        });
+        if (i < raw.length && raw[i]! >= '0' && raw[i]! <= '9') {
+          return { ok: false, syntaxError: `Leading zero in JSON number at index ${start}.` };
+        }
       } else {
-        const digitLength = token.startsWith('-') ? token.length - 1 : token.length;
-        if (digitLength > 16) {
-          errors.push({
-            code: 'UNSAFE_INTEGER_JSON_NUMBER',
+        while (i < raw.length && raw[i]! >= '0' && raw[i]! <= '9') {
+          i += 1;
+        }
+      }
+      if (i < raw.length && raw[i] === '.') {
+        i += 1;
+        if (i >= raw.length || raw[i]! < '0' || raw[i]! > '9') {
+          return { ok: false, syntaxError: `Invalid fractional number at index ${start}.` };
+        }
+        while (i < raw.length && raw[i]! >= '0' && raw[i]! <= '9') {
+          i += 1;
+        }
+      }
+      if (i < raw.length && (raw[i] === 'e' || raw[i] === 'E')) {
+        i += 1;
+        if (i < raw.length && (raw[i] === '+' || raw[i] === '-')) {
+          i += 1;
+        }
+        if (i >= raw.length || raw[i]! < '0' || raw[i]! > '9') {
+          return { ok: false, syntaxError: `Invalid exponent in JSON number at index ${start}.` };
+        }
+        while (i < raw.length && raw[i]! >= '0' && raw[i]! <= '9') {
+          i += 1;
+        }
+      }
+
+      const token = raw.slice(start, i);
+      if (!RFC8259_JSON_NUMBER_RE.test(token)) {
+        return { ok: false, syntaxError: `Invalid JSON number token "${token}".` };
+      }
+
+      if (numberErrors.length < 64) {
+        if (token.includes('.') || token.includes('e') || token.includes('E')) {
+          numberErrors.push({
+            code: 'NON_INTEGER_JSON_NUMBER',
             path: '$',
-            message: `Integer JSON number token "${token}" exceeds safe integer bounds.`,
+            message: `Invalid non-integer JSON number token "${token}".`,
           });
         } else {
-          const big = BigInt(token);
-          if (big < MIN_SAFE_BIGINT || big > MAX_SAFE_BIGINT) {
-            errors.push({
+          const digitLength = token.startsWith('-') ? token.length - 1 : token.length;
+          if (digitLength > 16) {
+            numberErrors.push({
               code: 'UNSAFE_INTEGER_JSON_NUMBER',
               path: '$',
               message: `Integer JSON number token "${token}" exceeds safe integer bounds.`,
             });
+          } else {
+            const big = BigInt(token);
+            if (big < MIN_SAFE_BIGINT || big > MAX_SAFE_BIGINT) {
+              numberErrors.push({
+                code: 'UNSAFE_INTEGER_JSON_NUMBER',
+                path: '$',
+                message: `Integer JSON number token "${token}" exceeds safe integer bounds.`,
+              });
+            }
           }
         }
       }
-      if (errors.length >= 64) {
-        break;
-      }
+
+      if (stack.length === 0) rootDone = true;
+      else expectMode = 'comma-or-end';
       continue;
     }
 
-    i += 1;
+    return { ok: false, syntaxError: `Unexpected token "${ch}" at index ${i}.` };
   }
-
-  return errors;
 }
 
 export function validateImportedModelValue(candidate: unknown): JsonImportResult {
@@ -1791,9 +2106,22 @@ export function importModelFromJson(rawText: unknown): JsonImportResult {
       };
     }
 
-    const numberErrors = validateRawJsonNumbers(rawText);
-    if (numberErrors.length > 0) {
-      return { ok: false, errors: numberErrors };
+    const scanResult = scanAndValidateRawJson(rawText);
+    if (!scanResult.ok) {
+      return {
+        ok: false,
+        errors: [
+          {
+            code: 'JSON_PARSE_ERROR',
+            path: '$',
+            message: `Invalid JSON: ${scanResult.syntaxError}`,
+          },
+        ],
+      };
+    }
+
+    if (scanResult.numberErrors.length > 0) {
+      return { ok: false, errors: scanResult.numberErrors };
     }
 
     let parsed: unknown;

@@ -29,6 +29,8 @@ export type VerifyClientOutcome =
 
 interface PendingRequest {
   readonly requestId: number;
+  readonly model: TransitionSystemModel;
+  readonly options: VerifyOptions;
   readonly resolve: (outcome: VerifyClientOutcome) => void;
 }
 
@@ -92,6 +94,7 @@ export class VerifyWorkerClient {
   private readonly restartOnSupersede: boolean;
   private executionMode: VerifyExecutionMode;
   private worker: WorkerLike | null = null;
+  private workerHasResponded = false;
   private nextRequestId = 0;
   private pending: PendingRequest | null = null;
 
@@ -150,10 +153,12 @@ export class VerifyWorkerClient {
     }
 
     const instance = this.instantiateWorker();
+    this.workerHasResponded = false;
     instance.onmessage = (event) => {
       if (this.worker !== instance) {
         return;
       }
+      this.workerHasResponded = true;
       const response = event.data;
       if (response === undefined || response === null) {
         return;
@@ -189,8 +194,34 @@ export class VerifyWorkerClient {
           ? event.message
           : 'Verification worker terminated unexpectedly.';
       const current = this.pending;
+      const isStartupFailure =
+        !this.hasCustomFactory && this.executionMode === 'worker' && !this.workerHasResponded;
       this.pending = null;
       this.disposeWorker();
+
+      if (isStartupFailure && current !== null) {
+        this.workerFactory = createSynchronousWorkerFactory();
+        this.executionMode = 'main-thread';
+        try {
+          const result = verifyModel(current.model, current.options);
+          current.resolve({
+            status: 'completed',
+            requestId: current.requestId,
+            result,
+            executionMode: 'main-thread',
+          });
+        } catch (err) {
+          const fallbackMessage =
+            err instanceof Error && err.message.length > 0 ? err.message : message;
+          current.resolve({
+            status: 'error',
+            requestId: current.requestId,
+            message: fallbackMessage,
+          });
+        }
+        return;
+      }
+
       if (current !== null) {
         current.resolve({
           status: 'error',
@@ -210,6 +241,7 @@ export class VerifyWorkerClient {
       this.worker.onerror = null;
       this.worker.terminate();
       this.worker = null;
+      this.workerHasResponded = false;
     }
   }
 
@@ -264,7 +296,7 @@ export class VerifyWorkerClient {
         return;
       }
 
-      this.pending = { requestId, resolve };
+      this.pending = { requestId, model, options, resolve };
       try {
         worker.postMessage({
           type: 'verify',

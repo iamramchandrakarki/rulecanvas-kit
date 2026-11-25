@@ -486,6 +486,7 @@ svg {
 .is-telemetry-change {
   font-size: 0.7rem;
   color: var(--color-accent-2);
+  white-space: nowrap;
 }
 
 .is-schematic-status-strip {
@@ -879,6 +880,38 @@ svg {
   display: flex;
   flex-direction: column;
   gap: var(--space-sm);
+  min-width: 0;
+}
+
+.is-guard-tree-scroll {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  padding: var(--space-xs);
+  border: 1px solid var(--color-rule-2);
+  background: var(--color-paper-3);
+  color: var(--color-ink);
+}
+
+.is-expr-node {
+  border-left: 1px solid var(--color-rule);
+  padding-left: var(--space-xs);
+  margin-top: var(--space-xs);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  min-width: max-content;
+}
+
+.is-expr-node .is-expr-node .is-expr-node .is-expr-node .is-expr-node .is-expr-node .is-expr-node {
+  padding-left: var(--space-2xs);
+}
+
+.is-expr-node-root {
+  border-left: none;
+  padding-left: 0;
+  margin-top: 0;
+  min-width: 0;
 }
 
 .is-field {
@@ -916,21 +949,6 @@ svg {
   font-family: var(--font-outlier);
   font-size: var(--text-xs);
   overflow-wrap: anywhere;
-}
-
-.is-expr-node {
-  border-left: 1px solid var(--color-rule);
-  padding-left: var(--space-sm);
-  margin-top: var(--space-xs);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-xs);
-}
-
-.is-expr-node-root {
-  border-left: none;
-  padding-left: 0;
-  margin-top: 0;
 }
 
 .is-expr-row {

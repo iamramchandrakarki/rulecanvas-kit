@@ -26,9 +26,10 @@ import {
 } from '@rulecanvas/ui';
 import { describe, expect, it, vi } from 'vitest';
 import { App } from '../src/App.js';
+import { AirlockSchematic } from '../src/components/AirlockSchematic.js';
 import { ComparisonPanel } from '../src/components/ComparisonPanel.js';
 import { BoolExprEditor, type LiftedIntDraftStore } from '../src/components/ExprEditor.js';
-import { InterlockRuleEditor } from '../src/components/InterlockRuleEditor.js';
+import { InterlockRuleEditor, matchesDraftPrefix } from '../src/components/InterlockRuleEditor.js';
 import {
   VerificationWorkbenchPane,
   type VerifiedSnapshot,
@@ -48,6 +49,7 @@ import {
   importModelFromJson,
   indexModelDiagnostics,
   isPrincipledOpenInnerDoorGuard,
+  isRepairableInterlockModel,
   isWebWorkerSupported,
   loadInterlockPresetModel,
   parseStrictIntegerDraft,
@@ -318,6 +320,38 @@ describe('InterlockSim workbench architecture, semantics, security, and UI', () 
     expect(explained.rules[2]!.blockingReasons[0]).toContain('requires one of []');
     expect(explained.rules[3]!.blockingReasons[0]).toContain('permanently disabled (false)');
 
+    // Nested literal false inside or(false, flag) must NOT falsely claim rule is permanently disabled
+    const nestedFalseModel: TransitionSystemModel = {
+      ...customModel,
+      rules: [
+        {
+          id: 'nested_lit_rule',
+          label: 'Nested literal false in disjunction',
+          guard: { op: 'or', args: [{ op: 'lit', value: false }, { op: 'var', name: 'flag' }] },
+          updates: [],
+        },
+      ],
+    };
+    const nestedExpl = explainRuleGuards(nestedFalseModel, { flag: false, mode: 'idle', level: 0 });
+    expect(nestedExpl.ok).toBe(true);
+    if (nestedExpl.ok) {
+      const reason = nestedExpl.rules[0]!.blockingReasons[0]!;
+      expect(reason).not.toContain('permanently disabled');
+      expect(reason).toContain('Literal clause is false');
+    }
+
+    // Non-enumerable model.rules.map = undefined cannot throw after getEnabledTransitions succeeds
+    const shadowedRules = [...nestedFalseModel.rules];
+    Object.defineProperty(shadowedRules, 'map', { value: undefined, enumerable: false });
+    const shadowedExpl = explainRuleGuards(
+      { ...nestedFalseModel, rules: shadowedRules },
+      { flag: false, mode: 'idle', level: 0 },
+    );
+    expect(shadowedExpl.ok).toBe(true);
+    if (shadowedExpl.ok) {
+      expect(shadowedExpl.rules[0]!.enabled).toBe(false);
+    }
+
     const invalidModelResult = explainRuleGuards(
       {
         ...customModel,
@@ -570,6 +604,38 @@ describe('InterlockSim workbench architecture, semantics, security, and UI', () 
       expect(fallbackOutcome.result.status).toBe('VERIFIED');
     }
     fallbackClient.dispose();
+
+    // Asynchronous Worker startup failure falls back to main-thread cleanly
+    const origWorker = (globalThis as { Worker?: unknown }).Worker;
+    class AsyncFailingWorker {
+      public onmessage: ((ev: { readonly data: unknown }) => void) | null = null;
+      public onerror: ((ev: { readonly message?: string }) => void) | null = null;
+      public postMessage(): void {
+        queueMicrotask(() => {
+          this.onerror?.({ message: 'Failed to load worker module script' });
+        });
+      }
+      public terminate(): void {}
+    }
+    (globalThis as { Worker?: unknown }).Worker = AsyncFailingWorker;
+    try {
+      const startupFallbackClient = new VerifyWorkerClient();
+      expect(startupFallbackClient.getExecutionMode()).toBe('worker');
+      const recovered = await startupFallbackClient.verify(model, DEFAULT_VERIFY_OPTIONS);
+      expect(recovered.status).toBe('completed');
+      if (recovered.status === 'completed') {
+        expect(recovered.executionMode).toBe('main-thread');
+        expect(recovered.result.status).toBe('VERIFIED');
+      }
+      expect(startupFallbackClient.getExecutionMode()).toBe('main-thread');
+      startupFallbackClient.dispose();
+    } finally {
+      if (origWorker === undefined) {
+        delete (globalThis as { Worker?: unknown }).Worker;
+      } else {
+        (globalThis as { Worker?: unknown }).Worker = origWorker;
+      }
+    }
   });
 
   it('rejects non-integer JSON before JSON.parse, handles malformed/hostile payloads safely, and round-trips depth-32 ASTs without crashing export', () => {
@@ -612,6 +678,79 @@ describe('InterlockSim workbench architecture, semantics, security, and UI', () 
     expect(malformed.ok).toBe(false);
     if (!malformed.ok) {
       expect(malformed.errors[0]?.code).toBe('JSON_PARSE_ERROR');
+    }
+
+    // Malformed JSON syntax with decimal/unsafe int tokens reports JSON_PARSE_ERROR (never masked)
+    const malformedDecimal = importModelFromJson('{"x":1.5,}');
+    expect(malformedDecimal.ok).toBe(false);
+    if (!malformedDecimal.ok) {
+      expect(malformedDecimal.errors[0]?.code).toBe('JSON_PARSE_ERROR');
+    }
+    const malformedUnsafe = importModelFromJson('{"x":[9007199254740993}');
+    expect(malformedUnsafe.ok).toBe(false);
+    if (!malformedUnsafe.ok) {
+      expect(malformedUnsafe.errors[0]?.code).toBe('JSON_PARSE_ERROR');
+    }
+
+    // Export rejects extra properties / symbols / reserved keys identically to import
+    const rulesWithExtraProp = [...bsl3AirlockFixedModel.rules];
+    (rulesWithExtraProp as unknown as Record<string, unknown>)['extraProp'] = 123;
+    expect(
+      tryExportModelJson({ ...bsl3AirlockFixedModel, rules: rulesWithExtraProp }).ok,
+    ).toBe(false);
+
+    const rulesWithSymbol = [...bsl3AirlockFixedModel.rules];
+    Object.defineProperty(rulesWithSymbol, Symbol('tag'), { value: true, enumerable: true });
+    expect(tryExportModelJson({ ...bsl3AirlockFixedModel, rules: rulesWithSymbol }).ok).toBe(
+      false,
+    );
+
+    const schemaWithReserved = { ...bsl3AirlockFixedModel.schema };
+    Object.defineProperty(schemaWithReserved, '__proto__', {
+      value: { kind: 'boolean' },
+      enumerable: true,
+      configurable: true,
+    });
+    expect(
+      tryExportModelJson({ ...bsl3AirlockFixedModel, schema: schemaWithReserved }).ok,
+    ).toBe(false);
+
+    // Compact JSON fallback keeps near-limit exports re-importable, and > 512KB triggers JSON_EXPORT_ERROR
+    const largePadding = 'A'.repeat(498_000);
+    const compactableModel: TransitionSystemModel = {
+      ...bsl3AirlockFixedModel,
+      assumptions: [
+        {
+          id: 'large_scope',
+          category: 'scope',
+          statement: largePadding,
+          notModeled: 'Physical dynamics.',
+        },
+        ...bsl3AirlockFixedModel.assumptions.slice(1),
+      ],
+    };
+    const compactExport = tryExportModelJson(compactableModel);
+    expect(compactExport.ok).toBe(true);
+    if (compactExport.ok) {
+      expect(compactExport.text.length).toBeLessThanOrEqual(512_000);
+      expect(importModelFromJson(compactExport.text).ok).toBe(true);
+    }
+
+    const oversizedExportModel: TransitionSystemModel = {
+      ...bsl3AirlockFixedModel,
+      assumptions: [
+        {
+          id: 'too_large_scope',
+          category: 'scope',
+          statement: 'B'.repeat(520_000),
+          notModeled: 'Physical dynamics.',
+        },
+      ],
+    };
+    const oversizedExport = tryExportModelJson(oversizedExportModel);
+    expect(oversizedExport.ok).toBe(false);
+    if (!oversizedExport.ok) {
+      expect(oversizedExport.error.code).toBe('JSON_EXPORT_ERROR');
     }
 
     // Reject reserved __proto__ property, accessors, and Proxy traps
@@ -678,11 +817,20 @@ describe('InterlockSim workbench architecture, semantics, security, and UI', () 
       expect(overDeepExport.error.code).toBe('JSON_EXPORT_ERROR');
     }
 
-    // Strict integer parser
+    // Strict integer parser & rule draft pruning prefix matching
     expect(parseStrictIntegerDraft('100')).toEqual({ ok: true, value: 100 });
     expect(parseStrictIntegerDraft('-0')).toEqual({ ok: true, value: 0 });
     expect(parseStrictIntegerDraft('2.9').ok).toBe(false);
     expect(parseStrictIntegerDraft('1e4').ok).toBe(false);
+    expect(matchesDraftPrefix('rule:open_inner_door.guard.args.clause-5.right.value', 'rule')).toBe(
+      true,
+    );
+    expect(
+      matchesDraftPrefix(
+        'rule:open_inner_door.guard.args.clause-5.right.value',
+        'rule:open_inner_door.guard',
+      ),
+    ).toBe(true);
   });
 
   it('renders accessible schematic, operator console, disclaimers, 3 tabs, and bidirectional form labels', () => {
@@ -703,8 +851,110 @@ describe('InterlockSim workbench architecture, semantics, security, and UI', () 
     expect(brokenHtml).toContain('purgeCycles');
     expect(brokenHtml).toContain('maintenanceOverride');
 
-    // All 3 role="tabpanel" sections remain mounted
+    // All 3 role="tabpanel" sections remain mounted with tabIndex="0"
     expect((brokenHtml.match(/role="tabpanel"/g) ?? []).length).toBe(3);
+    expect((brokenHtml.match(/role="tabpanel"[^>]*tabindex="0"/g) ?? []).length).toBe(3);
+
+    // Incompatible Boolean-only model shows UNAVAILABLE schematic, UNEVALUATED PREVIEW, and no bogus Guided Repair
+    const booleanOnlyModel: TransitionSystemModel = {
+      id: 'bool-only',
+      name: 'Boolean Gate Model',
+      schema: { ready: { kind: 'boolean' } },
+      initialState: { ready: false },
+      rules: [
+        {
+          id: 'open_inner_door',
+          label: 'Unrelated boolean toggle',
+          guard: { op: 'lit', value: true },
+          updates: [{ var: 'ready', value: { op: 'lit', value: true } }],
+        },
+      ],
+      invariants: [
+        { id: 'inv_custom', label: 'Ready remains false', holds: { op: 'not', arg: { op: 'var', name: 'ready' } } },
+      ],
+      assumptions: [
+        { id: 'asm_1', category: 'scope', statement: 'Bool test', notModeled: 'Hardware' },
+      ],
+    };
+    expect(isRepairableInterlockModel(booleanOnlyModel)).toBe(false);
+    expect(applyPrincipledInterlockRepair(booleanOnlyModel)).toBe(booleanOnlyModel);
+
+    const previewSchematicHtml = renderToStaticMarkup(
+      createElement(AirlockSchematic, {
+        schema: booleanOnlyModel.schema,
+        state: booleanOnlyModel.initialState,
+        changedVars: [],
+        violatedInvariantIds: [],
+        evaluatedInvariantIds: [],
+        isEvaluated: false,
+        goalReached: undefined,
+        stepNumber: 0,
+        modeLabel: 'Initial State Preview (Unverified)',
+      }),
+    );
+    expect(previewSchematicHtml).toContain('UNEVALUATED PREVIEW');
+    expect(previewSchematicHtml).toContain('UNAVAILABLE');
+    expect(previewSchematicHtml).not.toContain('SEAL &amp; UV SAFE');
+
+    const safeNonAirlockSchematic = renderToStaticMarkup(
+      createElement(AirlockSchematic, {
+        schema: booleanOnlyModel.schema,
+        state: booleanOnlyModel.initialState,
+        changedVars: [],
+        violatedInvariantIds: [],
+        evaluatedInvariantIds: ['inv_custom'],
+        isEvaluated: true,
+        goalReached: undefined,
+        stepNumber: 0,
+        modeLabel: 'Manual Simulation',
+      }),
+    );
+    expect(safeNonAirlockSchematic).toContain('INVARIANTS SAFE (1)');
+    expect(safeNonAirlockSchematic).not.toContain('SEAL &amp; UV SAFE');
+
+    const incompatEditorHtml = renderToStaticMarkup(
+      createElement(InterlockRuleEditor, {
+        model: booleanOnlyModel,
+        diagnostics: indexModelDiagnostics([]),
+        onChangeModel: () => {},
+        onImportModel: () => {},
+      }),
+    );
+    expect(incompatEditorHtml).not.toContain('Guided Repair Available');
+
+    // Unreachable goal with goal.reached = false reports general goal unreachability (not open_inner_door)
+    const impossibleGoalModel: TransitionSystemModel = {
+      ...bsl3AirlockFixedModel,
+      goal: { id: 'goal_impossible', label: 'Never holds', reached: { op: 'lit', value: false } },
+    };
+    const impossibleGoalVerdict = verifyModel(impossibleGoalModel, DEFAULT_VERIFY_OPTIONS);
+    const impossibleGoalHtml = renderToStaticMarkup(
+      createElement(VerificationWorkbenchPane, {
+        model: impossibleGoalModel,
+        isRunning: false,
+        runningExecutionMode: 'main-thread',
+        isStale: false,
+        workerError: null,
+        cancelledNotice: null,
+        optionErrors: [],
+        editorDraftErrors: [],
+        modelErrors: [],
+        verifiedSnapshot: {
+          model: impossibleGoalModel,
+          modelLabel: 'Impossible Goal',
+          options: DEFAULT_VERIFY_OPTIONS,
+          result: impossibleGoalVerdict,
+          executionMode: 'main-thread',
+        },
+        replaySession: null,
+        onCancelRun: () => {},
+        onVerifyNow: () => {},
+        onJumpToStep: () => {},
+      }),
+    );
+    expect(impossibleGoalHtml).toContain('Vacuous Goal Reachability Warning');
+    expect(impossibleGoalHtml).toContain('goal_impossible');
+    expect(impossibleGoalHtml).not.toContain('open_inner_door');
 
     // Fixed & vacuous variants render honest disclaimers & verdicts
     const fixedHtml = renderToStaticMarkup(createElement(App, { initialVariant: 'fixed' }));
@@ -815,8 +1065,11 @@ describe('InterlockSim workbench architecture, semantics, security, and UI', () 
   it('enforces Option A isolation boundaries (zero imports from agent-gate) and styling hygiene', () => {
     const appDir = path.resolve(import.meta.dirname, '..');
     const tokensCss = readFileSync(path.join(appDir, 'src/styles/tokens.css'), 'utf8');
-    expect(tokensCss.startsWith('/* Hallmark')).toBe(true);
-    expect(tokensCss).not.toContain('agent-gate');
+    expect(tokensCss).toContain('color-scheme: dark;');
+    expect(tokensCss).toContain('--color-paper:');
+    expect(tokensCss).toContain('--color-accent:');
+    expect(tokensCss).toContain('--color-control-border:');
+    expect(tokensCss).not.toMatch(/#fff\b|#ffffff\b|oklch\(100%\s+0\s+0\)|Hallmark|dealt|agent-gate/i);
 
     const filesToCheck = [
       'src/App.tsx',

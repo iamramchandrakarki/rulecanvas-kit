@@ -9,6 +9,7 @@ import {
   getErrorsForPathPrefix,
   importModelFromJson,
   isPrincipledOpenInnerDoorGuard,
+  isRepairableInterlockModel,
   parseStrictIntegerDraft,
   removeAssumption,
   tryExportModelJson,
@@ -40,7 +41,7 @@ function defaultRuleSelection(rules: readonly TransitionRule[]): string {
   return openInner !== undefined ? openInner.id : (rules[0]?.id ?? '');
 }
 
-function matchesDraftPrefix(fieldKey: string, prefix: string): boolean {
+export function matchesDraftPrefix(fieldKey: string, prefix: string): boolean {
   return (
     fieldKey === prefix ||
     fieldKey.startsWith(`${prefix}.`) ||
@@ -219,6 +220,7 @@ export function InterlockRuleEditor({
       }
     } else {
       preserveNextNoticeRef.current = false;
+      setJsonDraft('');
       setJsonErrors([exported.error]);
       setJsonNotice(null);
     }
@@ -229,9 +231,13 @@ export function InterlockRuleEditor({
       prevResetKeyRef.current = resetKey;
       setSelectedRuleId(defaultRuleSelection(model.rules));
       setAsmRowIds(model.assumptions.map(() => allocRowId('asm')));
+      const prevErrKeys = Object.keys(intDraftErrorsRef.current);
       setIntDraftValues({});
       setIntDraftErrors({});
       intDraftErrorsRef.current = {};
+      for (const k of prevErrKeys) {
+        onDraftErrorChangeRef.current?.(k, null);
+      }
     }
   }, [resetKey, model]);
 
@@ -241,9 +247,10 @@ export function InterlockRuleEditor({
   const effectiveRuleIndex = selectedRuleIndex >= 0 ? selectedRuleIndex : 0;
   const selectedRule = model.rules[effectiveRuleIndex] ?? null;
 
-  const hasOpenInnerDoor = model.rules.some((r) => r.id === 'open_inner_door');
+  const repairableOpenInnerDoor = isRepairableInterlockModel(model);
   const openInnerDoorRepaired = isPrincipledOpenInnerDoorGuard(model);
   const schemaKeys = Object.keys(model.schema);
+  const exportBlocked = jsonErrors.some((err) => err.code === 'JSON_EXPORT_ERROR');
 
   const handleTabKeyDown = (e: KeyboardEvent<HTMLButtonElement>, currentIdx: number) => {
     let targetIdx: number | null = null;
@@ -289,10 +296,22 @@ export function InterlockRuleEditor({
     );
   };
 
+  const handleSelectRule = (nextRuleId: string) => {
+    if (nextRuleId === selectedRuleId) return;
+    pruneDraftsByPrefix('rule');
+    setSelectedRuleId(nextRuleId);
+  };
+
   const handleCopyJson = async () => {
+    const exported = tryExportModelJson(model);
+    if (!exported.ok) {
+      setJsonErrors([exported.error]);
+      setJsonNotice(null);
+      return;
+    }
     try {
       if (typeof navigator !== 'undefined' && navigator.clipboard !== undefined) {
-        await navigator.clipboard.writeText(jsonDraft);
+        await navigator.clipboard.writeText(exported.text);
         setJsonNotice('Model JSON copied to clipboard.');
       } else {
         setJsonNotice('Clipboard API unavailable in this browser environment.');
@@ -373,9 +392,10 @@ export function InterlockRuleEditor({
         role="tabpanel"
         aria-labelledby="is-tab-guard"
         className="is-tabpanel"
+        tabIndex={0}
         hidden={activeTab !== 'guard'}
       >
-        {hasOpenInnerDoor && !openInnerDoorRepaired && (
+        {repairableOpenInnerDoor && !openInnerDoorRepaired && (
           <div className="is-repair-callout">
             <div className="is-section-header">
               <strong>Guided Repair Available for open_inner_door</strong>
@@ -399,7 +419,7 @@ export function InterlockRuleEditor({
             id="inspector-rule-select"
             className="is-select is-mono"
             value={selectedRule?.id ?? ''}
-            onChange={(e) => setSelectedRuleId(e.target.value)}
+            onChange={(e) => handleSelectRule(e.target.value)}
           >
             {model.rules.map((rule) => (
               <option key={rule.id} value={rule.id}>
@@ -432,18 +452,21 @@ export function InterlockRuleEditor({
               </button>
             </div>
 
-            <BoolExprEditor
-              value={selectedRule.guard}
-              schema={model.schema}
-              schemaKeysOrder={schemaKeys}
-              ariaLabelPrefix={`Guard for ${selectedRule.id}`}
-              resetKey={resetKey}
-              fieldPath={`rule:${selectedRule.id}.guard`}
-              intDraftStore={intDraftStore}
-              onChange={(nextGuard) =>
-                onChangeModel(updateRuleGuard(model, selectedRule.id, nextGuard))
-              }
-            />
+            <div className="is-guard-tree-scroll">
+              <BoolExprEditor
+                key={`${resetKey}:${selectedRule.id}`}
+                value={selectedRule.guard}
+                schema={model.schema}
+                schemaKeysOrder={schemaKeys}
+                ariaLabelPrefix={`Guard for ${selectedRule.id}`}
+                resetKey={`${resetKey}:${selectedRule.id}`}
+                fieldPath={`rule:${selectedRule.id}.guard`}
+                intDraftStore={intDraftStore}
+                onChange={(nextGuard) =>
+                  onChangeModel(updateRuleGuard(model, selectedRule.id, nextGuard))
+                }
+              />
+            </div>
 
             {getErrorsForPathPrefix(diagnostics, `rules[${effectiveRuleIndex}]`).length > 0 && (
               <ul className="is-inline-errors" role="alert">
@@ -466,6 +489,7 @@ export function InterlockRuleEditor({
         role="tabpanel"
         aria-labelledby="is-tab-assumptions"
         className="is-tabpanel"
+        tabIndex={0}
         hidden={activeTab !== 'assumptions'}
       >
         <div className="is-section-header">
@@ -476,11 +500,15 @@ export function InterlockRuleEditor({
             type="button"
             className="is-btn is-btn-sm"
             onClick={() => {
-              const idx = model.assumptions.length + 1;
+              const existingIds = new Set(model.assumptions.map((a) => a.id));
+              let counter = 1;
+              while (existingIds.has(`assumption_custom_${counter}`)) {
+                counter += 1;
+              }
               setAsmRowIds([...resolvedAsmRowIds, allocRowId('asm')]);
               onChangeModel(
                 addAssumption(model, {
-                  id: `assumption_custom_${idx}`,
+                  id: `assumption_custom_${counter}`,
                   category: 'scope',
                   statement: 'Discrete state abstraction assumption.',
                   notModeled: 'Physical hardware degradation and continuous dynamics.',
@@ -591,15 +619,26 @@ export function InterlockRuleEditor({
         role="tabpanel"
         aria-labelledby="is-tab-json"
         className="is-tabpanel"
+        tabIndex={0}
         hidden={activeTab !== 'json'}
       >
         <div className="is-section-header">
           <h3 className="is-section-title">Portable Model JSON Import &amp; Export</h3>
           <div className="is-inline-actions">
-            <button type="button" className="is-btn is-btn-sm" onClick={handleCopyJson}>
+            <button
+              type="button"
+              className="is-btn is-btn-sm"
+              disabled={exportBlocked}
+              onClick={handleCopyJson}
+            >
               Copy JSON
             </button>
-            <button type="button" className="is-btn is-btn-sm" onClick={handleDownloadJson}>
+            <button
+              type="button"
+              className="is-btn is-btn-sm"
+              disabled={exportBlocked}
+              onClick={handleDownloadJson}
+            >
               Download JSON
             </button>
             <button

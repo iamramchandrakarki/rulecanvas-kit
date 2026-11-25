@@ -1,9 +1,12 @@
-import type { StateSnapshot } from '@rulecanvas/core';
+import type { StateSchema, StateSnapshot } from '@rulecanvas/core';
 
 export interface AirlockSchematicProps {
+  readonly schema?: StateSchema | undefined;
   readonly state: StateSnapshot;
   readonly changedVars: readonly string[];
   readonly violatedInvariantIds: readonly string[];
+  readonly evaluatedInvariantIds?: readonly string[] | undefined;
+  readonly isEvaluated?: boolean | undefined;
   readonly goalReached: boolean | undefined;
   readonly stepNumber: number;
   readonly modeLabel: string;
@@ -14,104 +17,260 @@ interface TelemetryReadout {
   readonly label: string;
   readonly symbol: string;
   readonly displayValue: string;
+  readonly available: boolean;
+}
+
+function hasEnumValues(
+  schema: StateSchema | undefined,
+  name: string,
+  requiredValues: readonly string[],
+): boolean {
+  if (schema === undefined || !Object.hasOwn(schema, name)) return false;
+  const def = schema[name];
+  if (def?.kind !== 'enum') return false;
+  return requiredValues.every((v) => def.values.includes(v));
 }
 
 export function AirlockSchematic({
+  schema,
   state,
   changedVars,
   violatedInvariantIds,
+  evaluatedInvariantIds = [],
+  isEvaluated = false,
   goalReached,
   stepNumber,
   modeLabel,
 }: AirlockSchematicProps) {
-  const outerDoor = state['outerDoor'] === 'open' ? 'open' : 'closed';
-  const innerDoor = state['innerDoor'] === 'open' ? 'open' : 'closed';
-  const pressure = state['pressure'] === 'equalized' ? 'equalized' : 'negative';
-  const uvActive = state['uvSterilizer'] === 'active';
-  const occupied = state['occupied'] === true;
-  const purgeCycles =
-    typeof state['purgeCycles'] === 'number' && Number.isFinite(state['purgeCycles'])
-      ? state['purgeCycles']
-      : 0;
-  const overrideEngaged = state['maintenanceOverride'] === true;
+  const outerAvailable =
+    hasEnumValues(schema, 'outerDoor', ['closed', 'open']) &&
+    (state['outerDoor'] === 'open' || state['outerDoor'] === 'closed');
+  const outerDoor = outerAvailable
+    ? state['outerDoor'] === 'open'
+      ? 'open'
+      : 'closed'
+    : 'unavailable';
 
-  const containmentBreach = violatedInvariantIds.includes('inv_containment_seal');
-  const uvHazard = violatedInvariantIds.includes('inv_uv_exposure_lock');
-  const hasViolation = violatedInvariantIds.length > 0;
+  const innerAvailable =
+    hasEnumValues(schema, 'innerDoor', ['closed', 'open']) &&
+    (state['innerDoor'] === 'open' || state['innerDoor'] === 'closed');
+  const innerDoor = innerAvailable
+    ? state['innerDoor'] === 'open'
+      ? 'open'
+      : 'closed'
+    : 'unavailable';
+
+  const pressureAvailable =
+    hasEnumValues(schema, 'pressure', ['negative', 'equalized']) &&
+    (state['pressure'] === 'negative' || state['pressure'] === 'equalized');
+  const pressure = pressureAvailable
+    ? state['pressure'] === 'equalized'
+      ? 'equalized'
+      : 'negative'
+    : 'unavailable';
+
+  const uvAvailable =
+    hasEnumValues(schema, 'uvSterilizer', ['off', 'active']) &&
+    (state['uvSterilizer'] === 'active' || state['uvSterilizer'] === 'off');
+  const uvState = uvAvailable
+    ? state['uvSterilizer'] === 'active'
+      ? 'active'
+      : 'off'
+    : 'unavailable';
+
+  const occupiedAvailable =
+    schema !== undefined &&
+    Object.hasOwn(schema, 'occupied') &&
+    schema['occupied']?.kind === 'boolean' &&
+    typeof state['occupied'] === 'boolean';
+  const occupiedState = occupiedAvailable
+    ? state['occupied'] === true
+      ? 'occupied'
+      : 'empty'
+    : 'unavailable';
+
+  const purgeDef =
+    schema !== undefined && Object.hasOwn(schema, 'purgeCycles') ? schema['purgeCycles'] : undefined;
+  const purgeAvailable =
+    purgeDef?.kind === 'int' &&
+    typeof state['purgeCycles'] === 'number' &&
+    Number.isSafeInteger(state['purgeCycles']);
+  const purgeCycles = purgeAvailable ? (state['purgeCycles'] as number) : null;
+  const purgeMax = purgeDef?.kind === 'int' ? purgeDef.max : 2;
+
+  const overrideAvailable =
+    schema !== undefined &&
+    Object.hasOwn(schema, 'maintenanceOverride') &&
+    schema['maintenanceOverride']?.kind === 'boolean' &&
+    typeof state['maintenanceOverride'] === 'boolean';
+  const overrideState = overrideAvailable
+    ? state['maintenanceOverride'] === true
+      ? 'engaged'
+      : 'off'
+    : 'unavailable';
+
+  const containmentBreach = isEvaluated && violatedInvariantIds.includes('inv_containment_seal');
+  const uvHazard = isEvaluated && violatedInvariantIds.includes('inv_uv_exposure_lock');
+  const hasViolation = isEvaluated && violatedInvariantIds.length > 0;
+  const hasAirlockInvariants =
+    evaluatedInvariantIds.includes('inv_containment_seal') &&
+    evaluatedInvariantIds.includes('inv_uv_exposure_lock');
   const changedSet = new Set(changedVars);
+
+  const safetyBadgeTone = !isEvaluated
+    ? 'warning'
+    : hasViolation
+      ? 'danger'
+      : evaluatedInvariantIds.length > 0
+        ? 'success'
+        : 'warning';
+  const safetyBadgeSymbol = !isEvaluated
+    ? '?'
+    : hasViolation
+      ? '!'
+      : evaluatedInvariantIds.length > 0
+        ? '✓'
+        : '?';
+  const safetyBadgeText = !isEvaluated
+    ? 'UNEVALUATED PREVIEW'
+    : hasViolation
+      ? `INVARIANT BREACH (${violatedInvariantIds.join(', ')})`
+      : hasAirlockInvariants
+        ? 'SEAL & UV SAFE'
+        : evaluatedInvariantIds.length > 0
+          ? `INVARIANTS SAFE (${evaluatedInvariantIds.length})`
+          : 'NO INVARIANTS EVALUATED';
 
   const ariaSummary = [
     `BSL-3 Airlock Schematic at Step ${stepNumber} (${modeLabel}).`,
     `Outer corridor door: ${outerDoor}.`,
     `Inner BSL-3 lab door: ${innerDoor}.`,
     `Chamber pressure: ${pressure}.`,
-    `UV sterilizer: ${uvActive ? 'active' : 'off'}.`,
-    `Occupied: ${occupied ? 'true' : 'false'}.`,
-    `HEPA purge cycles: ${purgeCycles} of 2.`,
-    `Maintenance override key switch: ${overrideEngaged ? 'engaged' : 'off'}.`,
-    hasViolation
-      ? `Alert: Violated invariants ${violatedInvariantIds.join(', ')}.`
-      : goalReached
-        ? 'Safe lab entry goal reached.'
-        : 'All safety invariants currently satisfied.',
+    `UV sterilizer: ${uvState}.`,
+    `Occupancy: ${occupiedState}.`,
+    purgeCycles !== null ? `HEPA purge cycles: ${purgeCycles} of ${purgeMax}.` : 'HEPA purge cycles: unavailable.',
+    `Maintenance override key switch: ${overrideState}.`,
+    !isEvaluated
+      ? 'Verification has not evaluated this state.'
+      : hasViolation
+        ? `Alert: Violated invariants ${violatedInvariantIds.join(', ')}.`
+        : goalReached
+          ? 'Declared goal reached.'
+          : `${safetyBadgeText}.`,
   ].join(' ');
 
   const telemetries: readonly TelemetryReadout[] = [
     {
       varName: 'outerDoor',
       label: 'Outer Corridor Door',
-      symbol: outerDoor === 'open' ? '[  ]' : '[||]',
-      displayValue: outerDoor === 'open' ? 'OPEN' : 'CLOSED (SEALED)',
+      symbol: outerDoor === 'unavailable' ? '[?]' : outerDoor === 'open' ? '[  ]' : '[||]',
+      displayValue:
+        outerDoor === 'unavailable'
+          ? 'UNAVAILABLE'
+          : outerDoor === 'open'
+            ? 'OPEN'
+            : 'CLOSED (SEALED)',
+      available: outerAvailable,
     },
     {
       varName: 'innerDoor',
       label: 'Inner BSL-3 Lab Door',
-      symbol: innerDoor === 'open' ? '[  ]' : '[||]',
-      displayValue: innerDoor === 'open' ? 'OPEN' : 'CLOSED (SEALED)',
+      symbol: innerDoor === 'unavailable' ? '[?]' : innerDoor === 'open' ? '[  ]' : '[||]',
+      displayValue:
+        innerDoor === 'unavailable'
+          ? 'UNAVAILABLE'
+          : innerDoor === 'open'
+            ? 'OPEN'
+            : 'CLOSED (SEALED)',
+      available: innerAvailable,
     },
     {
       varName: 'pressure',
       label: 'Chamber Pressure',
-      symbol: pressure === 'negative' ? '<<-' : '===',
-      displayValue: pressure === 'negative' ? 'NEGATIVE (-Pa)' : 'EQUALIZED (0 Pa)',
+      symbol:
+        pressure === 'unavailable' ? '[?]' : pressure === 'negative' ? '<<-' : '===',
+      displayValue:
+        pressure === 'unavailable'
+          ? 'UNAVAILABLE'
+          : pressure === 'negative'
+            ? 'NEGATIVE (-Pa)'
+            : 'EQUALIZED (0 Pa)',
+      available: pressureAvailable,
     },
     {
       varName: 'uvSterilizer',
       label: 'UV-C Decontamination',
-      symbol: uvActive ? '***' : '---',
-      displayValue: uvActive ? 'ACTIVE' : 'OFF',
+      symbol: uvState === 'unavailable' ? '[?]' : uvState === 'active' ? '***' : '---',
+      displayValue:
+        uvState === 'unavailable' ? 'UNAVAILABLE' : uvState === 'active' ? 'ACTIVE' : 'OFF',
+      available: uvAvailable,
     },
     {
       varName: 'occupied',
       label: 'Personnel Occupancy',
-      symbol: occupied ? '[P]' : '[0]',
-      displayValue: occupied ? 'OCCUPIED (true)' : 'EMPTY (false)',
+      symbol:
+        occupiedState === 'unavailable'
+          ? '[?]'
+          : occupiedState === 'occupied'
+            ? '[P]'
+            : '[0]',
+      displayValue:
+        occupiedState === 'unavailable'
+          ? 'UNAVAILABLE'
+          : occupiedState === 'occupied'
+            ? 'OCCUPIED (true)'
+            : 'EMPTY (false)',
+      available: occupiedAvailable,
     },
     {
       varName: 'purgeCycles',
       label: 'HEPA Purge Counter',
-      symbol: `${purgeCycles}/2`,
-      displayValue: `${purgeCycles} of 2 cycles`,
+      symbol:
+        purgeCycles === null
+          ? '[?]'
+          : `[${purgeCycles >= 1 ? '#' : '.'}${purgeCycles >= 2 ? '#' : '.'}]`,
+      displayValue: purgeCycles === null ? 'UNAVAILABLE' : `${purgeCycles} of ${purgeMax} cycles`,
+      available: purgeAvailable,
     },
     {
       varName: 'maintenanceOverride',
       label: 'Maintenance Override Key',
-      symbol: overrideEngaged ? '[!]' : '[ ]',
-      displayValue: overrideEngaged ? 'ENGAGED (true)' : 'OFF (false)',
+      symbol:
+        overrideState === 'unavailable'
+          ? '[?]'
+          : overrideState === 'engaged'
+            ? '[!]'
+            : '[ ]',
+      displayValue:
+        overrideState === 'unavailable'
+          ? 'UNAVAILABLE'
+          : overrideState === 'engaged'
+            ? 'ENGAGED (true)'
+            : 'OFF (false)',
+      available: overrideAvailable,
     },
   ];
 
-  const outerStroke = outerDoor === 'open' ? 'var(--color-accent)' : 'var(--color-ink)';
+  const outerStroke =
+    outerDoor === 'open'
+      ? 'var(--color-accent)'
+      : outerDoor === 'closed'
+        ? 'var(--color-ink)'
+        : 'var(--color-muted)';
   const innerStroke = containmentBreach
     ? 'var(--color-error)'
     : innerDoor === 'open'
       ? 'var(--color-accent)'
-      : 'var(--color-ink)';
-  const chamberStroke = hasViolation
-    ? 'var(--color-error)'
-    : pressure === 'negative'
-      ? 'var(--color-accent-2)'
-      : 'var(--color-warning)';
+      : innerDoor === 'closed'
+        ? 'var(--color-ink)'
+        : 'var(--color-muted)';
+  const chamberStroke = !isEvaluated
+    ? 'var(--color-rule)'
+    : hasViolation
+      ? 'var(--color-error)'
+      : pressure === 'negative'
+        ? 'var(--color-accent-2)'
+        : 'var(--color-warning)';
 
   return (
     <section className="is-pane" aria-label="Discrete BSL-3 airlock schematic">
@@ -124,15 +283,10 @@ export function AirlockSchematic({
         </div>
 
         <div className="is-schematic-status-strip">
-          <span
-            className="is-badge"
-            data-tone={hasViolation ? 'danger' : 'success'}
-            role="status"
-          >
-            <span aria-hidden="true">{hasViolation ? '!' : '✓'}</span>{' '}
-            {hasViolation ? `INVARIANT BREACH (${violatedInvariantIds.join(', ')})` : 'SEAL & UV SAFE'}
+          <span className="is-badge" data-tone={safetyBadgeTone} role="status">
+            <span aria-hidden="true">{safetyBadgeSymbol}</span> {safetyBadgeText}
           </span>
-          {goalReached !== undefined && (
+          {isEvaluated && goalReached !== undefined && (
             <span className="is-badge" data-tone={goalReached ? 'success' : 'info'}>
               <span aria-hidden="true">{goalReached ? '✓' : '○'}</span>{' '}
               {goalReached ? 'GOAL REACHED: LAB ENTRY' : 'GOAL NOT REACHED'}
@@ -144,7 +298,7 @@ export function AirlockSchematic({
       <div className="is-schematic-well is-ticks">
         <svg
           className="is-schematic-svg"
-          viewBox="0 0 720 220"
+          viewBox="0 0 740 220"
           role="img"
           aria-label={ariaSummary}
         >
@@ -154,7 +308,7 @@ export function AirlockSchematic({
           <rect
             x="10"
             y="24"
-            width="136"
+            width="132"
             height="172"
             fill="oklch(11% 0.008 75)"
             stroke="var(--color-rule)"
@@ -181,12 +335,12 @@ export function AirlockSchematic({
           </text>
 
           {/* Outer Door Bulkhead */}
-          <rect x="146" y="24" width="38" height="38" fill="var(--color-paper-2)" stroke="var(--color-rule)" />
-          <rect x="146" y="158" width="38" height="38" fill="var(--color-paper-2)" stroke="var(--color-rule)" />
+          <rect x="142" y="24" width="38" height="38" fill="var(--color-paper-2)" stroke="var(--color-rule)" />
+          <rect x="142" y="158" width="38" height="38" fill="var(--color-paper-2)" stroke="var(--color-rule)" />
           {outerDoor === 'closed' ? (
             <>
               <rect
-                x="160"
+                x="156"
                 y="62"
                 width="10"
                 height="96"
@@ -195,7 +349,7 @@ export function AirlockSchematic({
                 strokeWidth="1"
               />
               <text
-                x="165"
+                x="161"
                 y="18"
                 textAnchor="middle"
                 fill="var(--color-ink-2)"
@@ -205,21 +359,21 @@ export function AirlockSchematic({
                 OUTER: CLOSED
               </text>
             </>
-          ) : (
+          ) : outerDoor === 'open' ? (
             <>
               <line
-                x1="165"
+                x1="161"
                 y1="64"
-                x2="165"
+                x2="161"
                 y2="156"
                 stroke={outerStroke}
                 strokeWidth="2"
                 strokeDasharray="4 4"
               />
-              <rect x="150" y="64" width="30" height="8" fill={outerStroke} />
-              <rect x="150" y="148" width="30" height="8" fill={outerStroke} />
+              <rect x="146" y="64" width="30" height="8" fill={outerStroke} />
+              <rect x="146" y="148" width="30" height="8" fill={outerStroke} />
               <text
-                x="165"
+                x="161"
                 y="18"
                 textAnchor="middle"
                 fill={outerStroke}
@@ -229,18 +383,32 @@ export function AirlockSchematic({
                 OUTER: OPEN
               </text>
             </>
+          ) : (
+            <>
+              <line x1="161" y1="64" x2="161" y2="156" stroke={outerStroke} strokeWidth="1" strokeDasharray="2 4" />
+              <text
+                x="161"
+                y="18"
+                textAnchor="middle"
+                fill="var(--color-muted)"
+                fontSize="10.5"
+                fontFamily="var(--font-outlier)"
+              >
+                OUTER: N/A
+              </text>
+            </>
           )}
 
           {/* Central Airlock Chamber */}
           <rect
-            x="184"
+            x="180"
             y="24"
-            width="352"
+            width="340"
             height="172"
             fill={
               hasViolation
                 ? 'oklch(14% 0.045 25)'
-                : uvActive
+                : uvState === 'active'
                   ? 'oklch(15% 0.035 280)'
                   : pressure === 'negative'
                     ? 'oklch(11% 0.02 250)'
@@ -250,7 +418,7 @@ export function AirlockSchematic({
             strokeWidth="2"
           />
           <text
-            x="198"
+            x="194"
             y="46"
             fill="var(--color-ink)"
             fontSize="12"
@@ -262,61 +430,77 @@ export function AirlockSchematic({
 
           {/* Pressure Readout Banner */}
           <rect
-            x="198"
+            x="194"
             y="56"
-            width="156"
+            width="154"
             height="28"
             fill="var(--color-paper-3)"
-            stroke={pressure === 'negative' ? 'var(--color-accent-2)' : 'var(--color-warning)'}
+            stroke={
+              pressure === 'negative'
+                ? 'var(--color-accent-2)'
+                : pressure === 'equalized'
+                  ? 'var(--color-warning)'
+                  : 'var(--color-rule)'
+            }
           />
           <text
-            x="208"
+            x="202"
             y="74"
-            fill={pressure === 'negative' ? 'var(--color-accent-2)' : 'var(--color-warning)'}
-            fontSize="11.5"
+            fill={
+              pressure === 'negative'
+                ? 'var(--color-accent-2)'
+                : pressure === 'equalized'
+                  ? 'var(--color-warning)'
+                  : 'var(--color-muted)'
+            }
+            fontSize="11"
             fontFamily="var(--font-outlier)"
           >
-            {pressure === 'negative' ? '<< NEGATIVE (-Pa)' : '== EQUALIZED (0 Pa)'}
+            {pressure === 'negative'
+              ? '<< NEGATIVE (-Pa)'
+              : pressure === 'equalized'
+                ? '== EQUALIZED (0 Pa)'
+                : 'PRESSURE: N/A'}
           </text>
 
           {/* UV-C Lamp Fixture */}
           <rect
-            x="372"
+            x="362"
             y="30"
-            width="148"
+            width="144"
             height="28"
-            fill={uvActive ? 'var(--color-accent)' : 'var(--color-paper-2)'}
+            fill={uvState === 'active' ? 'var(--color-accent)' : 'var(--color-paper-2)'}
             stroke={uvHazard ? 'var(--color-error)' : 'var(--color-rule)'}
           />
           <text
-            x="446"
+            x="434"
             y="48"
             textAnchor="middle"
-            fill={uvActive ? 'var(--color-accent-ink)' : 'var(--color-muted)'}
+            fill={uvState === 'active' ? 'var(--color-accent-ink)' : 'var(--color-muted)'}
             fontSize="11"
             fontFamily="var(--font-outlier)"
           >
-            {uvActive ? 'UV-C: ACTIVE ***' : 'UV-C: OFF'}
+            {uvState === 'active' ? 'UV-C: ACTIVE ***' : uvState === 'off' ? 'UV-C: OFF' : 'UV-C: N/A'}
           </text>
-          {uvActive && (
+          {uvState === 'active' && (
             <g stroke="var(--color-accent)" strokeWidth="1" strokeDasharray="3 3" opacity="0.85">
-              <line x1="395" y1="58" x2="380" y2="122" />
-              <line x1="446" y1="58" x2="446" y2="122" />
-              <line x1="497" y1="58" x2="512" y2="122" />
+              <line x1="385" y1="58" x2="372" y2="122" />
+              <line x1="434" y1="58" x2="434" y2="122" />
+              <line x1="483" y1="58" x2="496" y2="122" />
             </g>
           )}
 
           {/* Personnel Occupancy Icon */}
           <rect
-            x="198"
+            x="194"
             y="102"
-            width="110"
+            width="102"
             height="76"
             fill="var(--color-paper-2)"
-            stroke={occupied ? 'var(--color-ink)' : 'var(--color-rule)'}
+            stroke={occupiedState === 'occupied' ? 'var(--color-ink)' : 'var(--color-rule)'}
           />
           <text
-            x="253"
+            x="245"
             y="120"
             textAnchor="middle"
             fill="var(--color-muted)"
@@ -325,12 +509,12 @@ export function AirlockSchematic({
           >
             Occupancy
           </text>
-          {occupied ? (
+          {occupiedState === 'occupied' ? (
             <g>
-              <rect x="247" y="128" width="12" height="12" fill="var(--color-ink)" />
-              <rect x="242" y="142" width="22" height="18" fill="var(--color-accent-2)" />
+              <rect x="239" y="128" width="12" height="12" fill="var(--color-ink)" />
+              <rect x="234" y="142" width="22" height="18" fill="var(--color-accent-2)" />
               <text
-                x="253"
+                x="245"
                 y="172"
                 textAnchor="middle"
                 fill="var(--color-ink)"
@@ -342,20 +526,20 @@ export function AirlockSchematic({
             </g>
           ) : (
             <text
-              x="253"
+              x="245"
               y="156"
               textAnchor="middle"
               fill="var(--color-muted)"
               fontSize="11.5"
               fontFamily="var(--font-outlier)"
             >
-              EMPTY
+              {occupiedState === 'empty' ? 'EMPTY' : 'N/A'}
             </text>
           )}
 
           {/* HEPA Purge Cycle Bar [0..2] */}
           <rect
-            x="322"
+            x="306"
             y="102"
             width="98"
             height="76"
@@ -363,7 +547,7 @@ export function AirlockSchematic({
             stroke="var(--color-rule)"
           />
           <text
-            x="371"
+            x="355"
             y="120"
             textAnchor="middle"
             fill="var(--color-muted)"
@@ -373,43 +557,43 @@ export function AirlockSchematic({
             HEPA Purge
           </text>
           <rect
-            x="336"
+            x="320"
             y="130"
             width="30"
             height="18"
-            fill={purgeCycles >= 1 ? 'var(--color-success)' : 'var(--color-paper-3)'}
+            fill={purgeCycles !== null && purgeCycles >= 1 ? 'var(--color-success)' : 'var(--color-paper-3)'}
             stroke="var(--color-control-border)"
           />
           <rect
-            x="376"
+            x="360"
             y="130"
             width="30"
             height="18"
-            fill={purgeCycles >= 2 ? 'var(--color-success)' : 'var(--color-paper-3)'}
+            fill={purgeCycles !== null && purgeCycles >= 2 ? 'var(--color-success)' : 'var(--color-paper-3)'}
             stroke="var(--color-control-border)"
           />
           <text
-            x="371"
+            x="355"
             y="168"
             textAnchor="middle"
-            fill="var(--color-ink)"
-            fontSize="11.5"
+            fill={purgeCycles !== null ? 'var(--color-ink)' : 'var(--color-muted)'}
+            fontSize="11"
             fontFamily="var(--font-outlier)"
           >
-            {purgeCycles} / 2 cycles
+            {purgeCycles !== null ? `${purgeCycles} / ${purgeMax} cycles` : 'N/A'}
           </text>
 
           {/* Maintenance Override Key Switch */}
           <rect
-            x="432"
+            x="414"
             y="102"
             width="92"
             height="76"
-            fill={overrideEngaged ? 'var(--color-accent-soft)' : 'var(--color-paper-2)'}
-            stroke={overrideEngaged ? 'var(--color-accent)' : 'var(--color-rule)'}
+            fill={overrideState === 'engaged' ? 'var(--color-accent-soft)' : 'var(--color-paper-2)'}
+            stroke={overrideState === 'engaged' ? 'var(--color-accent)' : 'var(--color-rule)'}
           />
           <text
-            x="478"
+            x="460"
             y="120"
             textAnchor="middle"
             fill="var(--color-muted)"
@@ -419,31 +603,37 @@ export function AirlockSchematic({
             Override Key
           </text>
           <rect
-            x="466"
+            x="448"
             y="130"
             width="24"
             height="18"
-            fill={overrideEngaged ? 'var(--color-accent)' : 'var(--color-paper-3)'}
-            stroke={overrideEngaged ? 'var(--color-accent)' : 'var(--color-control-border)'}
+            fill={overrideState === 'engaged' ? 'var(--color-accent)' : 'var(--color-paper-3)'}
+            stroke={overrideState === 'engaged' ? 'var(--color-accent)' : 'var(--color-control-border)'}
           />
           <text
-            x="478"
+            x="460"
             y="168"
             textAnchor="middle"
-            fill={overrideEngaged ? 'var(--color-accent)' : 'var(--color-ink-2)'}
-            fontSize="11.5"
+            fill={
+              overrideState === 'engaged'
+                ? 'var(--color-accent)'
+                : overrideState === 'off'
+                  ? 'var(--color-ink-2)'
+                  : 'var(--color-muted)'
+            }
+            fontSize="11"
             fontFamily="var(--font-outlier)"
           >
-            {overrideEngaged ? 'ENGAGED' : 'OFF'}
+            {overrideState === 'engaged' ? 'ENGAGED' : overrideState === 'off' ? 'OFF' : 'N/A'}
           </text>
 
           {/* Inner Door Bulkhead */}
-          <rect x="536" y="24" width="38" height="38" fill="var(--color-paper-2)" stroke="var(--color-rule)" />
-          <rect x="536" y="158" width="38" height="38" fill="var(--color-paper-2)" stroke="var(--color-rule)" />
+          <rect x="520" y="24" width="38" height="38" fill="var(--color-paper-2)" stroke="var(--color-rule)" />
+          <rect x="520" y="158" width="38" height="38" fill="var(--color-paper-2)" stroke="var(--color-rule)" />
           {innerDoor === 'closed' ? (
             <>
               <rect
-                x="550"
+                x="534"
                 y="62"
                 width="10"
                 height="96"
@@ -452,7 +642,7 @@ export function AirlockSchematic({
                 strokeWidth="1"
               />
               <text
-                x="555"
+                x="539"
                 y="18"
                 textAnchor="middle"
                 fill="var(--color-ink-2)"
@@ -462,21 +652,21 @@ export function AirlockSchematic({
                 INNER: CLOSED
               </text>
             </>
-          ) : (
+          ) : innerDoor === 'open' ? (
             <>
               <line
-                x1="555"
+                x1="539"
                 y1="64"
-                x2="555"
+                x2="539"
                 y2="156"
                 stroke={innerStroke}
                 strokeWidth="2"
                 strokeDasharray="4 4"
               />
-              <rect x="540" y="64" width="30" height="8" fill={innerStroke} />
-              <rect x="540" y="148" width="30" height="8" fill={innerStroke} />
+              <rect x="524" y="64" width="30" height="8" fill={innerStroke} />
+              <rect x="524" y="148" width="30" height="8" fill={innerStroke} />
               <text
-                x="555"
+                x="539"
                 y="18"
                 textAnchor="middle"
                 fill={innerStroke}
@@ -486,20 +676,34 @@ export function AirlockSchematic({
                 INNER: OPEN
               </text>
             </>
+          ) : (
+            <>
+              <line x1="539" y1="64" x2="539" y2="156" stroke={innerStroke} strokeWidth="1" strokeDasharray="2 4" />
+              <text
+                x="539"
+                y="18"
+                textAnchor="middle"
+                fill="var(--color-muted)"
+                fontSize="10.5"
+                fontFamily="var(--font-outlier)"
+              >
+                INNER: N/A
+              </text>
+            </>
           )}
 
-          {/* Inner BSL-3 Lab Zone */}
+          {/* Inner BSL-3 Lab Zone (widened 172px so labels fit cleanly) */}
           <rect
-            x="574"
+            x="558"
             y="24"
-            width="136"
+            width="172"
             height="172"
             fill={containmentBreach ? 'oklch(16% 0.06 25)' : 'oklch(10% 0.025 250)'}
             stroke={containmentBreach ? 'var(--color-error)' : 'var(--color-accent-2)'}
             strokeWidth="1"
           />
           <text
-            x="586"
+            x="570"
             y="46"
             fill="var(--color-accent-2)"
             fontSize="11"
@@ -509,10 +713,10 @@ export function AirlockSchematic({
             BSL-3 Containment Lab
           </text>
           <text
-            x="586"
+            x="570"
             y="66"
             fill="var(--color-ink-2)"
-            fontSize="11.5"
+            fontSize="11"
             fontFamily="var(--font-outlier)"
           >
             Negative seal zone
@@ -520,15 +724,15 @@ export function AirlockSchematic({
           {containmentBreach && (
             <g>
               <rect
-                x="584"
+                x="568"
                 y="124"
-                width="116"
-                height="42"
+                width="152"
+                height="44"
                 fill="var(--color-error-bg)"
                 stroke="var(--color-error)"
               />
               <text
-                x="642"
+                x="644"
                 y="142"
                 textAnchor="middle"
                 fill="var(--color-error)"
@@ -538,7 +742,7 @@ export function AirlockSchematic({
                 ! BREACH
               </text>
               <text
-                x="642"
+                x="644"
                 y="158"
                 textAnchor="middle"
                 fill="var(--color-ink)"
@@ -562,6 +766,7 @@ export function AirlockSchematic({
               className="is-telemetry-cell"
               data-var={item.varName}
               data-changed={changed ? 'true' : 'false'}
+              data-available={item.available ? 'true' : 'false'}
             >
               <dt>
                 <span>{item.label}</span>
