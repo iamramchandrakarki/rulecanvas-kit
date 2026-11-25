@@ -606,6 +606,53 @@ function visitValueOccurrence(ctx: TraversalContext, depth: number, path: string
   return true;
 }
 
+function scanUnknownValueForReservedAndAccessors(
+  value: unknown,
+  path: string,
+  depth: number,
+  ctx: TraversalContext,
+): void {
+  if (value === null || typeof value !== 'object') return;
+  if (!visitValueOccurrence(ctx, depth, path)) return;
+  if (ctx.ancestors.has(value)) return;
+  ctx.ancestors.add(value);
+  try {
+    for (const key of Reflect.ownKeys(value)) {
+      if (typeof key === 'symbol') {
+        pushError(ctx, {
+          code: 'UNSUPPORTED_PROPERTY',
+          path: path.length > 0 ? path : '$',
+          message: 'Portable model objects must not define symbol properties.',
+        });
+        continue;
+      }
+      const childPath = joinPath(path, key);
+      if (RESERVED_KEYS.has(key)) {
+        pushError(ctx, {
+          code: 'RESERVED_KEY',
+          path: childPath,
+          message: `Property "${key}" uses a reserved key name.`,
+        });
+      }
+      const desc = Object.getOwnPropertyDescriptor(value, key);
+      if (desc === undefined) continue;
+      if (isAccessorDescriptor(desc)) {
+        pushError(ctx, {
+          code: 'UNSUPPORTED_PROPERTY',
+          path: childPath,
+          message: `Property "${key}" must be a plain data property, not an accessor.`,
+        });
+        continue;
+      }
+      if (desc.value !== null && typeof desc.value === 'object') {
+        scanUnknownValueForReservedAndAccessors(desc.value, childPath, depth + 1, ctx);
+      }
+    }
+  } finally {
+    ctx.ancestors.delete(value);
+  }
+}
+
 function inspectPlainObject(
   value: unknown,
   path: string,
@@ -686,6 +733,9 @@ function inspectPlainObject(
         path: childPath,
         message: `Unsupported field "${key}" in portable model JSON.`,
       });
+      if (desc.value !== null && typeof desc.value === 'object') {
+        scanUnknownValueForReservedAndAccessors(desc.value, childPath, depth + 1, ctx);
+      }
       ok = false;
       continue;
     }
@@ -928,14 +978,14 @@ function detachBoolExpr(
       defineSafeDataProp(out, 'arg', detachBoolExpr(map.get('arg'), `${path}.arg`, depth + 1, ctx));
     } else if ((op === 'and' || op === 'or') && map.has('args')) {
       const rawArgs = map.get('args');
-      const arr = inspectStrictArray(rawArgs, `${path}.args`, depth + 1, ctx);
+      const arr = inspectStrictArray(rawArgs, `${path}.args`, depth, ctx);
       if (arr !== null) {
         ctx.ancestors.add(rawArgs as object);
         try {
           defineSafeDataProp(
             out,
             'args',
-            arr.map((item, idx) => detachBoolExpr(item, `${path}.args[${idx}]`, depth + 2, ctx)),
+            arr.map((item, idx) => detachBoolExpr(item, `${path}.args[${idx}]`, depth + 1, ctx)),
           );
         } finally {
           ctx.ancestors.delete(rawArgs as object);

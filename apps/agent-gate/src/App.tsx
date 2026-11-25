@@ -19,6 +19,12 @@ import {
   stepReplayForward,
   type ReplaySession,
 } from '@rulecanvas/ui';
+import {
+  WorkbenchNavigation,
+  readPresetFromSearch,
+  useWorkbenchRoute,
+  type WorkbenchNavLink,
+} from '@rulecanvas/workbench-react';
 import { DEFAULT_VERIFY_OPTIONS, runPresetComparison } from './comparison.js';
 import { ComparisonPanel } from './components/ComparisonPanel.js';
 import { PolicyEditorPane } from './components/PolicyEditorPane.js';
@@ -67,14 +73,49 @@ function resolveModelLabel(
   return trimmedId.length > 0 ? trimmedId : 'Custom Model';
 }
 
+const ALLOWED_AGENT_GATE_PRESETS: readonly ApprovalLaunderingVariant[] = [
+  'broken',
+  'naive-patch-a',
+  'naive-patch-b',
+  'vacuous-fix',
+  'principled-fix',
+];
+
+const WORKBENCH_NAV_LINKS: readonly WorkbenchNavLink[] = [
+  {
+    id: 'agent-gate',
+    label: 'AgentGate',
+    href: './',
+    description: 'Current agent policy verification workbench',
+  },
+  {
+    id: 'interlock-sim',
+    label: 'InterlockSim',
+    href:
+      typeof import.meta !== 'undefined' &&
+      typeof (import.meta as { env?: Record<string, string | undefined> }).env?.[
+        'VITE_INTERLOCK_SIM_URL'
+      ] === 'string'
+        ? (import.meta as { env: Record<string, string> }).env['VITE_INTERLOCK_SIM_URL']!
+        : '../interlock-sim/',
+    description: 'Open InterlockSim BSL-3 airlock simulation workbench',
+  },
+];
+
 export function App({
-  initialVariant = 'broken',
+  initialVariant,
   initialShowComparison = false,
   workerFactory,
 }: AppProps) {
+  const resolvedInitialVariant: ApprovalLaunderingVariant =
+    initialVariant ??
+    (typeof window !== 'undefined'
+      ? readPresetFromSearch(window.location.search, ALLOWED_AGENT_GATE_PRESETS, 'broken').preset
+      : 'broken');
+
   const initialModelRef = useRef<TransitionSystemModel | null>(null);
   if (initialModelRef.current === null) {
-    initialModelRef.current = loadPresetModel(initialVariant);
+    initialModelRef.current = loadPresetModel(resolvedInitialVariant);
   }
   const initialResultRef = useRef<VerifyResult | null>(null);
   if (initialResultRef.current === null) {
@@ -82,7 +123,7 @@ export function App({
   }
 
   const [activePreset, setActivePreset] = useState<ApprovalLaunderingVariant | null>(
-    initialVariant,
+    resolvedInitialVariant,
   );
   const [model, setModel] = useState<TransitionSystemModel>(() => initialModelRef.current!);
   const [editorResetKey, setEditorResetKey] = useState<number>(0);
@@ -104,7 +145,7 @@ export function App({
 
   const [verifiedSnapshot, setVerifiedSnapshot] = useState<VerifiedSnapshot | null>(() => ({
     model: initialModelRef.current!,
-    modelLabel: getPresetDescriptor(initialVariant).shortLabel,
+    modelLabel: getPresetDescriptor(resolvedInitialVariant).shortLabel,
     options: DEFAULT_VERIFY_OPTIONS,
     result: initialResultRef.current!,
     executionMode: 'main-thread',
@@ -485,6 +526,16 @@ export function App({
   const activePresetInfo = activePreset !== null ? getPresetDescriptor(activePreset) : null;
   const hasAnyValidationErrors =
     optionErrors.length > 0 || editorDraftErrors.length > 0 || modelErrors.length > 0;
+  const isDirtyEditor = activePreset === null || editorDraftErrors.length > 0;
+
+  const { pendingPrompt, selectPreset, requestLinkNavigation, acceptPrompt, declinePrompt } =
+    useWorkbenchRoute<ApprovalLaunderingVariant>({
+      allowedPresets: ALLOWED_AGENT_GATE_PRESETS,
+      defaultPreset: 'broken',
+      isDirty: isDirtyEditor,
+      onCommitPreset: handleLoadPreset,
+      formatPresetLabel: (preset) => getPresetDescriptor(preset).shortLabel,
+    });
 
   return (
     <div className="ag-shell">
@@ -497,6 +548,21 @@ export function App({
           <span className="ag-brand-subtitle">
             Discrete finite-state policy verification workbench
           </span>
+          <WorkbenchNavigation
+            current="agent-gate"
+            links={WORKBENCH_NAV_LINKS}
+            ariaLabel="RuleCanvasKit workbenches"
+            className="ag-wb-nav"
+            listClassName="ag-wb-nav-list"
+            linkClassName="ag-wb-nav-link"
+            activeLinkClassName="ag-wb-nav-link-active"
+            onNavigate={(link, event) => {
+              if (isDirtyEditor) {
+                event.preventDefault();
+                requestLinkNavigation(link.href, link.label);
+              }
+            }}
+          />
         </div>
 
         <div className="ag-topbar-controls">
@@ -509,7 +575,7 @@ export function App({
               onChange={(e) => {
                 const value = e.target.value;
                 if (value !== 'custom') {
-                  handleLoadPreset(value as ApprovalLaunderingVariant);
+                  selectPreset(value as ApprovalLaunderingVariant);
                 }
               }}
             >
@@ -604,6 +670,30 @@ export function App({
           </button>
         </div>
       </header>
+
+      {pendingPrompt !== null && (
+        <div
+          className="ag-discard-banner"
+          role="alertdialog"
+          aria-labelledby="ag-discard-title"
+          aria-describedby="ag-discard-desc"
+        >
+          <div>
+            <strong id="ag-discard-title">Unsaved Custom Edits</strong>
+            <p id="ag-discard-desc">
+              {pendingPrompt.label} will discard your current unsaved custom edits.
+            </p>
+          </div>
+          <div className="ag-inline-actions">
+            <button type="button" className="ag-btn ag-btn-sm ag-btn-secondary" onClick={declinePrompt}>
+              Stay Here
+            </button>
+            <button type="button" className="ag-btn ag-btn-sm ag-btn-primary" onClick={acceptPrompt}>
+              Discard &amp; Continue
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="ag-context-strip">
         <span>

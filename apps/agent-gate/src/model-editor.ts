@@ -15,27 +15,33 @@ import {
   type VarDef,
 } from '@rulecanvas/core';
 
-export type DiagnosticSection =
-  | 'general'
-  | 'schema'
-  | 'rules'
-  | 'invariants'
-  | 'goal'
-  | 'assumptions';
+import {
+  getErrorsForPathPrefix,
+  indexModelDiagnostics,
+  parseStrictIntegerDraft,
+  type DiagnosticSection,
+  type ModelDiagnosticsIndex,
+  type StrictIntegerParseResult,
+} from '@rulecanvas/ui';
+import {
+  HARD_CEILING_MODEL_JSON_LIMITS,
+  createModelJsonCodec,
+} from '@rulecanvas/workbench/model-json';
 
-export interface ModelDiagnosticsIndex {
-  readonly all: readonly ValidationError[];
-  readonly byPath: Readonly<Record<string, readonly ValidationError[]>>;
-  readonly sections: Readonly<Record<DiagnosticSection, readonly ValidationError[]>>;
-}
+export {
+  getErrorsForPathPrefix,
+  indexModelDiagnostics,
+  parseStrictIntegerDraft,
+  type DiagnosticSection,
+  type ModelDiagnosticsIndex,
+  type StrictIntegerParseResult,
+};
+
+const agentGateJsonCodec = createModelJsonCodec(HARD_CEILING_MODEL_JSON_LIMITS);
 
 export type JsonImportResult =
   | { readonly ok: true; readonly model: TransitionSystemModel }
   | { readonly ok: false; readonly errors: readonly ValidationError[] };
-
-export type StrictIntegerParseResult =
-  | { readonly ok: true; readonly value: number }
-  | { readonly ok: false; readonly message: string };
 
 const MAX_IMPORT_JSON_CHARS = 2_000_000;
 const MAX_IMPORT_DEPTH = 64;
@@ -87,27 +93,6 @@ const BOOL_EXPR_KEYS_BY_OP: Readonly<Record<string, ReadonlySet<string>>> = {
   gte: new Set(['op', 'left', 'right']),
   in: new Set(['op', 'expr', 'values']),
 };
-
-export function parseStrictIntegerDraft(raw: string): StrictIntegerParseResult {
-  const trimmed = raw.trim();
-  if (trimmed.length === 0) {
-    return { ok: false, message: 'Integer value is required.' };
-  }
-  if (!/^-?\d+$/.test(trimmed)) {
-    return {
-      ok: false,
-      message: `Invalid integer "${raw}": enter a whole base-10 integer without decimals or extra characters.`,
-    };
-  }
-  const parsed = Number(trimmed);
-  if (!Number.isSafeInteger(parsed)) {
-    return {
-      ok: false,
-      message: `Integer "${trimmed}" exceeds safe integer bounds.`,
-    };
-  }
-  return { ok: true, value: Object.is(parsed, -0) ? 0 : parsed };
-}
 
 export function defaultValueForVarDef(def: VarDef): StateValue {
   switch (def.kind) {
@@ -2122,170 +2107,12 @@ function validateRawJsonNumbers(rawText: string): ValidationError[] {
 }
 
 export function validateImportedModelValue(candidate: unknown): JsonImportResult {
-  try {
-    const structuralErrors: ValidationError[] = [];
-    const detached = buildDetachedModelSnapshot(candidate, structuralErrors);
-    if (structuralErrors.length > 0) {
-      return { ok: false, errors: structuralErrors };
-    }
-    const errors = validateModel(detached);
-    if (errors.length > 0) {
-      return { ok: false, errors };
-    }
-    return { ok: true, model: detached as TransitionSystemModel };
-  } catch {
-    return {
-      ok: false,
-      errors: [
-        {
-          code: 'UNEXPECTED_INPUT_ERROR',
-          path: '$',
-          message: 'Unexpected error while validating imported model value.',
-        },
-      ],
-    };
-  }
+  return agentGateJsonCodec.validateValue(candidate);
 }
 
 export function importModelFromJson(rawText: unknown): JsonImportResult {
-  try {
-    if (typeof rawText !== 'string') {
-      if (rawText !== null && typeof rawText === 'object') {
-        return validateImportedModelValue(rawText);
-      }
-      return {
-        ok: false,
-        errors: [
-          {
-            code: 'INVALID_JSON_INPUT',
-            path: '$',
-            message: `Model import expects a JSON string, received ${typeof rawText}.`,
-          },
-        ],
-      };
-    }
-
-    if (rawText.trim().length === 0) {
-      return {
-        ok: false,
-        errors: [
-          {
-            code: 'JSON_PARSE_ERROR',
-            path: '$',
-            message: 'JSON input is empty.',
-          },
-        ],
-      };
-    }
-
-    if (rawText.length > MAX_IMPORT_JSON_CHARS) {
-      return {
-        ok: false,
-        errors: [
-          {
-            code: 'JSON_TOO_LARGE',
-            path: '$',
-            message: `JSON input exceeds maximum size of ${MAX_IMPORT_JSON_CHARS} characters.`,
-          },
-        ],
-      };
-    }
-
-    const numberErrors = validateRawJsonNumbers(rawText);
-    if (numberErrors.length > 0) {
-      return { ok: false, errors: numberErrors };
-    }
-
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(rawText);
-    } catch (err) {
-      const detail = err instanceof Error ? err.message : 'Malformed JSON syntax.';
-      return {
-        ok: false,
-        errors: [
-          {
-            code: 'JSON_PARSE_ERROR',
-            path: '$',
-            message: `Invalid JSON: ${detail}`,
-          },
-        ],
-      };
-    }
-
-    return validateImportedModelValue(parsed);
-  } catch {
-    return {
-      ok: false,
-      errors: [
-        {
-          code: 'UNEXPECTED_INPUT_ERROR',
-          path: '$',
-          message: 'Unexpected error while importing JSON model.',
-        },
-      ],
-    };
+  if (typeof rawText !== 'string' && rawText !== null && typeof rawText === 'object') {
+    return agentGateJsonCodec.validateValue(rawText);
   }
-}
-
-function classifyErrorSection(path: string): DiagnosticSection {
-  if (path.startsWith('schema') || path.startsWith('initialState')) {
-    return 'schema';
-  }
-  if (path.startsWith('rules')) {
-    return 'rules';
-  }
-  if (path.startsWith('invariants')) {
-    return 'invariants';
-  }
-  if (path.startsWith('goal')) {
-    return 'goal';
-  }
-  if (path.startsWith('assumptions')) {
-    return 'assumptions';
-  }
-  return 'general';
-}
-
-export function indexModelDiagnostics(
-  errors: readonly ValidationError[],
-): ModelDiagnosticsIndex {
-  const byPath: Record<string, ValidationError[]> = {};
-  const sections: Record<DiagnosticSection, ValidationError[]> = {
-    general: [],
-    schema: [],
-    rules: [],
-    invariants: [],
-    goal: [],
-    assumptions: [],
-  };
-
-  for (const error of errors) {
-    const existing = byPath[error.path];
-    if (existing !== undefined) {
-      existing.push(error);
-    } else {
-      byPath[error.path] = [error];
-    }
-    const section = classifyErrorSection(error.path);
-    sections[section].push(error);
-  }
-
-  return {
-    all: [...errors],
-    byPath,
-    sections,
-  };
-}
-
-export function getErrorsForPathPrefix(
-  index: ModelDiagnosticsIndex,
-  prefix: string,
-): readonly ValidationError[] {
-  return index.all.filter(
-    (err) =>
-      err.path === prefix ||
-      err.path.startsWith(`${prefix}.`) ||
-      err.path.startsWith(`${prefix}[`),
-  );
+  return agentGateJsonCodec.decode(rawText);
 }
