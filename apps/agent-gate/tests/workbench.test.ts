@@ -18,7 +18,7 @@ import {
   stepReplayBackward,
   stepReplayForward,
 } from '@rulecanvas/ui';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { App } from '../src/App.js';
 import { ComparisonPanel } from '../src/components/ComparisonPanel.js';
 import {
@@ -32,6 +32,8 @@ import {
   applySchemaVarRenameState,
   matchesDraftPrefix,
   resolveOrderedSchemaKeys,
+  shouldPruneGuardDraftsOnAppend,
+  tryExportModelJson,
 } from '../src/components/PolicyEditorPane.js';
 import { StrictIntegerInput } from '../src/components/StrictIntegerInput.js';
 import {
@@ -1379,5 +1381,220 @@ describe('AgentGate workbench domain modules and UI', () => {
     expect(tokensCss).toContain('--color-control-border: oklch(59% 0.025 252);');
     expect(workbenchCss).toContain('border: 1px solid var(--color-control-border);');
     expect(workbenchCss).toContain('.ag-tabpanel[hidden]');
+  });
+
+  it('prunes wrapped guard drafts when converting non-and guards while preserving existing and-clause drafts', () => {
+    expect(shouldPruneGuardDraftsOnAppend({ op: 'lit', value: true })).toBe(true);
+    expect(shouldPruneGuardDraftsOnAppend({ op: 'var', name: 'flag' })).toBe(true);
+    expect(
+      shouldPruneGuardDraftsOnAppend({ op: 'not', arg: { op: 'var', name: 'flag' } }),
+    ).toBe(true);
+    expect(
+      shouldPruneGuardDraftsOnAppend({
+        op: 'or',
+        args: [{ op: 'var', name: 'flag' }],
+      }),
+    ).toBe(true);
+    expect(
+      shouldPruneGuardDraftsOnAppend({
+        op: 'eq',
+        left: { op: 'var', name: 'revision' },
+        right: { op: 'lit', value: 1 },
+      }),
+    ).toBe(true);
+    expect(
+      shouldPruneGuardDraftsOnAppend({
+        op: 'gte',
+        left: { op: 'var', name: 'revision' },
+        right: { op: 'lit', value: 1 },
+      }),
+    ).toBe(true);
+    expect(
+      shouldPruneGuardDraftsOnAppend({
+        op: 'in',
+        expr: { op: 'var', name: 'stage' },
+        values: ['idle'],
+      }),
+    ).toBe(true);
+    expect(
+      shouldPruneGuardDraftsOnAppend({
+        op: 'and',
+        args: [{ op: 'var', name: 'flag' }],
+      }),
+    ).toBe(false);
+
+    expect(
+      matchesDraftPrefix('rule:rule-row-1.guard.right.value', 'rule:rule-row-1.guard'),
+    ).toBe(true);
+    expect(
+      matchesDraftPrefix('rule:rule-row-1.update:upd-row-1.value', 'rule:rule-row-1.guard'),
+    ).toBe(false);
+
+    const broken = loadPresetModel('broken');
+    const gteRuleModel = updateRule(broken, 0, {
+      ...broken.rules[0]!,
+      guard: {
+        op: 'gte',
+        left: { op: 'var', name: 'revision' },
+        right: { op: 'lit', value: 1 },
+      },
+    });
+    const wrappedModel = appendRuleGuardClause(gteRuleModel, 0, {
+      op: 'not',
+      arg: { op: 'var', name: 'modifiedSinceApproval' },
+    });
+    expect(wrappedModel.rules[0]?.guard).toEqual({
+      op: 'and',
+      args: [
+        {
+          op: 'gte',
+          left: { op: 'var', name: 'revision' },
+          right: { op: 'lit', value: 1 },
+        },
+        {
+          op: 'not',
+          arg: { op: 'var', name: 'modifiedSinceApproval' },
+        },
+      ],
+    });
+
+    const extendedAndModel = appendRuleGuardClause(wrappedModel, 0, {
+      op: 'var',
+      name: 'approvalValid',
+    });
+    expect(extendedAndModel.rules[0]?.guard).toEqual({
+      op: 'and',
+      args: [
+        {
+          op: 'gte',
+          left: { op: 'var', name: 'revision' },
+          right: { op: 'lit', value: 1 },
+        },
+        {
+          op: 'not',
+          arg: { op: 'var', name: 'modifiedSinceApproval' },
+        },
+        {
+          op: 'var',
+          name: 'approvalValid',
+        },
+      ],
+    });
+  });
+
+  it('exports and imports deep core-valid AST guards cleanly and handles over-budget export errors without blanking UI', () => {
+    const buildNestedAndModel = (depthCount: number): TransitionSystemModel => {
+      const broken = loadPresetModel('broken');
+      let guard: TransitionSystemModel['rules'][number]['guard'] = { op: 'lit', value: true };
+      for (let i = 0; i < depthCount; i += 1) {
+        guard = { op: 'and', args: [guard] };
+      }
+      return updateRule(broken, 0, { ...broken.rules[0]!, guard });
+    };
+
+    const depth30Model = buildNestedAndModel(30);
+    const depth31Model = buildNestedAndModel(31);
+    const depth32Model = buildNestedAndModel(32);
+
+    expect(validateModel(depth30Model)).toEqual([]);
+    expect(validateModel(depth31Model)).toEqual([]);
+    expect(validateModel(depth32Model)).toEqual([]);
+
+    const exported31 = exportModelToJson(depth31Model);
+    expect(importModelFromJson(exported31).ok).toBe(true);
+    const exported32 = exportModelToJson(depth32Model);
+    expect(importModelFromJson(exported32).ok).toBe(true);
+
+    const depth31Html = renderToStaticMarkup(
+      createElement(PolicyEditorPane, {
+        model: depth31Model,
+        diagnostics: indexModelDiagnostics([]),
+        onChangeModel: () => {},
+        onImportModel: () => {},
+      }),
+    );
+    expect(depth31Html).not.toContain('JSON Export Failed');
+    expect(depth31Html).toContain('Edit rule definition, guard AST, and atomic updates');
+
+    // Over-budget AST (> 64 nested levels) returns structured export failure and leaves editor mounted
+    const overBudgetModel = buildNestedAndModel(66);
+    const failedExport = tryExportModelJson(overBudgetModel);
+    expect(failedExport.ok).toBe(false);
+    if (!failedExport.ok) {
+      expect(failedExport.error.code).toBe('JSON_EXPORT_ERROR');
+      expect(failedExport.error.path).toBe('$');
+    }
+
+    const overBudgetHtml = renderToStaticMarkup(
+      createElement(PolicyEditorPane, {
+        model: overBudgetModel,
+        diagnostics: indexModelDiagnostics(validateModel(overBudgetModel)),
+        onChangeModel: () => {},
+        onImportModel: () => {},
+      }),
+    );
+    expect(overBudgetHtml).toContain('JSON Export Failed (1)');
+    expect(overBudgetHtml).toContain('JSON_EXPORT_ERROR');
+    expect(overBudgetHtml).toContain('Edit rule definition, guard AST, and atomic updates');
+  });
+
+  it('pre-validates raw JSON number tokens before JSON.parse and rejects malformed syntax via JSON_PARSE_ERROR', () => {
+    const broken = loadPresetModel('broken');
+    const validJson = exportModelToJson(broken);
+    const parseSpy = vi.spyOn(JSON, 'parse');
+
+    try {
+      const disallowedPayloads: readonly { readonly json: string; readonly code: string }[] = [
+        {
+          json: validJson.replace('"max": 3', '"max": 1.00000000000000001'),
+          code: 'NON_INTEGER_JSON_NUMBER',
+        },
+        {
+          json: validJson.replace('"max": 3', '"max": 1.0'),
+          code: 'NON_INTEGER_JSON_NUMBER',
+        },
+        {
+          json: validJson.replace('"max": 3', '"max": 1e2'),
+          code: 'NON_INTEGER_JSON_NUMBER',
+        },
+        {
+          json: validJson.replace('"max": 3', '"max": 9007199254740993'),
+          code: 'UNSAFE_INTEGER_JSON_NUMBER',
+        },
+        {
+          json: validJson.replace('"max": 3', '"max": -9007199254740993'),
+          code: 'UNSAFE_INTEGER_JSON_NUMBER',
+        },
+      ];
+
+      for (const sample of disallowedPayloads) {
+        const res = importModelFromJson(sample.json);
+        expect(res.ok).toBe(false);
+        if (!res.ok) {
+          expect(res.errors.some((e) => e.code === sample.code)).toBe(true);
+        }
+      }
+      expect(parseSpy).toHaveBeenCalledTimes(0);
+
+      const malformedSamples = [
+        '{"a": -}',
+        '{"a": 01}',
+        '{"a": 1.}',
+        '{"a": 1e}',
+        '{"a": --1}',
+        '{"a": 1.2.3}',
+        '{"a": 123abc}',
+        '{"a": "unterminated 1.5',
+      ];
+      for (const raw of malformedSamples) {
+        const res = importModelFromJson(raw);
+        expect(res.ok).toBe(false);
+        if (!res.ok) {
+          expect(res.errors[0]?.code).toBe('JSON_PARSE_ERROR');
+        }
+      }
+    } finally {
+      parseSpy.mockRestore();
+    }
   });
 });

@@ -40,8 +40,17 @@ function alignLocalRowIds(
   if (current.length === targetLength) return current;
   if (current.length > targetLength) return current.slice(0, targetLength);
   const next = [...current];
-  for (let i = current.length; i < targetLength; i += 1) {
-    next.push(`${prefix}-sync-${i}`);
+  const used = new Set(current);
+  let seq = current.length;
+  while (next.length < targetLength) {
+    let candidate = `${prefix}-sync-${seq}`;
+    seq += 1;
+    while (used.has(candidate)) {
+      candidate = `${prefix}-sync-${seq}`;
+      seq += 1;
+    }
+    used.add(candidate);
+    next.push(candidate);
   }
   return next;
 }

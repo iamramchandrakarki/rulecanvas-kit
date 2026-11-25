@@ -948,7 +948,7 @@ function inspectStrictPlainArray(
   let ok = true;
 
   for (let i = 0; i < ownKeys.length; i += 1) {
-    if (!consumeBudget(budget, depth + 1, path, errors)) return null;
+    if (!consumeBudget(budget, depth, path, errors)) return null;
     const key = ownKeys[i]!;
     if (typeof key === 'symbol') {
       errors.push({
@@ -981,7 +981,7 @@ function inspectStrictPlainArray(
 
   const elements: unknown[] = [];
   for (let i = 0; i < length; i += 1) {
-    if (!consumeBudget(budget, depth + 1, `${path}[${i}]`, errors)) return null;
+    if (!consumeBudget(budget, depth, `${path}[${i}]`, errors)) return null;
     const desc = Object.getOwnPropertyDescriptor(value, i);
     if (desc === undefined) {
       errors.push({
@@ -1159,13 +1159,13 @@ function buildDetachedBoolExpr(
   } else if (op === 'and' || op === 'or') {
     if (initialMap.has('args')) {
       const rawArgs = initialMap.get('args');
-      const arr = inspectStrictPlainArray(rawArgs, `${path}.args`, depth + 1, budget, errors);
+      const arr = inspectStrictPlainArray(rawArgs, `${path}.args`, depth, budget, errors);
       if (arr !== null) {
         defineSafeDataProp(
           out,
           'args',
           arr.map((item, idx) =>
-            buildDetachedBoolExpr(item, `${path}.args[${idx}]`, depth + 2, budget, errors),
+            buildDetachedBoolExpr(item, `${path}.args[${idx}]`, depth + 1, budget, errors),
           ),
         );
       } else {
@@ -1204,7 +1204,7 @@ function buildDetachedBoolExpr(
     }
     if (initialMap.has('values')) {
       const rawVals = initialMap.get('values');
-      const arr = inspectStrictPlainArray(rawVals, `${path}.values`, depth + 1, budget, errors);
+      const arr = inspectStrictPlainArray(rawVals, `${path}.values`, depth, budget, errors);
       if (arr !== null) {
         defineSafeDataProp(
           out,
@@ -1634,7 +1634,7 @@ function readExportArrayElements(
   }
   const out: unknown[] = [];
   for (let i = 0; i < lenDesc.value; i += 1) {
-    consumeExportBudget(budget, depth + 1, `${path}[${i}]`);
+    consumeExportBudget(budget, depth, `${path}[${i}]`);
     const desc = Object.getOwnPropertyDescriptor(raw, i);
     if (desc === undefined) {
       throw new TypeError(`Cannot export model: sparse array element at "${path}[${i}]".`);
@@ -1768,12 +1768,12 @@ function cloneBoolExprForExport(
       readRequiredOwnData(obj, 'args', `${path}.args`),
       `${path}.args`,
       budget,
-      depth + 1,
+      depth,
     );
     return {
       op,
       args: rawArgs.map((arg, idx) =>
-        cloneBoolExprForExport(arg, `${path}.args[${idx}]`, depth + 2, budget),
+        cloneBoolExprForExport(arg, `${path}.args[${idx}]`, depth + 1, budget),
       ),
     };
   }
@@ -1806,7 +1806,7 @@ function cloneBoolExprForExport(
       readRequiredOwnData(obj, 'values', `${path}.values`),
       `${path}.values`,
       budget,
-      depth + 1,
+      depth,
     );
     return {
       op: 'in',
@@ -2021,6 +2021,29 @@ export function exportModelToJson(model: TransitionSystemModel): string {
   return JSON.stringify(canonical, null, 2);
 }
 
+const RFC8259_JSON_NUMBER_RE = /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$/;
+
+function isJsonWhitespace(ch: string): boolean {
+  return ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r';
+}
+
+function isJsonValuePrefix(ch: string): boolean {
+  return isJsonWhitespace(ch) || ch === '[' || ch === '{' || ch === ':' || ch === ',';
+}
+
+function isJsonDelimiter(ch: string): boolean {
+  return (
+    isJsonWhitespace(ch) ||
+    ch === ',' ||
+    ch === '}' ||
+    ch === ']' ||
+    ch === ':' ||
+    ch === '[' ||
+    ch === '{' ||
+    ch === '"'
+  );
+}
+
 function validateRawJsonNumbers(rawText: string): ValidationError[] {
   const errors: ValidationError[] = [];
   let inString = false;
@@ -2047,30 +2070,20 @@ function validateRawJsonNumbers(rawText: string): ValidationError[] {
     }
 
     if (ch === '-' || (ch >= '0' && ch <= '9')) {
+      if (i > 0 && !isJsonValuePrefix(rawText[i - 1]!)) {
+        i += 1;
+        continue;
+      }
       const start = i;
-      if (rawText[i] === '-') {
+      while (i < rawText.length && !isJsonDelimiter(rawText[i]!)) {
         i += 1;
-      }
-      while (i < rawText.length && rawText[i]! >= '0' && rawText[i]! <= '9') {
-        i += 1;
-      }
-      if (i < rawText.length && rawText[i] === '.') {
-        i += 1;
-        while (i < rawText.length && rawText[i]! >= '0' && rawText[i]! <= '9') {
-          i += 1;
-        }
-      }
-      if (i < rawText.length && (rawText[i] === 'e' || rawText[i] === 'E')) {
-        i += 1;
-        if (i < rawText.length && (rawText[i] === '+' || rawText[i] === '-')) {
-          i += 1;
-        }
-        while (i < rawText.length && rawText[i]! >= '0' && rawText[i]! <= '9') {
-          i += 1;
-        }
       }
 
       const token = rawText.slice(start, i);
+      if (!RFC8259_JSON_NUMBER_RE.test(token)) {
+        continue;
+      }
+
       if (token.includes('.') || token.includes('e') || token.includes('E')) {
         errors.push({
           code: 'NON_INTEGER_JSON_NUMBER',
@@ -2078,13 +2091,22 @@ function validateRawJsonNumbers(rawText: string): ValidationError[] {
           message: `Invalid non-integer JSON number token "${token}".`,
         });
       } else {
-        const big = BigInt(token);
-        if (big < MIN_SAFE_BIGINT || big > MAX_SAFE_BIGINT) {
+        const digitLength = token.startsWith('-') ? token.length - 1 : token.length;
+        if (digitLength > 16) {
           errors.push({
             code: 'UNSAFE_INTEGER_JSON_NUMBER',
             path: '$',
             message: `Integer JSON number token "${token}" exceeds safe integer bounds.`,
           });
+        } else {
+          const big = BigInt(token);
+          if (big < MIN_SAFE_BIGINT || big > MAX_SAFE_BIGINT) {
+            errors.push({
+              code: 'UNSAFE_INTEGER_JSON_NUMBER',
+              path: '$',
+              message: `Integer JSON number token "${token}" exceeds safe integer bounds.`,
+            });
+          }
         }
       }
       if (errors.length >= 64) {
@@ -2169,6 +2191,11 @@ export function importModelFromJson(rawText: unknown): JsonImportResult {
       };
     }
 
+    const numberErrors = validateRawJsonNumbers(rawText);
+    if (numberErrors.length > 0) {
+      return { ok: false, errors: numberErrors };
+    }
+
     let parsed: unknown;
     try {
       parsed = JSON.parse(rawText);
@@ -2184,11 +2211,6 @@ export function importModelFromJson(rawText: unknown): JsonImportResult {
           },
         ],
       };
-    }
-
-    const numberErrors = validateRawJsonNumbers(rawText);
-    if (numberErrors.length > 0) {
-      return { ok: false, errors: numberErrors };
     }
 
     return validateImportedModelValue(parsed);

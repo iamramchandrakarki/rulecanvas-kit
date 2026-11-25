@@ -143,10 +143,42 @@ function alignRowIds(
   if (current.length === targetLength) return current;
   if (current.length > targetLength) return current.slice(0, targetLength);
   const next = [...current];
-  for (let i = current.length; i < targetLength; i += 1) {
-    next.push(`${prefix}-sync-${i}`);
+  const used = new Set(current);
+  let seq = current.length;
+  while (next.length < targetLength) {
+    let candidate = `${prefix}-sync-${seq}`;
+    seq += 1;
+    while (used.has(candidate)) {
+      candidate = `${prefix}-sync-${seq}`;
+      seq += 1;
+    }
+    used.add(candidate);
+    next.push(candidate);
   }
   return next;
+}
+
+export function shouldPruneGuardDraftsOnAppend(guard: BoolExpr): boolean {
+  return guard.op !== 'and';
+}
+
+export function tryExportModelJson(
+  model: TransitionSystemModel,
+):
+  | { readonly ok: true; readonly text: string }
+  | { readonly ok: false; readonly error: ValidationError } {
+  try {
+    return { ok: true, text: exportModelToJson(model) };
+  } catch (err) {
+    return {
+      ok: false,
+      error: {
+        code: 'JSON_EXPORT_ERROR',
+        path: '$',
+        message: err instanceof Error ? err.message : 'Unable to export current model to JSON.',
+      },
+    };
+  }
 }
 
 export function matchesDraftPrefix(fieldKey: string, prefix: string): boolean {
@@ -225,8 +257,13 @@ export function PolicyEditorPane({
   const [quickClauseVar, setQuickClauseVar] = useState<string>('modifiedSinceApproval');
   const [quickClauseNegated, setQuickClauseNegated] = useState<boolean>(true);
 
-  const [jsonDraft, setJsonDraft] = useState<string>(() => exportModelToJson(model));
-  const [jsonErrors, setJsonErrors] = useState<readonly ValidationError[]>([]);
+  const [initialJsonExport] = useState(() => tryExportModelJson(model));
+  const [jsonDraft, setJsonDraft] = useState<string>(() =>
+    initialJsonExport.ok ? initialJsonExport.text : '',
+  );
+  const [jsonErrors, setJsonErrors] = useState<readonly ValidationError[]>(() =>
+    initialJsonExport.ok ? [] : [initialJsonExport.error],
+  );
   const [jsonNotice, setJsonNotice] = useState<string | null>(null);
 
   // Logical variable identity & visual order (stable across numeric-key renames)
@@ -361,11 +398,18 @@ export function PolicyEditorPane({
   );
 
   useEffect(() => {
-    setJsonDraft(exportModelToJson(model));
-    setJsonErrors([]);
-    if (preserveNextNoticeRef.current) {
-      preserveNextNoticeRef.current = false;
+    const exported = tryExportModelJson(model);
+    if (exported.ok) {
+      setJsonDraft(exported.text);
+      setJsonErrors([]);
+      if (preserveNextNoticeRef.current) {
+        preserveNextNoticeRef.current = false;
+      } else {
+        setJsonNotice(null);
+      }
     } else {
+      preserveNextNoticeRef.current = false;
+      setJsonErrors([exported.error]);
       setJsonNotice(null);
     }
   }, [model]);
@@ -657,6 +701,18 @@ export function PolicyEditorPane({
     onChangeModel(removeRule(model, idx));
   };
 
+  const handleAppendRuleGuardClause = (
+    idx: number,
+    rule: TransitionRule,
+    rowId: string,
+    clause: BoolExpr,
+  ) => {
+    if (shouldPruneGuardDraftsOnAppend(rule.guard)) {
+      pruneDraftsByPrefix(`rule:${rowId}.guard`);
+    }
+    onChangeModel(appendRuleGuardClause(model, idx, clause));
+  };
+
   const handleAddRuleUpdate = (idx: number, rule: TransitionRule, ruleRowId: string) => {
     const currentUpdIds = alignRowIds(
       updateRowIdsByRule[ruleRowId] ?? [],
@@ -749,7 +805,13 @@ export function PolicyEditorPane({
   };
 
   const handleCopyJson = async () => {
-    const text = exportModelToJson(model);
+    const exported = tryExportModelJson(model);
+    if (!exported.ok) {
+      setJsonErrors([exported.error]);
+      setJsonNotice(null);
+      return;
+    }
+    const text = exported.text;
     if (typeof navigator !== 'undefined' && navigator.clipboard !== undefined) {
       try {
         await navigator.clipboard.writeText(text);
@@ -764,8 +826,14 @@ export function PolicyEditorPane({
   };
 
   const handleDownloadJson = () => {
+    const exported = tryExportModelJson(model);
+    if (!exported.ok) {
+      setJsonErrors([exported.error]);
+      setJsonNotice(null);
+      return;
+    }
     if (typeof document === 'undefined' || typeof URL === 'undefined') return;
-    const blob = new Blob([exportModelToJson(model)], { type: 'application/json' });
+    const blob = new Blob([exported.text], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
@@ -1306,12 +1374,10 @@ export function PolicyEditorPane({
                           type="button"
                           className="ag-btn ag-btn-sm ag-btn-active"
                           onClick={() =>
-                            onChangeModel(
-                              appendRuleGuardClause(model, idx, {
-                                op: 'not',
-                                arg: { op: 'var', name: 'modifiedSinceApproval' },
-                              }),
-                            )
+                            handleAppendRuleGuardClause(idx, rule, rowId, {
+                              op: 'not',
+                              arg: { op: 'var', name: 'modifiedSinceApproval' },
+                            })
                           }
                         >
                           + Add !modifiedSinceApproval
@@ -1325,7 +1391,7 @@ export function PolicyEditorPane({
                             const clause: BoolExpr = quickClauseNegated
                               ? { op: 'not', arg: { op: 'var', name: selectedQuickVar } }
                               : { op: 'var', name: selectedQuickVar };
-                            onChangeModel(appendRuleGuardClause(model, idx, clause));
+                            handleAppendRuleGuardClause(idx, rule, rowId, clause);
                           }}
                         >
                           + Append {quickClauseNegated ? `!${selectedQuickVar}` : selectedQuickVar}
@@ -1841,7 +1907,11 @@ export function PolicyEditorPane({
 
           {jsonErrors.length > 0 && (
             <div className="ag-alert" role="alert">
-              <strong>JSON Import Validation Failed ({jsonErrors.length})</strong>
+              <strong>
+                {jsonErrors.every((err) => err.code === 'JSON_EXPORT_ERROR')
+                  ? `JSON Export Failed (${jsonErrors.length})`
+                  : `JSON Import Validation Failed (${jsonErrors.length})`}
+              </strong>
               <ul>
                 {jsonErrors.map((err, idx) => (
                   <li key={`${err.code}-${err.path}-${idx}`}>
