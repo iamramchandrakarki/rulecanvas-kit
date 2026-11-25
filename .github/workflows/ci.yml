@@ -34,6 +34,9 @@ jobs:
       - name: Strict ES2022 core typecheck
         run: pnpm --filter @rulecanvas/core exec tsc --noEmit -p tsconfig.json
 
+      - name: Strict ES2022 UI typecheck
+        run: pnpm --filter @rulecanvas/ui exec tsc --noEmit -p tsconfig.json
+
       - name: Run unit, property, replay, and scenario tests
         run: pnpm test
 

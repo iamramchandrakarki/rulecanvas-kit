@@ -1,6 +1,6 @@
 # RuleCanvasKit Architecture
 
-This document describes the technical architecture of `@rulecanvas/core` (`packages/rulecanvas-core`) and the dependency boundaries across the RuleCanvasKit monorepo.
+This document describes the technical architecture of `@rulecanvas/core` (`packages/rulecanvas-core`), `@rulecanvas/ui` (`packages/rulecanvas-ui`), and the dependency boundaries across the RuleCanvasKit monorepo.
 
 ## Workspace Layering
 
@@ -8,13 +8,16 @@ This document describes the technical architecture of `@rulecanvas/core` (`packa
 packages/rulecanvas-core   (@rulecanvas/core — zero runtime dependencies, pure ES2022)
         ^
         | workspace:*
-        +---- apps/agent-gate     (@rulecanvas/agent-gate)
-        +---- apps/interlock-sim  (@rulecanvas/interlock-sim)
+        +---- packages/rulecanvas-ui   (@rulecanvas/ui — depends only on @rulecanvas/core, pure ES2022)
+        |             ^
+        +-------------+---- apps/agent-gate     (@rulecanvas/agent-gate)
+                      +---- apps/interlock-sim  (@rulecanvas/interlock-sim)
 ```
 
 - `packages/rulecanvas-core` contains only domain-agnostic formal model validation, compilation, BFS exploration, and deterministic trace replay.
+- `packages/rulecanvas-ui` contains domain-agnostic AST expression/rule formatters, an immutable counterexample replay and manual step-simulation controller backed by `@rulecanvas/core`, and accessible, XSS-safe view models and semantic HTML renderers.
 - `apps/*` packages define domain-specific schemas, rules, invariants, goals, assumptions, and scenario tests.
-- `packages/rulecanvas-core` must never import from `apps/*`, `node:*`, bare npm packages, or host-coupled APIs (`Date`, `performance`, `setTimeout`, `setInterval`, `Math.random`, `globalThis`, `eval`, `Function`). These rules are enforced automatically by `packages/rulecanvas-core/tests/boundaries.test.ts`.
+- `packages/rulecanvas-core` and `packages/rulecanvas-ui` must never import from `apps/*`, `node:*`, third-party npm packages, or host-coupled APIs (`Date`, `performance`, `setTimeout`, `setInterval`, `Math.random`, `globalThis`, `eval`, `Function`). `@rulecanvas/ui` may import only relative modules within its own `src/` directory and `@rulecanvas/core`. These rules are enforced automatically by `packages/rulecanvas-core/tests/boundaries.test.ts`.
 
 ## Core Module Layout
 
@@ -100,3 +103,19 @@ After validation succeeds, `compileModel` lowers the model into dense index-addr
 - `getEnabledTransitions(model, state)`: Validates `model` and `state`, then evaluates every rule guard in declaration order.
 - `stepModel(model, state, ruleId)`: Validates `model` and `state`, checks that `ruleId` exists (`UNKNOWN_RULE`) and is enabled (`RULE_DISABLED`), applies updates atomically (`OUT_OF_DOMAIN_TRANSITION` if out of bounds), and returns a `TraceStep` with `stateBefore`, `stateAfter`, and `changedVars`.
 - `replayTrace(model, ruleIds)`: Executes a sequence of rule IDs starting from `initialState`, stopping on the first error with `stepIndex` and prefix `steps`, or returning `steps`, `finalState`, `violatedInvariantIds`, and optional `goalReached`.
+
+## Shared UI Foundation (`packages/rulecanvas-ui`)
+
+`packages/rulecanvas-ui/src/` compiles under strict ES2022 (`"lib": ["ES2022"]`, `"types": []`) and contains five modules with unidirectional imports (`safe-input.ts` remains internal and unexported from `src/index.ts`):
+
+```text
+safe-input.ts         (internal descriptor-safe readers and deep freezing)
+format.ts             (deterministic ValueExpr, BoolExpr, VarDef, update, and rule formatters)
+replay-controller.ts  (immutable ReplaySession state, trace replay, manual stepping via @rulecanvas/core)
+components.ts         (XSS-safe escapeHtml, view-model builders, and accessible semantic HTML renderers)
+index.ts              (re-exports public modules from format.ts, replay-controller.ts, and components.ts while keeping safe-input.ts internal)
+```
+
+- All execution semantics in `replay-controller.ts` delegate directly to `@rulecanvas/core` (`validateModel`, `getInitialState`, `getEnabledTransitions`, `stepModel`, `replayTrace`), avoiding duplicated validation or evaluation logic.
+- All replay session outputs (including canonical model, snapshots, and trace steps) and error payloads are deeply frozen, total on untrusted `unknown` inputs, enforce replay consistency between `currentState` and trace history, and reject out-of-range or non-safe-integer step indices with `INVALID_STEP_INDEX`.
+- Every HTML renderer escapes all interpolated strings via `escapeHtml`, inspects untrusted payloads strictly via own data descriptors, pairs status badges/symbols with `data-status` attributes rather than relying on color alone, and explicitly flags vacuous fixes (`VERIFIED (GOAL UNREACHABLE)`).

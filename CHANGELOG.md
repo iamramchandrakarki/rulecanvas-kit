@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`@rulecanvas/ui` (`v0.2.0`)**:
+  - Pure ES2022 shared UI foundation package (`packages/rulecanvas-ui`) depending solely on `@rulecanvas/core` with zero external npm runtime dependencies.
+  - Deterministic AST expression, state value, domain, update, and rule formatters (`formatStateValue`, `formatVarDef`, `formatValueExpr`, `formatBoolExpr`, `formatUpdateAssignment`, `formatRuleSummary`) with exact minimal precedence parenthesization and `-0` normalization.
+  - Immutable counterexample replay and manual step-simulation controller (`createTraceReplaySession`, `createVerdictReplaySession`, `createManualSimulationSession`, `stepReplayForward`, `stepReplayBackward`, `jumpReplayToStep`, `resetReplaySession`, `applyManualStep`) backed strictly by `@rulecanvas/core`.
+  - Accessible, XSS-safe view models and semantic HTML renderers (`escapeHtml`, `buildVerdictSummaryView`, `renderVerdictSummaryHtml`, `buildStateTableView`, `renderStateTableHtml`, `buildInvariantsPanelView`, `renderInvariantsPanelHtml`, `renderReplayTimelineHtml`, `renderAssumptionsPanelHtml`, `renderValidationErrorsHtml`) with explicit vacuous-fix warnings (`VERIFIED (GOAL UNREACHABLE)`).
+  - Unit, replay-parity, and XSS-safety test suites (`packages/rulecanvas-ui/tests/{format,replay-controller,components}.test.ts`), strict ES2022 UI typecheck in CI, and extended boundary enforcement in `packages/rulecanvas-core/tests/boundaries.test.ts`.
 - **`@rulecanvas/core` (`v0.1.0`)**:
   - Pure ES2022, zero-dependency Guarded Transition System (GTS) verification engine (`validateModel`, `validateOptions`, `verifyModel`, `getInitialState`, `getEnabledTransitions`, `stepModel`, `replayTrace`).
   - Dense numeric tuple encoding, exact `bigint` integer evaluation, atomic pre-state updates, `-0` normalization, and strict `OUT_OF_DOMAIN_TRANSITION` rejection without clamping.

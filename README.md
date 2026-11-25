@@ -27,6 +27,7 @@ RuleCanvasKit surfaces shortest-path multi-step counterexamples before deploymen
   - `INCONCLUSIVE`: Returned when `maxStates` or `maxDepth` limits are reached, with exact `completedDepth` and `frontierRemaining` counts.
   - `INVALID`: Returned with structured `ValidationError` diagnostics for malformed inputs, invalid options, or reachable out-of-domain transitions.
 - **Deterministic step and trace replay**: `getInitialState`, `getEnabledTransitions`, `stepModel`, and `replayTrace` share the exact validator, compiler, and evaluator used by `verifyModel`.
+- **Shared domain-agnostic UI foundation (`@rulecanvas/ui`)**: Pure ES2022 deterministic AST expression and rule formatters, an immutable counterexample replay and manual step-simulation controller backed by `@rulecanvas/core`, and accessible, XSS-safe view models and semantic HTML renderers with zero external npm runtime dependencies.
 
 ## Architecture
 
@@ -37,7 +38,7 @@ RuleCanvasKit separates its domain-agnostic verification engine from domain appl
 .kiro/                   # Versioned architecture steering rules and local verification hooks
 packages/
   rulecanvas-core/       # @rulecanvas/core: pure ES2022 validator, compiler, BFS verifier, replay APIs
-  rulecanvas-ui/         # Planned for v0.2.0: shared visualization and interactive replay UI components
+  rulecanvas-ui/         # @rulecanvas/ui: shared AST formatters, interactive replay controller, and accessible HTML renderers
 apps/
   agent-gate/            # @rulecanvas/agent-gate: policy modeling suite for AI agent permissions and approvals
   interlock-sim/         # @rulecanvas/interlock-sim: educational discrete-state safety interlock simulator
@@ -47,7 +48,7 @@ docs/
   specs/                 # Formal requirements, design, and task specifications for @rulecanvas/core
 ```
 
-Boundary tests automatically enforce that `packages/rulecanvas-core` never imports from `apps/*`, `node:*`, third-party packages, or non-deterministic host globals. See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for full details on validation caps, dense tuple encoding, BFS admission and truncation semantics, and package boundaries.
+Boundary tests automatically enforce that `packages/rulecanvas-core` and `packages/rulecanvas-ui` never import from `apps/*`, `node:*`, third-party npm packages, or non-deterministic host globals (`@rulecanvas/ui` depends solely on `@rulecanvas/core`). See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for full details on validation caps, dense tuple encoding, BFS semantics, shared UI layering, and package boundaries.
 
 ## Installation and Quick Start
 
@@ -148,27 +149,28 @@ RuleCanvasKit powers two domain-separated applications built on `@rulecanvas/cor
 
 ### AgentGate (`apps/agent-gate`)
 
-AgentGate is the primary commercially relevant application in RuleCanvasKit for verifying AI agent permissions, security policies, and approval workflows before rollout. In `v0.1.0`, `@rulecanvas/agent-gate` ships executable TypeScript policy models (`broken`, `naive-patch-a`, `naive-patch-b`, `principled-fix`, and `vacuous-fix`) demonstrating how multi-step approval bypasses are discovered, replayed, and closed without breaking legitimate publish goals, with the interactive visual workbench scheduled for `v0.3.0`.
+AgentGate is the primary commercially relevant application in RuleCanvasKit for verifying AI agent permissions, security policies, and approval workflows before rollout. In the `v0.1.0` milestone, `@rulecanvas/agent-gate` provides executable TypeScript policy models (`broken`, `naive-patch-a`, `naive-patch-b`, `principled-fix`, and `vacuous-fix`) demonstrating how multi-step approval bypasses are discovered, replayed, and closed without breaking legitimate publish goals, with the interactive visual workbench scheduled for `v0.3.0`.
 
 ### InterlockSim (`apps/interlock-sim`)
 
-InterlockSim is an educational discrete-state simulator for modeling and verifying industrial safety interlock rules, demonstrating the shared engine's domain versatility beyond software security policies. In `v0.1.0`, `@rulecanvas/interlock-sim` provides discrete BSL-3 airlock interlock models (`broken`, `fixed`, and `vacuous`) covering mutual-exclusion hazards, maintenance overrides, and goal reachability.
+InterlockSim is an educational discrete-state simulator for modeling and verifying industrial safety interlock rules, demonstrating the shared engine's domain versatility beyond software security policies. In the `v0.1.0` milestone, `@rulecanvas/interlock-sim` provides discrete BSL-3 airlock interlock models (`broken`, `fixed`, and `vacuous`) covering mutual-exclusion hazards, maintenance overrides, and goal reachability.
 
 ## Screenshots
 
-The `v0.1.0` release runs via Node.js/CLI scripts and programmatic TypeScript APIs. Shared visualization components (`packages/rulecanvas-ui`), interactive browser workbenches for AgentGate and InterlockSim, and UI screenshots arrive in `v0.2.0`–`v0.4.0`.
+The `v0.1.0`–`v0.2.0` milestones (tracked under `Unreleased` in [CHANGELOG.md](./CHANGELOG.md) until tagged) provide programmatic verification APIs and the shared `@rulecanvas/ui` component and replay-controller foundation. Interactive browser workbenches for AgentGate and InterlockSim, along with UI screenshots, arrive in `v0.3.0`–`v0.4.0`.
 
 ## Testing Instructions
 
 Run the full build, typecheck, test, boundary, hygiene, and benchmark suite locally:
 
 ```bash
-# Build @rulecanvas/core
+# Build @rulecanvas/core and @rulecanvas/ui
 pnpm build
 
-# Typecheck all workspace packages and strict ES2022 core config
+# Typecheck all workspace packages and strict ES2022 core/UI configs
 pnpm typecheck
 pnpm --filter @rulecanvas/core exec tsc --noEmit -p tsconfig.json
+pnpm --filter @rulecanvas/ui exec tsc --noEmit -p tsconfig.json
 
 # Run all unit, property-based, boundary, and application scenario tests
 pnpm test
