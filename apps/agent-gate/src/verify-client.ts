@@ -5,6 +5,7 @@ import {
   type VerifyResult,
 } from '@rulecanvas/core';
 import {
+  VERIFY_PROTOCOL_VERSION,
   createLegacyWorkerAdapter,
   createVerifyClient,
   isWebWorkerSupported,
@@ -33,14 +34,47 @@ export type VerifyClientOutcome =
       readonly requestId: number;
       readonly result: VerifyResult;
       readonly executionMode: VerifyExecutionMode;
+      readonly capturedModel?: TransitionSystemModel | undefined;
+      readonly capturedOptions?: VerifyOptions | undefined;
     }
   | { readonly status: 'cancelled'; readonly requestId: number }
   | { readonly status: 'error'; readonly requestId: number; readonly message: string };
 
-export function createBrowserVerifyWorker(): VerifyWorkerInstance {
+function createProtocolWorker(): VerifyWorkerInstance {
   return new Worker(new URL('./verify.worker.ts', import.meta.url), {
     type: 'module',
   }) as unknown as VerifyWorkerInstance;
+}
+
+export function createBrowserVerifyWorker(): WorkerLike {
+  const worker = createProtocolWorker();
+  const legacy: WorkerLike = {
+    onmessage: null,
+    onerror: null,
+    postMessage(message) {
+      worker.postMessage({ ...message, protocolVersion: VERIFY_PROTOCOL_VERSION, generation: 0 });
+    },
+    terminate() {
+      worker.onmessage = null;
+      worker.onerror = null;
+      worker.terminate();
+    },
+  };
+  worker.onmessage = ({ data }) => {
+    const message = data as import('@rulecanvas/workbench/verify').VerifyWorkerResponseMessage;
+    if (message.protocolVersion !== VERIFY_PROTOCOL_VERSION || message.generation !== 0) return;
+    const { type, requestId } = message;
+    legacy.onmessage?.({
+      data: type === 'result'
+        ? { type, requestId, result: message.result }
+        : { type, requestId, message: message.message },
+    });
+  };
+  worker.onerror = (event) => {
+    const message = event.message;
+    legacy.onerror?.(typeof message === 'string' ? { message } : {});
+  };
+  return legacy;
 }
 
 export function createSynchronousWorkerFactory(): WorkerFactory {
@@ -87,6 +121,23 @@ export interface VerifyClientOptions {
   readonly restartOnSupersede?: boolean;
 }
 
+export function createAppVerifyClient(workerFactory?: WorkerFactory): VerifyClient {
+  return createVerifyClient({
+    execution: workerFactory === undefined
+      ? {
+          kind: 'app-worker',
+          createWorker: createProtocolWorker,
+          asyncStartupError: 'report',
+        }
+      : {
+          kind: 'injected-worker',
+          createWorker: createLegacyWorkerAdapter(
+            () => workerFactory() as unknown as LegacyWorkerLike,
+          ),
+        },
+  });
+}
+
 export class VerifyWorkerClient {
   private readonly inner: VerifyClient;
   private readonly restartOnSupersede: boolean;
@@ -95,25 +146,7 @@ export class VerifyWorkerClient {
 
   constructor(options?: VerifyClientOptions) {
     this.restartOnSupersede = options?.restartOnSupersede ?? false;
-    if (options?.workerFactory !== undefined) {
-      const legacyFactory = options.workerFactory;
-      this.inner = createVerifyClient({
-        execution: {
-          kind: 'injected-worker',
-          createWorker: createLegacyWorkerAdapter(
-            () => legacyFactory() as unknown as LegacyWorkerLike,
-          ),
-        },
-      });
-    } else {
-      this.inner = createVerifyClient({
-        execution: {
-          kind: 'app-worker',
-          createWorker: createBrowserVerifyWorker,
-          asyncStartupError: 'report',
-        },
-      });
-    }
+    this.inner = createAppVerifyClient(options?.workerFactory);
   }
 
   public getExecutionMode(): VerifyExecutionMode {
@@ -164,6 +197,8 @@ export class VerifyWorkerClient {
           requestId: settlement.requestId,
           result: settlement.result,
           executionMode: settlement.executionMode,
+          capturedModel: settlement.capturedModel,
+          capturedOptions: settlement.capturedOptions,
         };
       });
   }
