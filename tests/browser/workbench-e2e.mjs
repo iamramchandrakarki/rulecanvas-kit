@@ -895,6 +895,32 @@ try {
     await syncPage.close();
   }
 
+  // A document reload retires the old route session. Fragment visits preserve the
+  // current draft, while Back to a different pre-reload preset still asks.
+  const reloadPage = await context.newPage();
+  await reloadPage.goto(`${baseUrl}/suite/agent-gate/?preset=broken`);
+  await reloadPage.selectOption('#preset-select', 'principled-fix');
+  await reloadPage.waitForURL('**/?preset=principled-fix');
+  const priorSession = await reloadPage.evaluate(() => history.state.sessionId);
+  await reloadPage.reload();
+  await reloadPage.waitForFunction((session) => history.state.sessionId !== session, priorSession);
+  await reloadPage.getByRole('tab', { name: 'JSON' }).click();
+  const reloadedJson = reloadPage.locator('#model-json-textarea');
+  const dirtyJson = `${await reloadedJson.inputValue()}\n `;
+  await reloadedJson.fill(dirtyJson);
+  await reloadPage.evaluate(() => { location.hash = 'details'; });
+  await reloadPage.waitForURL('**/?preset=principled-fix#details');
+  await reloadPage.goBack();
+  await reloadPage.waitForURL('**/?preset=principled-fix');
+  assert((await reloadedJson.inputValue()) === dirtyJson, 'Fragment Back lost the reloaded draft');
+  assert((await reloadPage.getByRole('alertdialog').count()) === 0, 'Fragment Back opened a discard prompt');
+  await reloadPage.goBack();
+  await reloadPage.getByRole('alertdialog').waitFor();
+  await reloadPage.getByRole('button', { name: 'Stay Here' }).click();
+  await reloadPage.waitForURL('**/?preset=principled-fix');
+  assert((await reloadedJson.inputValue()) === dirtyJson, 'Pre-reload preset Back lost the draft');
+  await reloadPage.close();
+
   // Exercise the module worker built from the isolated tarball installation.
   if (process.env.BOOKING_FIXTURE_DIST) {
     await page.goto(`${baseUrl}/booking-demo/`, { waitUntil: 'networkidle' });
