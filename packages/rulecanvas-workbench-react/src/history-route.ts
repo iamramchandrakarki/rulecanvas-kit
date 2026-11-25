@@ -59,10 +59,67 @@ export function readPresetFromSearch<TPreset extends string>(
   return { preset: defaultPreset, isCanonical: false };
 }
 
-export function buildCanonicalPresetUrl(currentHref: string, preset: string): string {
+interface CanonicalRelativeUrl {
+  readonly pathAndSearch: string;
+  readonly hash: string;
+  readonly relative: string;
+}
+
+function parseCanonicalPresetUrl(currentHref: string, preset: string): CanonicalRelativeUrl {
   const url = new URL(currentHref);
   url.searchParams.set('preset', preset);
-  return `${url.pathname}${url.search}${url.hash}`;
+  const pathAndSearch = `${url.pathname}${url.search}`;
+  return {
+    pathAndSearch,
+    hash: url.hash,
+    relative: `${pathAndSearch}${url.hash}`,
+  };
+}
+
+export function buildCanonicalPresetUrl(currentHref: string, preset: string): string {
+  return parseCanonicalPresetUrl(currentHref, preset).relative;
+}
+
+let controllerInstanceSeq = 0;
+
+function allocateControllerNonce(existingStamp: HistoryStamp | null): string {
+  const seq = ++controllerInstanceSeq;
+  if (typeof crypto !== 'undefined') {
+    if (typeof crypto.randomUUID === 'function') {
+      return `${crypto.randomUUID()}-${seq}`;
+    }
+    if (typeof crypto.getRandomValues === 'function') {
+      const bytes = new Uint8Array(16);
+      crypto.getRandomValues(bytes);
+      let hex = '';
+      for (const byte of bytes) {
+        hex += byte.toString(16).padStart(2, '0');
+      }
+      return `${hex}-${seq}`;
+    }
+  }
+  const prevMatch = existingStamp?.sessionId.match(/^rc-sess-g(\d+)-/);
+  const nextGen = prevMatch !== null && prevMatch !== undefined ? Number(prevMatch[1]) + 1 : 1;
+  return `g${nextGen}-${seq}`;
+}
+
+function isSafeControllerNavigationHref(href: string, baseHref: string): boolean {
+  const trimmed = href.trim();
+  if (trimmed.length === 0) return false;
+  if (/[\u0000-\u001f\u007f]/.test(trimmed)) return false;
+  if (trimmed.startsWith('//') || trimmed.startsWith('\\')) return false;
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(trimmed)) return false;
+
+  try {
+    const base = new URL(baseHref);
+    if (base.protocol !== 'http:' && base.protocol !== 'https:') return false;
+    const resolved = new URL(trimmed, base);
+    if (resolved.origin !== base.origin) return false;
+    if (resolved.protocol !== base.protocol) return false;
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function isHistoryStamp(value: unknown): value is HistoryStamp {
@@ -119,10 +176,12 @@ export function createWorkbenchHistoryController<TPreset extends string>(
     formatPresetLabel = (p) => p,
   } = options;
 
+  const existingInitialStamp = isHistoryStamp(host.history.state) ? host.history.state : null;
+  const controllerNonce = allocateControllerNonce(existingInitialStamp);
   let sessionSeq = 1;
   let entrySeq = 1;
-  const allocSessionId = (): string => `rc-sess-${sessionSeq++}`;
-  const allocEntryId = (): string => `rc-entry-${entrySeq++}`;
+  const allocSessionId = (): string => `rc-sess-${controllerNonce}-${sessionSeq++}`;
+  const allocEntryId = (): string => `rc-entry-${controllerNonce}-${entrySeq++}`;
 
   const currentNavKey = (): string | null => host.navigation?.currentEntry?.key ?? null;
   const hasNavKey = (key: string | null): boolean => {
@@ -136,6 +195,7 @@ export function createWorkbenchHistoryController<TPreset extends string>(
 
   // Initialize accepted entry from current URL
   const initialRead = readPresetFromSearch(host.location.search, allowedPresets, defaultPreset);
+  const initialCanonical = parseCanonicalPresetUrl(host.location.href, initialRead.preset);
   let sessionId = allocSessionId();
   let acceptedStamp: HistoryStamp = {
     __rulecanvasRoute: true,
@@ -144,7 +204,9 @@ export function createWorkbenchHistoryController<TPreset extends string>(
     index: 0,
     preset: initialRead.preset,
   };
-  let acceptedUrl = buildCanonicalPresetUrl(host.location.href, initialRead.preset);
+  let acceptedUrl = initialCanonical.relative;
+  let acceptedPathAndSearch = initialCanonical.pathAndSearch;
+  let acceptedHash = initialCanonical.hash;
   host.history.replaceState(acceptedStamp, '', acceptedUrl);
   let acceptedNavKey: string | null = currentNavKey();
 
@@ -153,7 +215,7 @@ export function createWorkbenchHistoryController<TPreset extends string>(
     readonly preset: TPreset;
     readonly stamp: HistoryStamp | null;
     readonly navKey: string | null;
-    readonly url: string;
+    readonly url: CanonicalRelativeUrl;
   } | null = null;
 
   let restorationToken: {
@@ -164,6 +226,13 @@ export function createWorkbenchHistoryController<TPreset extends string>(
 
   let approvedUnloadHref: string | null = null;
   let historyUrlDiverged = false;
+  let disposed = false;
+
+  const setAcceptedUrl = (canonical: CanonicalRelativeUrl): void => {
+    acceptedUrl = canonical.relative;
+    acceptedPathAndSearch = canonical.pathAndSearch;
+    acceptedHash = canonical.hash;
+  };
 
   const getLiveRelativeUrl = (): string => {
     const parsedUrl = new URL(host.location.href);
@@ -176,6 +245,7 @@ export function createWorkbenchHistoryController<TPreset extends string>(
   };
 
   const applyFreshSessionReplaceRecovery = (): void => {
+    if (disposed) return;
     restorationToken = null;
     pendingPopstateCandidate = null;
     historyUrlDiverged = false;
@@ -196,6 +266,7 @@ export function createWorkbenchHistoryController<TPreset extends string>(
   };
 
   const restoreAcceptedUrl = (): void => {
+    if (disposed) return;
     pendingPopstateCandidate = null;
 
     // Target-specific restoration via Navigation API traverseTo(acceptedKey) when available
@@ -209,11 +280,17 @@ export function createWorkbenchHistoryController<TPreset extends string>(
         if (
           isHistoryStamp(curState) &&
           curState.sessionId === acceptedStamp.sessionId &&
-          curState.entryId === acceptedStamp.entryId
+          curState.entryId === acceptedStamp.entryId &&
+          getLiveRelativeUrl() === acceptedUrl
         ) {
+          restorationToken = null;
           historyUrlDiverged = false;
           return;
         }
+        // Already on acceptedNavKey with diverged state/URL: traverseTo(currentKey) is a no-op,
+        // so repair synchronously via fresh-session replaceState instead of leaking restorationToken.
+        applyFreshSessionReplaceRecovery();
+        return;
       }
       const token = {
         sessionId: acceptedStamp.sessionId,
@@ -224,11 +301,18 @@ export function createWorkbenchHistoryController<TPreset extends string>(
       try {
         const navResult = host.navigation.traverseTo(acceptedNavKey);
         if (navResult?.finished !== undefined) {
-          void navResult.finished.catch(() => {
-            if (restorationToken === token) {
-              applyFreshSessionReplaceRecovery();
-            }
-          });
+          void navResult.finished.then(
+            () => {
+              if (!disposed && restorationToken === token) {
+                applyFreshSessionReplaceRecovery();
+              }
+            },
+            () => {
+              if (!disposed && restorationToken === token) {
+                applyFreshSessionReplaceRecovery();
+              }
+            },
+          );
         }
       } catch {
         applyFreshSessionReplaceRecovery();
@@ -241,10 +325,12 @@ export function createWorkbenchHistoryController<TPreset extends string>(
   };
 
   const commitPresetWithPush = (nextPreset: TPreset): void => {
+    if (disposed) return;
     restorationToken = null;
     historyUrlDiverged = false;
     pendingPopstateCandidate = null;
-    const nextUrl = buildCanonicalPresetUrl(host.location.href, nextPreset);
+    const nextCanonical = parseCanonicalPresetUrl(host.location.href, nextPreset);
+    const nextUrl = nextCanonical.relative;
     const nextStamp: HistoryStamp = {
       __rulecanvasRoute: true,
       sessionId,
@@ -255,7 +341,7 @@ export function createWorkbenchHistoryController<TPreset extends string>(
     if (nextUrl !== getLiveRelativeUrl()) {
       host.history.pushState(nextStamp, '', nextUrl);
       acceptedStamp = nextStamp;
-      acceptedUrl = nextUrl;
+      setAcceptedUrl(nextCanonical);
       acceptedNavKey = currentNavKey();
     } else {
       const liveRaw = host.history.state;
@@ -276,13 +362,14 @@ export function createWorkbenchHistoryController<TPreset extends string>(
         };
         host.history.replaceState(acceptedStamp, '', nextUrl);
       }
-      acceptedUrl = nextUrl;
+      setAcceptedUrl(nextCanonical);
       acceptedNavKey = currentNavKey();
     }
     onCommitPreset(nextPreset);
   };
 
   const handlePopstate = (): void => {
+    if (disposed) return;
     approvedUnloadHref = null;
     const rawState = host.history.state;
     const stamp = isHistoryStamp(rawState) ? rawState : null;
@@ -295,7 +382,8 @@ export function createWorkbenchHistoryController<TPreset extends string>(
         stamp !== null &&
         stamp.sessionId === token.sessionId &&
         stamp.entryId === token.entryId &&
-        navKey === token.navKey
+        navKey === token.navKey &&
+        getLiveRelativeUrl() === acceptedUrl
       ) {
         restorationToken = null;
         pendingPopstateCandidate = null;
@@ -311,7 +399,75 @@ export function createWorkbenchHistoryController<TPreset extends string>(
     }
 
     const parsed = readPresetFromSearch(host.location.search, allowedPresets, defaultPreset);
-    const canonicalUrl = buildCanonicalPresetUrl(host.location.href, parsed.preset);
+    const canonical = parseCanonicalPresetUrl(host.location.href, parsed.preset);
+
+    // Returning to the exact currently-accepted entry leaves editor state untouched
+    const isExactAcceptedEntry =
+      stamp !== null &&
+      stamp.sessionId === acceptedStamp.sessionId &&
+      stamp.entryId === acceptedStamp.entryId &&
+      (acceptedNavKey === null || navKey === acceptedNavKey) &&
+      canonical.relative === acceptedUrl;
+
+    if (isExactAcceptedEntry) {
+      historyUrlDiverged = false;
+      pendingPopstateCandidate = null;
+      if (activePrompt?.kind === 'popstate') {
+        setPrompt(null);
+      }
+      if (!parsed.isCanonical || getLiveRelativeUrl() !== acceptedUrl) {
+        host.history.replaceState(acceptedStamp, '', acceptedUrl);
+      }
+      return;
+    }
+
+    // Hash-only traversal on the same preset must never reset dirty state or prompt for discard
+    const isHashOnlySamePreset =
+      parsed.preset === acceptedStamp.preset &&
+      canonical.pathAndSearch === acceptedPathAndSearch &&
+      (canonical.hash !== acceptedHash || (stamp === null && host.location.href.endsWith('#')));
+
+    if (isHashOnlySamePreset) {
+      historyUrlDiverged = false;
+      pendingPopstateCandidate = null;
+      if (activePrompt?.kind === 'popstate') {
+        setPrompt(null);
+      }
+      if (stamp !== null && stamp.sessionId === sessionId) {
+        acceptedStamp = { ...stamp, preset: acceptedStamp.preset };
+        if (!parsed.isCanonical || stamp.preset !== acceptedStamp.preset) {
+          host.history.replaceState(acceptedStamp, '', canonical.relative);
+        }
+        setAcceptedUrl(canonical);
+        acceptedNavKey = navKey;
+      } else if (stamp === null) {
+        // Browser-pushed fragment entry (state === null): keep the current session intact
+        acceptedStamp = {
+          __rulecanvasRoute: true,
+          sessionId,
+          entryId: allocEntryId(),
+          index: acceptedStamp.index + 1,
+          preset: acceptedStamp.preset,
+        };
+        host.history.replaceState(acceptedStamp, '', canonical.relative);
+        setAcceptedUrl(canonical);
+        acceptedNavKey = currentNavKey();
+      } else {
+        // Foreign/old-session entry differing only in hash: isolate under a fresh session without resetting edits
+        sessionId = allocSessionId();
+        acceptedStamp = {
+          __rulecanvasRoute: true,
+          sessionId,
+          entryId: allocEntryId(),
+          index: 0,
+          preset: acceptedStamp.preset,
+        };
+        host.history.replaceState(acceptedStamp, '', canonical.relative);
+        setAcceptedUrl(canonical);
+        acceptedNavKey = currentNavKey();
+      }
+      return;
+    }
 
     // If editor is dirty, never silently overwrite — open or update single discard prompt
     if (isDirty()) {
@@ -320,7 +476,7 @@ export function createWorkbenchHistoryController<TPreset extends string>(
         preset: parsed.preset,
         stamp,
         navKey,
-        url: canonicalUrl,
+        url: canonical,
       };
       setPrompt({
         kind: 'popstate',
@@ -334,10 +490,10 @@ export function createWorkbenchHistoryController<TPreset extends string>(
     historyUrlDiverged = false;
     if (stamp !== null && stamp.sessionId === sessionId) {
       acceptedStamp = { ...stamp, preset: parsed.preset };
-      if (!parsed.isCanonical) {
-        host.history.replaceState(acceptedStamp, '', canonicalUrl);
+      if (!parsed.isCanonical || stamp.preset !== parsed.preset) {
+        host.history.replaceState(acceptedStamp, '', canonical.relative);
       }
-      acceptedUrl = canonicalUrl;
+      setAcceptedUrl(canonical);
       acceptedNavKey = navKey;
     } else {
       // External/old-session entry on clean editor: adopt cleanly under fresh session
@@ -349,14 +505,15 @@ export function createWorkbenchHistoryController<TPreset extends string>(
         index: 0,
         preset: parsed.preset,
       };
-      host.history.replaceState(acceptedStamp, '', canonicalUrl);
-      acceptedUrl = canonicalUrl;
+      host.history.replaceState(acceptedStamp, '', canonical.relative);
+      setAcceptedUrl(canonical);
       acceptedNavKey = currentNavKey();
     }
     onCommitPreset(parsed.preset);
   };
 
   const handleBeforeUnload = (event: unknown): void => {
+    if (disposed) return;
     if (approvedUnloadHref !== null) return;
     if (!isDirty()) return;
     const ev = event as { preventDefault?: () => void; returnValue?: string };
@@ -372,6 +529,7 @@ export function createWorkbenchHistoryController<TPreset extends string>(
     getAcceptedNavigationKey: () => acceptedNavKey,
 
     selectPreset(nextPreset: TPreset) {
+      if (disposed) return;
       approvedUnloadHref = null;
       if (isDirty()) {
         pendingPopstateCandidate = null;
@@ -386,20 +544,26 @@ export function createWorkbenchHistoryController<TPreset extends string>(
     },
 
     requestLinkNavigation(href: string, label: string) {
+      if (disposed) return;
+      const trimmedHref = href.trim();
+      if (!isSafeControllerNavigationHref(trimmedHref, host.location.href)) {
+        return;
+      }
       approvedUnloadHref = null;
       if (isDirty()) {
         pendingPopstateCandidate = null;
         setPrompt({
           kind: 'link',
-          targetHref: href,
+          targetHref: trimmedHref,
           label: `Open ${label}`,
         });
         return;
       }
-      host.location.assign(href);
+      host.location.assign(trimmedHref);
     },
 
     acceptPrompt() {
+      if (disposed) return;
       const prompt = activePrompt;
       if (prompt === null) return;
       setPrompt(null);
@@ -411,6 +575,9 @@ export function createWorkbenchHistoryController<TPreset extends string>(
 
       if (prompt.kind === 'link' && prompt.targetHref !== undefined) {
         const targetHref = prompt.targetHref;
+        if (!isSafeControllerNavigationHref(targetHref, host.location.href)) {
+          return;
+        }
         approvedUnloadHref = targetHref;
         try {
           host.location.assign(targetHref);
@@ -431,23 +598,26 @@ export function createWorkbenchHistoryController<TPreset extends string>(
 
         // Verify candidate currency against live location & Navigation API entry before committing
         const liveParsed = readPresetFromSearch(host.location.search, allowedPresets, defaultPreset);
-        const liveUrl = buildCanonicalPresetUrl(host.location.href, liveParsed.preset);
+        const liveCanonical = parseCanonicalPresetUrl(host.location.href, liveParsed.preset);
         const liveNavKey = currentNavKey();
         const liveRawState = host.history.state;
         const liveStamp = isHistoryStamp(liveRawState) ? liveRawState : null;
 
         const isCurrent =
-          liveUrl === candidate.url &&
+          liveCanonical.relative === candidate.url.relative &&
           (candidate.navKey === null || liveNavKey === candidate.navKey);
 
         const effectivePreset = isCurrent ? candidate.preset : liveParsed.preset;
-        const effectiveUrl = isCurrent ? candidate.url : liveUrl;
+        const effectiveCanonical = isCurrent ? candidate.url : liveCanonical;
         const effectiveStamp = isCurrent ? candidate.stamp : liveStamp;
         const effectiveNavKey = isCurrent ? candidate.navKey : liveNavKey;
 
         if (effectiveStamp !== null && effectiveStamp.sessionId === sessionId) {
           acceptedStamp = { ...effectiveStamp, preset: effectivePreset };
-          acceptedUrl = effectiveUrl;
+          if (!liveParsed.isCanonical || effectiveStamp.preset !== effectivePreset) {
+            host.history.replaceState(acceptedStamp, '', effectiveCanonical.relative);
+          }
+          setAcceptedUrl(effectiveCanonical);
           acceptedNavKey = effectiveNavKey;
         } else {
           sessionId = allocSessionId();
@@ -458,8 +628,8 @@ export function createWorkbenchHistoryController<TPreset extends string>(
             index: 0,
             preset: effectivePreset,
           };
-          host.history.replaceState(acceptedStamp, '', effectiveUrl);
-          acceptedUrl = effectiveUrl;
+          host.history.replaceState(acceptedStamp, '', effectiveCanonical.relative);
+          setAcceptedUrl(effectiveCanonical);
           acceptedNavKey = currentNavKey();
         }
         onCommitPreset(effectivePreset);
@@ -467,6 +637,7 @@ export function createWorkbenchHistoryController<TPreset extends string>(
     },
 
     declinePrompt() {
+      if (disposed) return;
       const prompt = activePrompt;
       if (prompt === null) return;
       setPrompt(null);
@@ -479,12 +650,17 @@ export function createWorkbenchHistoryController<TPreset extends string>(
     },
 
     dispose() {
+      if (disposed) return;
+      disposed = true;
       host.removeEventListener('popstate', handlePopstate);
       host.removeEventListener('beforeunload', handleBeforeUnload);
       restorationToken = null;
       pendingPopstateCandidate = null;
       historyUrlDiverged = false;
       approvedUnloadHref = null;
+      if (activePrompt !== null) {
+        setPrompt(null);
+      }
     },
   };
 }
@@ -513,11 +689,21 @@ export function useWorkbenchRoute<TPreset extends string>({
   const formatRef = useRef(formatPresetLabel);
   formatRef.current = formatPresetLabel;
 
+  const stableAllowedPresetsRef = useRef<readonly TPreset[]>(allowedPresets);
+  if (
+    stableAllowedPresetsRef.current.length !== allowedPresets.length ||
+    stableAllowedPresetsRef.current.some((preset, index) => preset !== allowedPresets[index])
+  ) {
+    stableAllowedPresetsRef.current = allowedPresets;
+  }
+  const stableAllowedPresets = stableAllowedPresetsRef.current;
+
   useEffect(() => {
     if (typeof window === 'undefined') return;
+    setPendingPrompt(null);
     const ctrl = createWorkbenchHistoryController<TPreset>({
       host: window as unknown as HistoryHostLike,
-      allowedPresets,
+      allowedPresets: stableAllowedPresets,
       defaultPreset,
       isDirty: () => isDirtyRef.current,
       onCommitPreset: (preset) => onCommitRef.current(preset),
@@ -530,23 +716,16 @@ export function useWorkbenchRoute<TPreset extends string>({
       if (controllerRef.current === ctrl) {
         controllerRef.current = null;
       }
+      setPendingPrompt(null);
     };
-  }, [allowedPresets, defaultPreset]);
+  }, [stableAllowedPresets, defaultPreset]);
 
   const selectPreset = useCallback((preset: TPreset) => {
-    if (controllerRef.current !== null) {
-      controllerRef.current.selectPreset(preset);
-    } else {
-      onCommitRef.current(preset);
-    }
+    controllerRef.current?.selectPreset(preset);
   }, []);
 
   const requestLinkNavigation = useCallback((href: string, label: string) => {
-    if (controllerRef.current !== null) {
-      controllerRef.current.requestLinkNavigation(href, label);
-    } else if (typeof window !== 'undefined') {
-      window.location.assign(href);
-    }
+    controllerRef.current?.requestLinkNavigation(href, label);
   }, []);
 
   const acceptPrompt = useCallback(() => {
@@ -554,7 +733,11 @@ export function useWorkbenchRoute<TPreset extends string>({
   }, []);
 
   const declinePrompt = useCallback(() => {
-    controllerRef.current?.declinePrompt();
+    if (controllerRef.current !== null) {
+      controllerRef.current.declinePrompt();
+    } else {
+      setPendingPrompt(null);
+    }
   }, []);
 
   return {
