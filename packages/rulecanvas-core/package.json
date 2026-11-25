@@ -2,6 +2,12 @@
   "name": "@rulecanvas/core",
   "version": "0.1.0",
   "type": "module",
+  "license": "MIT",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -10,6 +16,8 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "build:pack": "node -e \"import('node:fs').then((fs)=>fs.rmSync('dist',{recursive:true,force:true}))\" && tsc -p tsconfig.json --declarationMap false --sourceMap false",
+    "prepack": "pnpm run build:pack",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.test.json",
     "test": "pnpm run build && vitest run"
   }

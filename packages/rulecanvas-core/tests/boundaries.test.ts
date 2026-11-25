@@ -928,4 +928,166 @@ describe('architecture and honesty boundaries', () => {
 
     expect(violations).toEqual([]);
   });
+
+  it('enforces acyclic workspace package-manifest graph, strict layering, zero cross-app imports, and zero deep internal package imports', () => {
+    const allowedRuntimeDeps: Readonly<Record<string, ReadonlySet<string>>> = {
+      '@rulecanvas/core': new Set([]),
+      '@rulecanvas/ui': new Set(['@rulecanvas/core']),
+      '@rulecanvas/workbench': new Set(['@rulecanvas/core']),
+      '@rulecanvas/workbench-react': new Set([
+        '@rulecanvas/core',
+        '@rulecanvas/ui',
+        '@rulecanvas/workbench',
+      ]),
+      '@rulecanvas/agent-gate': new Set([
+        '@rulecanvas/core',
+        '@rulecanvas/ui',
+        '@rulecanvas/workbench',
+        '@rulecanvas/workbench-react',
+        'react',
+        'react-dom',
+      ]),
+      '@rulecanvas/interlock-sim': new Set([
+        '@rulecanvas/core',
+        '@rulecanvas/ui',
+        '@rulecanvas/workbench',
+        '@rulecanvas/workbench-react',
+        'react',
+        'react-dom',
+      ]),
+    };
+
+    const allowedPeerDeps: Readonly<Record<string, ReadonlySet<string>>> = {
+      '@rulecanvas/core': new Set([]),
+      '@rulecanvas/ui': new Set([]),
+      '@rulecanvas/workbench': new Set([]),
+      '@rulecanvas/workbench-react': new Set(['react']),
+      '@rulecanvas/agent-gate': new Set([]),
+      '@rulecanvas/interlock-sim': new Set([]),
+    };
+
+    const allowedPackageSubpaths = new Set([
+      '@rulecanvas/core',
+      '@rulecanvas/ui',
+      '@rulecanvas/workbench/verify',
+      '@rulecanvas/workbench/verify-worker',
+      '@rulecanvas/workbench/model-json',
+      '@rulecanvas/workbench-react',
+    ]);
+
+    const graph = new Map<string, string[]>();
+    const violations: string[] = [];
+
+    for (const group of ['packages', 'apps'] as const) {
+      const groupDir = path.join(REPO_ROOT, group);
+      if (!existsSync(groupDir)) continue;
+      for (const dirName of readdirSync(groupDir)) {
+        const wsDir = path.join(groupDir, dirName);
+        const pkgPath = path.join(wsDir, 'package.json');
+        if (!existsSync(pkgPath)) continue;
+        const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as {
+          name?: string;
+          dependencies?: Record<string, string>;
+          peerDependencies?: Record<string, string>;
+        };
+        const name = pkg.name ?? dirName;
+        const deps = Object.keys(pkg.dependencies ?? {});
+        const peers = Object.keys(pkg.peerDependencies ?? {});
+        const allowedRuntime = allowedRuntimeDeps[name];
+        const allowedPeers = allowedPeerDeps[name];
+
+        if (allowedRuntime !== undefined) {
+          for (const dep of deps) {
+            if (!allowedRuntime.has(dep)) {
+              violations.push(`${name}: disallowed runtime dependency "${dep}"`);
+            }
+          }
+        }
+        if (allowedPeers !== undefined) {
+          for (const peer of peers) {
+            if (!allowedPeers.has(peer)) {
+              violations.push(`${name}: disallowed peer dependency "${peer}"`);
+            }
+          }
+        }
+
+        const internalDeps = [...deps, ...peers].filter((d) => d.startsWith('@rulecanvas/'));
+        graph.set(name, internalDeps);
+
+        // Source-level checks across src/**/*.{ts,tsx}: no cross-app imports, no relative escapes, no disallowed @rulecanvas/* deep subpaths
+        const srcDir = path.join(wsDir, 'src');
+        if (!existsSync(srcDir)) continue;
+        const srcFiles = walkFiles(srcDir, (p) => p.endsWith('.ts') || p.endsWith('.tsx'));
+        for (const filePath of srcFiles) {
+          const content = readFileSync(filePath, 'utf8');
+          const parsed = parseSync(filePath, content, {
+            lang: filePath.endsWith('.tsx') ? 'tsx' : 'ts',
+          });
+          const specs: string[] = [];
+          const collect = (node: unknown): void => {
+            if (node === null || typeof node !== 'object') return;
+            if (Array.isArray(node)) {
+              for (const item of node) collect(item);
+              return;
+            }
+            const rec = node as Record<string, unknown>;
+            if (
+              (rec['type'] === 'ImportDeclaration' ||
+                rec['type'] === 'ExportNamedDeclaration' ||
+                rec['type'] === 'ExportAllDeclaration') &&
+              rec['source'] &&
+              typeof (rec['source'] as { value?: unknown }).value === 'string'
+            ) {
+              specs.push((rec['source'] as { value: string }).value);
+            } else if (
+              rec['type'] === 'ImportExpression' &&
+              rec['source'] &&
+              typeof (rec['source'] as { value?: unknown }).value === 'string'
+            ) {
+              specs.push((rec['source'] as { value: string }).value);
+            }
+            for (const val of Object.values(rec)) collect(val);
+          };
+          collect(parsed.program);
+
+          const relFile = path.relative(REPO_ROOT, filePath);
+          for (const spec of specs) {
+            if (spec.startsWith('@rulecanvas/')) {
+              if (!allowedPackageSubpaths.has(spec)) {
+                violations.push(`${relFile}: disallowed @rulecanvas subpath "${spec}"`);
+              }
+              if (group === 'apps' && (spec.includes('agent-gate') || spec.includes('interlock-sim'))) {
+                violations.push(`${relFile}: cross-app bare import "${spec}"`);
+              }
+            } else if (spec.startsWith('.')) {
+              const resolved = path.resolve(path.dirname(filePath), spec);
+              if (!resolved.startsWith(`${wsDir}${path.sep}`) && resolved !== wsDir) {
+                violations.push(`${relFile}: relative import escapes workspace package ("${spec}")`);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Topological cycle detection (DFS 3-color)
+    const state = new Map<string, 'visiting' | 'visited'>();
+    const visit = (node: string, stack: string[]): void => {
+      state.set(node, 'visiting');
+      for (const next of graph.get(node) ?? []) {
+        if (!graph.has(next)) continue;
+        if (state.get(next) === 'visiting') {
+          violations.push(`dependency cycle detected: ${[...stack, node, next].join(' -> ')}`);
+        } else if (state.get(next) !== 'visited') {
+          visit(next, [...stack, node]);
+        }
+      }
+      state.set(node, 'visited');
+    };
+    for (const node of graph.keys()) {
+      if (state.get(node) !== 'visited') visit(node, []);
+    }
+
+    expect(violations).toEqual([]);
+  });
 });

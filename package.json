@@ -12,12 +12,13 @@
     ]
   },
   "scripts": {
-    "build": "pnpm --filter @rulecanvas/core build && pnpm --filter @rulecanvas/ui build",
-    "typecheck": "pnpm build && pnpm -r typecheck",
-    "test": "pnpm build && vitest run",
-    "verify:boundaries": "pnpm build && vitest run packages/rulecanvas-core/tests/boundaries.test.ts",
+    "build:libs": "pnpm --filter @rulecanvas/core build && pnpm --filter @rulecanvas/ui build",
+    "build": "pnpm run build:libs && pnpm --filter @rulecanvas/agent-gate build && pnpm --filter @rulecanvas/interlock-sim build",
+    "typecheck": "pnpm run build:libs && pnpm -r typecheck",
+    "test": "pnpm run build:libs && vitest run",
+    "verify:boundaries": "pnpm run build:libs && vitest run packages/rulecanvas-core/tests/boundaries.test.ts",
     "verify:hygiene": "node scripts/check-test-hygiene.mjs",
-    "bench": "pnpm build && tsx packages/rulecanvas-core/bench/run-bench.ts"
+    "bench": "pnpm run build:libs && tsx packages/rulecanvas-core/bench/run-bench.ts"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",
