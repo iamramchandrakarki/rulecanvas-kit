@@ -446,14 +446,37 @@ const interlockJsonCodec = createModelJsonCodec(DEFAULT_MODEL_JSON_LIMITS);
 
 export function exportModelToJson(model: TransitionSystemModel): string {
   const res = interlockJsonCodec.encode(model);
-  if (!res.ok) {
-    throw new TypeError(res.error.message);
+  if (res.ok) {
+    return res.text;
   }
-  return res.text;
+  // Preserve baseline draft-export capability ONLY when a structurally clean draft fails solely on core semantic count rules (e.g., zero invariants)
+  const check = interlockJsonCodec.validateValue(model);
+  if (
+    !check.ok &&
+    check.errors.length > 0 &&
+    check.errors.every((err) => err.code === 'INVALID_INVARIANTS_COUNT')
+  ) {
+    const fallback = JSON.stringify(model, null, 2);
+    if (typeof fallback === 'string' && fallback.length <= DEFAULT_MODEL_JSON_LIMITS.maxChars) {
+      return fallback;
+    }
+  }
+  throw new TypeError(res.error.message);
 }
 
 export function tryExportModelJson(model: TransitionSystemModel): JsonExportResult {
-  return interlockJsonCodec.encode(model);
+  try {
+    return { ok: true, text: exportModelToJson(model) };
+  } catch (err) {
+    return {
+      ok: false,
+      error: {
+        code: 'JSON_EXPORT_ERROR',
+        path: '$',
+        message: err instanceof Error ? err.message : 'Unable to export current model to JSON.',
+      },
+    };
+  }
 }
 
 export function validateImportedModelValue(candidate: unknown): JsonImportResult {

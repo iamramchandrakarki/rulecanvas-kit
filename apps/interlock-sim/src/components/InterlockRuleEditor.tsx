@@ -40,6 +40,7 @@ export interface InterlockRuleEditorProps {
   readonly onChangeModel: (next: TransitionSystemModel) => void;
   readonly onImportModel: (imported: TransitionSystemModel) => void;
   readonly onDraftErrorChange?: ((fieldKey: string, errorMessage: string | null) => void) | undefined;
+  readonly onJsonDraftDirtyChange?: ((dirty: boolean) => void) | undefined;
 }
 
 function defaultRuleSelection(rules: readonly TransitionRule[]): string {
@@ -77,6 +78,7 @@ export function InterlockRuleEditor({
   onChangeModel,
   onImportModel,
   onDraftErrorChange,
+  onJsonDraftDirtyChange,
 }: InterlockRuleEditorProps) {
   const nextRowIdRef = useRef<number>(0);
   const prevResetKeyRef = useRef<string | number>(resetKey);
@@ -101,6 +103,9 @@ export function InterlockRuleEditor({
   );
 
   const [initialJsonExport] = useState(() => tryExportModelJson(model));
+  const committedJsonRef = useRef<string>(initialJsonExport.ok ? initialJsonExport.text : '');
+  const onJsonDraftDirtyChangeRef = useRef(onJsonDraftDirtyChange);
+  onJsonDraftDirtyChangeRef.current = onJsonDraftDirtyChange;
   const [jsonDraft, setJsonDraft] = useState<string>(() =>
     initialJsonExport.ok ? initialJsonExport.text : '',
   );
@@ -124,7 +129,9 @@ export function InterlockRuleEditor({
   useEffect(() => {
     const exported = tryExportModelJson(model);
     if (exported.ok) {
+      committedJsonRef.current = exported.text;
       setJsonDraft(exported.text);
+      onJsonDraftDirtyChangeRef.current?.(false);
       setExportError(null);
       setJsonErrors([]);
       if (preserveNextNoticeRef.current) {
@@ -134,7 +141,9 @@ export function InterlockRuleEditor({
       }
     } else {
       preserveNextNoticeRef.current = false;
+      committedJsonRef.current = '';
       setJsonDraft('');
+      onJsonDraftDirtyChangeRef.current?.(false);
       setExportError(exported.error);
       setJsonErrors([]);
       setJsonNotice(null);
@@ -601,7 +610,11 @@ export function InterlockRuleEditor({
             className="is-textarea is-textarea-mono"
             spellCheck={false}
             value={jsonDraft}
-            onChange={(e) => setJsonDraft(e.target.value)}
+            onChange={(e) => {
+              const nextVal = e.target.value;
+              setJsonDraft(nextVal);
+              onJsonDraftDirtyChangeRef.current?.(nextVal !== committedJsonRef.current);
+            }}
           />
         </div>
       </div>

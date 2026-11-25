@@ -1,5 +1,8 @@
-import { useEffect, useId, useRef, useState } from 'react';
-import { parseStrictIntegerDraft } from '../model-inspector.js';
+import { useMemo } from 'react';
+import {
+  StrictIntegerInput as SharedStrictIntegerInput,
+  type LiftedIntDraftStore,
+} from '@rulecanvas/workbench-react';
 
 export interface StrictIntegerInputProps {
   readonly id?: string | undefined;
@@ -30,104 +33,34 @@ export function StrictIntegerInput({
   externalError,
   onDraftChange,
   onValidityChange,
-  showInlineError = true,
 }: StrictIntegerInputProps) {
-  const autoErrorId = useId();
-  const isControlled = fieldKey !== undefined && onDraftChange !== undefined;
-
-  const [localDraft, setLocalDraft] = useState<string>(() => String(value));
-  const [localError, setLocalError] = useState<string | null>(null);
-
-  const prevValueRef = useRef<number>(value);
-  const prevResetKeyRef = useRef<string | number | undefined>(resetKey);
-  const onValidityChangeRef = useRef(onValidityChange);
-  onValidityChangeRef.current = onValidityChange;
-  const onDraftChangeRef = useRef(onDraftChange);
-  onDraftChangeRef.current = onDraftChange;
-
-  useEffect(() => {
-    const resetChanged = prevResetKeyRef.current !== resetKey;
-    const valueChanged = prevValueRef.current !== value;
-    if (!resetChanged && !valueChanged) {
-      return;
-    }
-
-    prevResetKeyRef.current = resetKey;
-    prevValueRef.current = value;
-
-    if (!isControlled) {
-      setLocalDraft(String(value));
-      setLocalError(null);
-      if (fieldKey !== undefined) {
-        onValidityChangeRef.current?.(fieldKey, null);
-      }
-    } else if (
-      !resetChanged &&
-      valueChanged &&
-      externalDraft !== undefined &&
-      externalError === undefined
-    ) {
-      onDraftChangeRef.current?.(fieldKey, String(value), null);
-    }
-  }, [value, resetKey, fieldKey, isControlled, externalDraft, externalError]);
-
-  const displayedDraft = isControlled
-    ? externalDraft !== undefined
-      ? externalDraft
-      : String(value)
-    : localDraft;
-  const displayedError = isControlled ? (externalError ?? null) : localError;
-
-  const handleChange = (raw: string) => {
-    const parsed = parseStrictIntegerDraft(raw);
-    if (!parsed.ok) {
-      if (isControlled) {
-        onDraftChange(fieldKey, raw, parsed.message);
-      } else {
-        setLocalDraft(raw);
-        setLocalError(parsed.message);
-        if (fieldKey !== undefined) {
-          onValidityChangeRef.current?.(fieldKey, parsed.message);
-        }
-      }
-      return;
-    }
-
-    prevValueRef.current = parsed.value;
-    if (isControlled) {
-      onDraftChange(fieldKey, raw, null);
-    } else {
-      setLocalDraft(raw);
-      setLocalError(null);
-      if (fieldKey !== undefined) {
-        onValidityChangeRef.current?.(fieldKey, null);
-      }
-    }
-    if (parsed.value !== value) {
-      onCommit(parsed.value);
-    }
-  };
-
-  const errorId = `${autoErrorId}-err`;
+  const draftStore = useMemo<LiftedIntDraftStore | undefined>(() => {
+    if (fieldKey === undefined || onDraftChange === undefined) return undefined;
+    return {
+      draftValues: externalDraft !== undefined ? { [fieldKey]: externalDraft } : {},
+      draftErrors: externalError !== undefined ? { [fieldKey]: externalError } : {},
+      onDraftChange,
+      onPruneDrafts: () => {},
+    };
+  }, [fieldKey, externalDraft, externalError, onDraftChange]);
 
   return (
-    <span className="is-strict-int-wrap">
-      <input
-        id={id}
-        type="text"
-        inputMode="numeric"
-        className={className}
-        aria-label={ariaLabel}
-        aria-invalid={displayedError !== null ? 'true' : undefined}
-        aria-describedby={displayedError !== null && showInlineError ? errorId : undefined}
-        value={displayedDraft}
-        onChange={(e) => handleChange(e.target.value)}
-      />
-      {displayedError !== null && showInlineError && (
-        <span id={errorId} className="is-field-error" role="alert">
-          {displayedError}
-        </span>
-      )}
-    </span>
+    <SharedStrictIntegerInput
+      id={id}
+      value={value}
+      ariaLabel={ariaLabel}
+      className={className}
+      wrapperClassName="is-strict-int-wrap"
+      errorClassName="is-field-error"
+      resetKey={resetKey}
+      fieldKey={fieldKey}
+      draftStore={draftStore}
+      onCommit={onCommit}
+      onValidationErrorChange={
+        fieldKey !== undefined && onValidityChange !== undefined
+          ? (err) => onValidityChange(fieldKey, err)
+          : undefined
+      }
+    />
   );
 }
