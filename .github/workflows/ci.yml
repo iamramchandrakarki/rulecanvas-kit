@@ -31,6 +31,9 @@ jobs:
       - name: Build AgentGate workbench
         run: pnpm --filter @rulecanvas/agent-gate build
 
+      - name: Build InterlockSim workbench
+        run: pnpm --filter @rulecanvas/interlock-sim build
+
       - name: Typecheck workspace
         run: pnpm typecheck
 
