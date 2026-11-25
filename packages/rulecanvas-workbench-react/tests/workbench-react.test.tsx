@@ -2,7 +2,7 @@ import { act, createElement } from 'react';
 import { createRoot } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { buildVerdictSummaryView } from '@rulecanvas/ui';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   AssumptionsList,
   StrictIntegerInput,
@@ -33,7 +33,7 @@ function createFakeHistoryHost(
   readonly host: HistoryHostLike;
   readonly entries: FakeEntry[];
   readonly getCursor: () => number;
-  readonly navigateToIndex: (index: number) => void;
+  readonly navigateToIndex: (index: number, emit?: boolean) => void;
   readonly pushFragment: (hash: string) => void;
   readonly emitPopstate: () => void;
   readonly flushTraversals: () => void;
@@ -140,9 +140,9 @@ function createFakeHistoryHost(
     host,
     entries,
     getCursor: () => cursor,
-    navigateToIndex(index: number) {
+    navigateToIndex(index: number, emit = true) {
       cursor = index;
-      emitPopstate();
+      if (emit) emitPopstate();
     },
     pushFragment(hash: string) {
       const nextUrl = new URL(hash, entries[cursor]!.url).href;
@@ -625,6 +625,72 @@ describe('@rulecanvas/workbench-react components, navigation, and race-safe hist
     expect(box.prompt).toBeNull();
     expect(commits).toEqual(['b']);
 
+    fake.navigateToIndex(1);
+    fake.pushFragment('#');
+    fake.navigateToIndex(1);
+    expect(box.prompt).toBeNull();
+    expect(commits).toEqual(['b']);
+
+    ctrl.dispose();
+  });
+
+  it('consumes both traversal promises and keeps the accepted stamp if settlement precedes popstate', async () => {
+    const fake = createFakeHistoryHost('https://example.org/app/?preset=a', true);
+    const baseNav = fake.host.navigation!;
+    let abort = false;
+    let rejectCommitted!: () => void;
+    const committed = new Promise<void>((_, reject) => {
+      rejectCommitted = () => reject(new DOMException('Traversal aborted', 'AbortError'));
+    });
+    const consumeCommitted = vi.spyOn(committed, 'catch');
+    const host: HistoryHostLike = {
+      ...fake.host,
+      navigation: {
+        get currentEntry() {
+          return baseNav.currentEntry;
+        },
+        entries: () => baseNav.entries!(),
+        traverseTo: (key) => {
+          if (abort) {
+            return {
+              committed,
+              finished: Promise.reject(new DOMException('Traversal aborted', 'AbortError')),
+            };
+          }
+          fake.navigateToIndex(fake.entries.findIndex((entry) => entry.key === key), false);
+          return { committed: Promise.resolve(), finished: Promise.resolve() };
+        },
+      },
+    };
+    let dirty = false;
+    const onCommitPreset = vi.fn();
+    const ctrl = createWorkbenchHistoryController<TestPreset>({
+      host,
+      allowedPresets: ['a', 'b', 'c'],
+      defaultPreset: 'a',
+      isDirty: () => dirty,
+      onCommitPreset,
+      onPromptChange: () => {},
+    });
+
+    ctrl.selectPreset('b');
+    const original = ctrl.getAcceptedStamp();
+    dirty = true;
+    fake.navigateToIndex(0);
+    ctrl.declinePrompt();
+    await Promise.resolve();
+    expect(ctrl.getAcceptedStamp()).toEqual(original);
+    fake.emitPopstate();
+    expect(onCommitPreset).toHaveBeenCalledExactlyOnceWith('b');
+
+    abort = true;
+    fake.navigateToIndex(0);
+    ctrl.declinePrompt();
+    expect(consumeCommitted).toHaveBeenCalledOnce();
+    rejectCommitted();
+    await Promise.resolve();
+    expect(ctrl.getAcceptedStamp().preset).toBe('b');
+    expect(onCommitPreset).toHaveBeenCalledExactlyOnceWith('b');
     ctrl.dispose();
   });
 

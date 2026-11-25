@@ -15,7 +15,10 @@ export interface NavigationEntryLike {
 export interface NavigationApiLike {
   readonly currentEntry?: NavigationEntryLike | null | undefined;
   entries?: (() => readonly NavigationEntryLike[]) | undefined;
-  traverseTo?: ((key: string) => { readonly finished?: Promise<unknown> }) | undefined;
+  traverseTo?: ((key: string) => {
+    readonly committed?: Promise<unknown>;
+    readonly finished?: Promise<unknown>;
+  }) | undefined;
 }
 
 export interface HistoryHostLike {
@@ -65,14 +68,19 @@ interface CanonicalRelativeUrl {
   readonly relative: string;
 }
 
+function getUrlHash(url: URL): string {
+  return url.hash || (url.href.endsWith('#') ? '#' : '');
+}
+
 function parseCanonicalPresetUrl(currentHref: string, preset: string): CanonicalRelativeUrl {
   const url = new URL(currentHref);
   url.searchParams.set('preset', preset);
   const pathAndSearch = `${url.pathname}${url.search}`;
+  const hash = getUrlHash(url);
   return {
     pathAndSearch,
-    hash: url.hash,
-    relative: `${pathAndSearch}${url.hash}`,
+    hash,
+    relative: `${pathAndSearch}${hash}`,
   };
 }
 
@@ -236,7 +244,7 @@ export function createWorkbenchHistoryController<TPreset extends string>(
 
   const getLiveRelativeUrl = (): string => {
     const parsedUrl = new URL(host.location.href);
-    return `${parsedUrl.pathname}${parsedUrl.search}${parsedUrl.hash}`;
+    return `${parsedUrl.pathname}${parsedUrl.search}${getUrlHash(parsedUrl)}`;
   };
 
   const setPrompt = (next: PendingDiscardPrompt<TPreset> | null): void => {
@@ -244,14 +252,18 @@ export function createWorkbenchHistoryController<TPreset extends string>(
     onPromptChange(next);
   };
 
-  const applyFreshSessionReplaceRecovery = (): void => {
-    if (disposed) return;
+  const clearRestoration = (): void => {
     restorationToken = null;
     pendingPopstateCandidate = null;
     historyUrlDiverged = false;
     if (activePrompt?.kind === 'popstate') {
       setPrompt(null);
     }
+  };
+
+  const applyFreshSessionReplaceRecovery = (): void => {
+    if (disposed) return;
+    clearRestoration();
 
     sessionId = allocSessionId();
     acceptedStamp = {
@@ -263,6 +275,22 @@ export function createWorkbenchHistoryController<TPreset extends string>(
     };
     host.history.replaceState(acceptedStamp, '', acceptedUrl);
     acceptedNavKey = currentNavKey();
+  };
+
+  const settleRestoration = (token: NonNullable<typeof restorationToken>): void => {
+    if (disposed || restorationToken !== token) return;
+    const state = host.history.state;
+    if (
+      isHistoryStamp(state) &&
+      state.sessionId === token.sessionId &&
+      state.entryId === token.entryId &&
+      currentNavKey() === token.navKey &&
+      getLiveRelativeUrl() === acceptedUrl
+    ) {
+      clearRestoration();
+      return;
+    }
+    applyFreshSessionReplaceRecovery();
   };
 
   const restoreAcceptedUrl = (): void => {
@@ -300,20 +328,10 @@ export function createWorkbenchHistoryController<TPreset extends string>(
       restorationToken = token;
       try {
         const navResult = host.navigation.traverseTo(acceptedNavKey);
-        if (navResult?.finished !== undefined) {
-          void navResult.finished.then(
-            () => {
-              if (!disposed && restorationToken === token) {
-                applyFreshSessionReplaceRecovery();
-              }
-            },
-            () => {
-              if (!disposed && restorationToken === token) {
-                applyFreshSessionReplaceRecovery();
-              }
-            },
-          );
-        }
+        // An aborted traversal can reject both promises. Recover once through finished.
+        void navResult?.committed?.catch(() => {});
+        const settle = () => settleRestoration(token);
+        void navResult?.finished?.then(settle, settle);
       } catch {
         applyFreshSessionReplaceRecovery();
       }
@@ -371,32 +389,14 @@ export function createWorkbenchHistoryController<TPreset extends string>(
   const handlePopstate = (): void => {
     if (disposed) return;
     approvedUnloadHref = null;
+    if (restorationToken !== null) {
+      settleRestoration(restorationToken);
+      return;
+    }
+
     const rawState = host.history.state;
     const stamp = isHistoryStamp(rawState) ? rawState : null;
     const navKey = currentNavKey();
-
-    // Active target-specific restoration guard
-    if (restorationToken !== null) {
-      const token = restorationToken;
-      if (
-        stamp !== null &&
-        stamp.sessionId === token.sessionId &&
-        stamp.entryId === token.entryId &&
-        navKey === token.navKey &&
-        getLiveRelativeUrl() === acceptedUrl
-      ) {
-        restorationToken = null;
-        pendingPopstateCandidate = null;
-        historyUrlDiverged = false;
-        if (activePrompt?.kind === 'popstate') {
-          setPrompt(null);
-        }
-        return;
-      }
-      // Unowned or superseding navigation while restoring -> fresh-session replaceState recovery
-      applyFreshSessionReplaceRecovery();
-      return;
-    }
 
     const parsed = readPresetFromSearch(host.location.search, allowedPresets, defaultPreset);
     const canonical = parseCanonicalPresetUrl(host.location.href, parsed.preset);
@@ -425,7 +425,7 @@ export function createWorkbenchHistoryController<TPreset extends string>(
     const isHashOnlySamePreset =
       parsed.preset === acceptedStamp.preset &&
       canonical.pathAndSearch === acceptedPathAndSearch &&
-      (canonical.hash !== acceptedHash || (stamp === null && host.location.href.endsWith('#')));
+      canonical.hash !== acceptedHash;
 
     if (isHashOnlySamePreset) {
       historyUrlDiverged = false;

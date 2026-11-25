@@ -174,12 +174,12 @@ function main() {
   }
   const browserFiles = [];
   walkTestFiles(path.join(REPO_ROOT, 'tests'), browserFiles, true);
-  files.push(...browserFiles);
 
   if (files.length === 0 || browserFiles.length === 0) {
     console.error('ERROR: Missing unit/integration or browser test files under packages/, apps/, or tests/.');
     process.exit(1);
   }
+  files.push(...browserFiles);
 
   const allViolations = [];
   for (const file of files) {
