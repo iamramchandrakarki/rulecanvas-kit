@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -61,4 +62,16 @@ assert(typeof wbReact.useVerificationSnapshot === 'function', '@rulecanvas/workb
 assert(typeof wbReact.WorkbenchNavigation === 'function', '@rulecanvas/workbench-react missing WorkbenchNavigation');
 assert(typeof wbReact.createWorkbenchHistoryController === 'function', '@rulecanvas/workbench-react missing createWorkbenchHistoryController');
 
-console.log('verify:exports passed across all 4 library packages and 6 public entry points (pure Node ESM, zero DOM globals).');
+// 3. Verify plain Node/tsx SSR-safe import of both application entry modules (zero Vite globals)
+execFileSync(
+  'pnpm',
+  [
+    'exec',
+    'tsx',
+    '-e',
+    "import('./apps/agent-gate/src/App.tsx').then((a) => import('./apps/interlock-sim/src/App.tsx').then((b) => { if (typeof a.App !== 'function' || typeof b.App !== 'function') process.exit(1); }))",
+  ],
+  { cwd: REPO_ROOT, stdio: 'inherit' },
+);
+
+console.log('verify:exports passed across all 4 library packages, 6 public entry points, and SSR app module imports (zero DOM globals).');

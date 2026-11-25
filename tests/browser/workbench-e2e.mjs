@@ -142,9 +142,11 @@ try {
   assert(!(await page.getByText('OUTDATED:', { exact: false }).first().isVisible()),
     'Fresh AgentGate verdict marked outdated');
   assert(page.url().includes('preset=principled-fix'), `Expected preset=principled-fix in URL: ${page.url()}`);
+  await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'agent-gate-principled-verified-1280.png') });
 
   await page.getByRole('button', { name: 'Compare All 5 Presets' }).click();
   await page.locator('.ag-comparison-section').getByText('Naive Patch A').first().waitFor({ state: 'visible' });
+  await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'agent-gate-comparison-1280.png') });
   await page.getByRole('button', { name: 'Compare All 5 Presets' }).click();
 
   // Dirty-edit Back/Forward guard on AgentGate
@@ -193,10 +195,39 @@ try {
   assert(!(await page.getByText('OUTDATED:', { exact: false }).first().isVisible()),
     'Fresh InterlockSim verdict marked outdated');
   assert((await page.locator('body').innerText()).includes('29'), 'Expected 29 states after repair');
+  await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'interlock-sim-repaired-verified-1280.png') });
+
+  // Dirty JSON draft protection + alertdialog focus management + focus restoration on InterlockSim
+  await page.getByRole('tab', { name: 'JSON' }).click();
+  const interlockJsonArea = page.locator('#interlock-json-textarea');
+  await interlockJsonArea.waitFor({ state: 'visible' });
+  const originalInterlockJson = await interlockJsonArea.inputValue();
+  await interlockJsonArea.fill(`${originalInterlockJson}\n `);
+  await page.locator('#preset-select').focus();
+  await page.locator('#preset-select').selectOption('vacuous');
+  await page.getByRole('alertdialog').waitFor({ state: 'visible' });
+  const interlockDialogFocus = await page.evaluate(
+    () => document.activeElement?.textContent?.trim() ?? '',
+  );
+  assert(
+    interlockDialogFocus === 'Stay Here',
+    `Expected InterlockSim alertdialog to focus "Stay Here", got "${interlockDialogFocus}"`,
+  );
+  await page.getByRole('button', { name: 'Stay Here' }).click();
+  const interlockRestoredFocus = await page.evaluate(() => document.activeElement?.id ?? '');
+  assert(
+    interlockRestoredFocus === 'preset-select',
+    `Expected InterlockSim focus return to "preset-select", got "${interlockRestoredFocus}"`,
+  );
+  assert(
+    (await interlockJsonArea.inputValue()) === `${originalInterlockJson}\n `,
+    'Dirty InterlockSim JSON draft lost after declining discard prompt',
+  );
 
   // Preset URL direct load (?preset=vacuous)
   await page.goto(`${baseUrl}/suite/interlock-sim/?preset=vacuous`, { waitUntil: 'networkidle' });
   await page.getByText('VERIFIED (GOAL UNREACHABLE)').first().waitFor({ state: 'visible' });
+  await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'interlock-sim-vacuous-1280.png') });
 
   // Tablet & Mobile InterlockSim
   await page.setViewportSize({ width: 768, height: 1024 });
@@ -212,12 +243,13 @@ try {
   await page.waitForURL('**/suite/agent-gate/**');
   await page.getByText('VIOLATED', { exact: false }).first().waitFor({ state: 'visible' });
 
-  // --- 3. Dirty JSON draft protection + alertdialog focus management ---
+  // --- 3. Dirty JSON draft protection + alertdialog focus management + same-preset Back/Reselect URL sync ---
   await page.getByRole('tab', { name: 'JSON' }).click();
   const jsonArea = page.locator('#model-json-textarea');
   await jsonArea.waitFor({ state: 'visible' });
   const originalJson = await jsonArea.inputValue();
   await jsonArea.fill(`${originalJson}\n `);
+  await page.locator('#preset-select').focus();
   await page.locator('#preset-select').selectOption('naive-patch-a');
   await page.getByRole('alertdialog').waitFor({ state: 'visible' });
   const focusedInDialog = await page.evaluate(() => document.activeElement?.textContent?.trim() ?? '');
@@ -226,9 +258,52 @@ try {
     `Expected alertdialog to focus "Stay Here" button, got "${focusedInDialog}"`,
   );
   await page.getByRole('button', { name: 'Stay Here' }).click();
+  const agentGateRestoredFocus = await page.evaluate(() => document.activeElement?.id ?? '');
+  assert(
+    agentGateRestoredFocus === 'preset-select',
+    `Expected AgentGate focus return to "preset-select", got "${agentGateRestoredFocus}"`,
+  );
   assert(
     (await jsonArea.inputValue()) === `${originalJson}\n `,
     'Dirty JSON draft was lost after declining discard prompt',
+  );
+
+  // Copy JSON clipboard-unavailable fallback synchronizes text and clears dirty flag
+  await page.evaluate(() => {
+    try {
+      Object.defineProperty(navigator, 'clipboard', {
+        value: undefined,
+        configurable: true,
+      });
+    } catch {
+      // ignore if non-configurable
+    }
+  });
+  await page.getByRole('button', { name: 'Copy JSON' }).click();
+  await page
+    .getByText('Synchronized current model JSON in the text area.', { exact: true })
+    .waitFor({ state: 'visible' });
+  await page.locator('#preset-select').selectOption('naive-patch-a');
+  await page.waitForURL('**/suite/agent-gate/?preset=naive-patch-a');
+  assert(
+    (await page.getByRole('alertdialog').count()) === 0,
+    'Copy JSON fallback left stale dirty flag and opened discard prompt',
+  );
+
+  // Back while dirty on principled-fix -> reselect principled-fix -> approve discard -> URL updates back to principled-fix
+  await page.goto(`${baseUrl}/suite/agent-gate/?preset=broken`, { waitUntil: 'networkidle' });
+  await page.locator('#preset-select').selectOption('principled-fix');
+  await page.waitForURL('**/suite/agent-gate/?preset=principled-fix');
+  await page.getByRole('tab', { name: 'Schema & State' }).click();
+  await page.locator('#model-name-input').fill('Dirty Before Back');
+  await page.goBack();
+  await page.getByRole('alertdialog').waitFor({ state: 'visible' });
+  await page.locator('#preset-select').selectOption('principled-fix');
+  await page.getByRole('button', { name: 'Discard & Continue' }).click();
+  await page.waitForURL('**/suite/agent-gate/?preset=principled-fix');
+  assert(
+    page.url().includes('preset=principled-fix'),
+    `Expected URL to restore preset=principled-fix after discard approval, got ${page.url()}`,
   );
 
   // --- 4. No-Navigation-API fallback recovery (fresh-session replaceState) ---
@@ -320,9 +395,13 @@ try {
         screenshotDir: SCREENSHOT_DIR,
         screenshots: [
           'agent-gate-desktop-1280.png',
+          'agent-gate-principled-verified-1280.png',
+          'agent-gate-comparison-1280.png',
           'agent-gate-tablet-768.png',
           'agent-gate-mobile-390.png',
           'interlock-sim-desktop-1280.png',
+          'interlock-sim-repaired-verified-1280.png',
+          'interlock-sim-vacuous-1280.png',
           'interlock-sim-tablet-768.png',
           'interlock-sim-mobile-390.png',
         ],

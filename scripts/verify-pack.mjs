@@ -66,22 +66,30 @@ try {
     const tgzPath = path.join(tarDir, match);
     packedTarballs.set(lib.name, tgzPath);
 
-    // 2. Inspect tarball contents
+    // 2. Inspect tarball contents against a positive archive allowlist
     const tarEntries = execFileSync('tar', ['-tzf', tgzPath], { encoding: 'utf8' })
       .trim()
       .split('\n')
       .filter(Boolean);
 
-    assert(tarEntries.includes('package/package.json'), `${lib.name}: missing package.json in tarball`);
-    assert(tarEntries.includes('package/README.md'), `${lib.name}: missing README.md in tarball`);
-    assert(tarEntries.includes('package/LICENSE'), `${lib.name}: missing LICENSE in tarball`);
+    const fileEntries = tarEntries.filter((entry) => !entry.endsWith('/'));
+    assert(fileEntries.includes('package/package.json'), `${lib.name}: missing package.json in tarball`);
+    assert(fileEntries.includes('package/README.md'), `${lib.name}: missing README.md in tarball`);
+    assert(fileEntries.includes('package/LICENSE'), `${lib.name}: missing LICENSE in tarball`);
 
-    for (const entry of tarEntries) {
-      assert(!entry.endsWith('.map'), `${lib.name}: tarball must not include map file ${entry}`);
-      assert(!entry.startsWith('package/src/'), `${lib.name}: tarball must not include src/ (${entry})`);
-      assert(!entry.startsWith('package/tests/'), `${lib.name}: tarball must not include tests/ (${entry})`);
-      assert(!entry.includes('.planning'), `${lib.name}: tarball leaked planning path (${entry})`);
+    let builtJsCount = 0;
+    let builtDtsCount = 0;
+    for (const entry of fileEntries) {
+      const inAllowlist =
+        entry === 'package/package.json' ||
+        entry === 'package/README.md' ||
+        entry === 'package/LICENSE' ||
+        /^package\/dist\/.+\.(?:js|d\.ts|d\.mts)$/.test(entry);
+      assert(inAllowlist, `${lib.name}: unexpected archive entry outside allowlist (${entry})`);
+      if (/^package\/dist\/.+\.js$/.test(entry)) builtJsCount += 1;
+      if (/^package\/dist\/.+\.d\.(?:ts|mts)$/.test(entry)) builtDtsCount += 1;
     }
+    assert(builtJsCount > 0 && builtDtsCount > 0, `${lib.name}: missing dist JS or .d.ts files in tarball`);
 
     // Inspect tarball contents in an isolated inspection dir (install happens via pnpm below)
     const inspectDir = path.join(tmpRoot, 'inspect', ...lib.name.split('/'));
@@ -137,13 +145,9 @@ try {
     );
   }
 
-  function collectHostNativeBindingTarballs() {
-    const virtualStore = path.join(REPO_ROOT, 'node_modules/.pnpm');
-    if (!existsSync(virtualStore)) {
-      return {};
-    }
-    const specs = {};
-    const stageNativeDir = (entryPath) => {
+  function collectPinnedConsumerDepTarballs() {
+    const depSpecs = {};
+    const stageDirAsTarball = (entryPath) => {
       if (!existsSync(entryPath)) return;
       const realDir = realpathSync(entryPath);
       const pkgJsonPath = path.join(realDir, 'package.json');
@@ -152,68 +156,82 @@ try {
       const pkgName = pkg.name;
       const pkgVersion = pkg.version;
       if (typeof pkgName !== 'string' || typeof pkgVersion !== 'string') return;
-      if (Object.hasOwn(specs, pkgName)) return;
+      if (Object.hasOwn(depSpecs, pkgName)) return;
 
       const safeKey = pkgName.replace(/^@/, '').replaceAll('/', '-');
-      const stageParent = path.join(tmpRoot, 'native-stage', safeKey);
+      const stageParent = path.join(tmpRoot, 'dep-stage', safeKey);
       const stagePkgDir = path.join(stageParent, 'package');
-      const nativeTarDir = path.join(tmpRoot, 'native-tarballs');
+      const depTarDir = path.join(tmpRoot, 'dep-tarballs');
       mkdirSync(stageParent, { recursive: true });
-      mkdirSync(nativeTarDir, { recursive: true });
+      mkdirSync(depTarDir, { recursive: true });
       cpSync(realDir, stagePkgDir, { recursive: true, dereference: true });
 
-      const tgzPath = path.join(nativeTarDir, `${safeKey}-${pkgVersion}.tgz`);
+      const tgzPath = path.join(depTarDir, `${safeKey}-${pkgVersion}.tgz`);
       execFileSync('tar', ['-czf', tgzPath, '-C', stageParent, 'package']);
-      specs[pkgName] = `file:${tgzPath}`;
+      depSpecs[pkgName] = `file:${tgzPath}`;
     };
 
-    for (const entry of readdirSync(virtualStore)) {
-      if (entry.startsWith('rolldown@')) {
-        const scopeDir = path.join(virtualStore, entry, 'node_modules/@rolldown');
-        if (existsSync(scopeDir)) {
-          for (const sub of readdirSync(scopeDir)) {
-            if (sub.startsWith('binding-')) {
-              stageNativeDir(path.join(scopeDir, sub));
-            }
+    // Pack pinned React 19 peer, react-dom, TypeScript types, and transitive peers from the locked repo store
+    const agentGateNm = path.join(REPO_ROOT, 'apps/agent-gate/node_modules');
+    for (const depName of ['react', 'react-dom', '@types/react', '@types/react-dom']) {
+      const linkPath = path.join(agentGateNm, ...depName.split('/'));
+      stageDirAsTarball(linkPath);
+      if (existsSync(linkPath)) {
+        const realDep = realpathSync(linkPath);
+        const siblingNm = depName.startsWith('@')
+          ? path.resolve(realDep, '../..')
+          : path.resolve(realDep, '..');
+        for (const sibling of ['scheduler', 'csstype']) {
+          const sibPath = path.join(siblingNm, sibling);
+          if (existsSync(sibPath)) {
+            stageDirAsTarball(sibPath);
           }
         }
-      } else if (entry.startsWith('lightningcss@')) {
-        const modDir = path.join(virtualStore, entry, 'node_modules');
-        if (existsSync(modDir)) {
-          for (const sub of readdirSync(modDir)) {
-            if (sub.startsWith('lightningcss-')) {
-              stageNativeDir(path.join(modDir, sub));
+      }
+    }
+
+    // Pack host-platform native optional packages from the frozen pnpm virtual store
+    const virtualStore = path.join(REPO_ROOT, 'node_modules/.pnpm');
+    if (existsSync(virtualStore)) {
+      for (const entry of readdirSync(virtualStore)) {
+        if (entry.startsWith('rolldown@')) {
+          const scopeDir = path.join(virtualStore, entry, 'node_modules/@rolldown');
+          if (existsSync(scopeDir)) {
+            for (const sub of readdirSync(scopeDir)) {
+              if (sub.startsWith('binding-')) {
+                stageDirAsTarball(path.join(scopeDir, sub));
+              }
             }
           }
-        }
-      } else if (entry.startsWith('typescript@')) {
-        const scopeDir = path.join(virtualStore, entry, 'node_modules/@typescript');
-        if (existsSync(scopeDir)) {
-          for (const sub of readdirSync(scopeDir)) {
-            if (sub.startsWith('typescript-')) {
-              stageNativeDir(path.join(scopeDir, sub));
+        } else if (entry.startsWith('lightningcss@')) {
+          const modDir = path.join(virtualStore, entry, 'node_modules');
+          if (existsSync(modDir)) {
+            for (const sub of readdirSync(modDir)) {
+              if (sub.startsWith('lightningcss-')) {
+                stageDirAsTarball(path.join(modDir, sub));
+              }
+            }
+          }
+        } else if (entry.startsWith('typescript@')) {
+          const scopeDir = path.join(virtualStore, entry, 'node_modules/@typescript');
+          if (existsSync(scopeDir)) {
+            for (const sub of readdirSync(scopeDir)) {
+              if (sub.startsWith('typescript-')) {
+                stageDirAsTarball(path.join(scopeDir, sub));
+              }
             }
           }
         }
       }
     }
-    return specs;
+    return depSpecs;
   }
 
-  // 3. Read exact installed versions for offline pnpm consumer install (zero workspace symlinks)
+  // 3. Read exact installed versions and pack pinned offline tarballs (zero workspace symlinks)
   const readInstalledVersion = (pkgJsonPath) =>
     JSON.parse(readFileSync(pkgJsonPath, 'utf8')).version;
   const reactVer = readInstalledVersion(
     path.join(REPO_ROOT, 'apps/agent-gate/node_modules/react/package.json'),
-  );
-  const reactDomVer = readInstalledVersion(
-    path.join(REPO_ROOT, 'apps/agent-gate/node_modules/react-dom/package.json'),
-  );
-  const typesReactVer = readInstalledVersion(
-    path.join(REPO_ROOT, 'apps/agent-gate/node_modules/@types/react/package.json'),
-  );
-  const typesReactDomVer = readInstalledVersion(
-    path.join(REPO_ROOT, 'apps/agent-gate/node_modules/@types/react-dom/package.json'),
   );
   const tsVer = readInstalledVersion(
     path.join(REPO_ROOT, 'node_modules/typescript/package.json'),
@@ -225,7 +243,18 @@ try {
   const tarballSpecs = Object.fromEntries(
     LIB_PACKAGES.map((lib) => [lib.name, `file:${packedTarballs.get(lib.name)}`]),
   );
-  const nativeTarballSpecs = collectHostNativeBindingTarballs();
+  const pinnedConsumerDeps = collectPinnedConsumerDepTarballs();
+  const {
+    react: pinnedReactSpec,
+    'react-dom': pinnedReactDomSpec,
+    '@types/react': pinnedTypesReactSpec,
+    '@types/react-dom': pinnedTypesReactDomSpec,
+    ...pinnedTransitiveSpecs
+  } = pinnedConsumerDeps;
+  assert(
+    typeof pinnedReactSpec === 'string' && typeof pinnedReactDomSpec === 'string',
+    'Missing pinned React 19 tarballs from locked workspace store',
+  );
 
   // 4. Write minimal independent third-application booking-model fixture & install via pnpm --offline
   writeFileSync(
@@ -237,15 +266,15 @@ try {
         type: 'module',
         dependencies: {
           ...tarballSpecs,
-          react: reactVer,
-          'react-dom': reactDomVer,
+          react: pinnedReactSpec,
+          'react-dom': pinnedReactDomSpec,
         },
         devDependencies: {
-          '@types/react': typesReactVer,
-          '@types/react-dom': typesReactDomVer,
+          '@types/react': pinnedTypesReactSpec,
+          '@types/react-dom': pinnedTypesReactDomSpec,
           typescript: tsVer,
           vite: viteVer,
-          ...nativeTarballSpecs,
+          ...pinnedTransitiveSpecs,
         },
       },
       null,
@@ -254,7 +283,7 @@ try {
   );
   const allOverrideSpecs = {
     ...tarballSpecs,
-    ...nativeTarballSpecs,
+    ...pinnedConsumerDeps,
   };
   const overrideLines = Object.entries(allOverrideSpecs)
     .map(([name, spec]) => `  "${name}": "${spec}"`)
@@ -272,14 +301,18 @@ try {
     cwd: consumerDir,
     stdio: 'inherit',
   });
-  for (const lib of LIB_PACKAGES) {
-    const installedPath = path.join(consumerDir, 'node_modules', ...lib.name.split('/'));
-    assert(existsSync(installedPath), `${lib.name}: missing in isolated consumer node_modules`);
+  for (const pkgName of [...LIB_PACKAGES.map((l) => l.name), 'react', 'react-dom']) {
+    const installedPath = path.join(consumerDir, 'node_modules', ...pkgName.split('/'));
+    assert(existsSync(installedPath), `${pkgName}: missing in isolated consumer node_modules`);
     assert(
       !realpathSync(installedPath).startsWith(REPO_ROOT),
-      `${lib.name}: resolved via workspace symlink instead of packed tarball`,
+      `${pkgName}: resolved via workspace symlink instead of packed tarball`,
     );
   }
+  assert(
+    readInstalledVersion(path.join(consumerDir, 'node_modules/react/package.json')) === reactVer,
+    'Installed React version does not match pinned workspace lockfile version',
+  );
 
   writeFileSync(
     path.join(consumerDir, 'booking-model.ts'),
