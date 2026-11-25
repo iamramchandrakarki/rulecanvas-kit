@@ -7,6 +7,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -136,6 +137,69 @@ try {
     );
   }
 
+  function collectHostNativeBindingTarballs() {
+    const virtualStore = path.join(REPO_ROOT, 'node_modules/.pnpm');
+    if (!existsSync(virtualStore)) {
+      return {};
+    }
+    const specs = {};
+    const stageNativeDir = (entryPath) => {
+      if (!existsSync(entryPath)) return;
+      const realDir = realpathSync(entryPath);
+      const pkgJsonPath = path.join(realDir, 'package.json');
+      if (!existsSync(pkgJsonPath)) return;
+      const pkg = JSON.parse(readFileSync(pkgJsonPath, 'utf8'));
+      const pkgName = pkg.name;
+      const pkgVersion = pkg.version;
+      if (typeof pkgName !== 'string' || typeof pkgVersion !== 'string') return;
+      if (Object.hasOwn(specs, pkgName)) return;
+
+      const safeKey = pkgName.replace(/^@/, '').replaceAll('/', '-');
+      const stageParent = path.join(tmpRoot, 'native-stage', safeKey);
+      const stagePkgDir = path.join(stageParent, 'package');
+      const nativeTarDir = path.join(tmpRoot, 'native-tarballs');
+      mkdirSync(stageParent, { recursive: true });
+      mkdirSync(nativeTarDir, { recursive: true });
+      cpSync(realDir, stagePkgDir, { recursive: true, dereference: true });
+
+      const tgzPath = path.join(nativeTarDir, `${safeKey}-${pkgVersion}.tgz`);
+      execFileSync('tar', ['-czf', tgzPath, '-C', stageParent, 'package']);
+      specs[pkgName] = `file:${tgzPath}`;
+    };
+
+    for (const entry of readdirSync(virtualStore)) {
+      if (entry.startsWith('rolldown@')) {
+        const scopeDir = path.join(virtualStore, entry, 'node_modules/@rolldown');
+        if (existsSync(scopeDir)) {
+          for (const sub of readdirSync(scopeDir)) {
+            if (sub.startsWith('binding-')) {
+              stageNativeDir(path.join(scopeDir, sub));
+            }
+          }
+        }
+      } else if (entry.startsWith('lightningcss@')) {
+        const modDir = path.join(virtualStore, entry, 'node_modules');
+        if (existsSync(modDir)) {
+          for (const sub of readdirSync(modDir)) {
+            if (sub.startsWith('lightningcss-')) {
+              stageNativeDir(path.join(modDir, sub));
+            }
+          }
+        }
+      } else if (entry.startsWith('typescript@')) {
+        const scopeDir = path.join(virtualStore, entry, 'node_modules/@typescript');
+        if (existsSync(scopeDir)) {
+          for (const sub of readdirSync(scopeDir)) {
+            if (sub.startsWith('typescript-')) {
+              stageNativeDir(path.join(scopeDir, sub));
+            }
+          }
+        }
+      }
+    }
+    return specs;
+  }
+
   // 3. Read exact installed versions for offline pnpm consumer install (zero workspace symlinks)
   const readInstalledVersion = (pkgJsonPath) =>
     JSON.parse(readFileSync(pkgJsonPath, 'utf8')).version;
@@ -161,6 +225,7 @@ try {
   const tarballSpecs = Object.fromEntries(
     LIB_PACKAGES.map((lib) => [lib.name, `file:${packedTarballs.get(lib.name)}`]),
   );
+  const nativeTarballSpecs = collectHostNativeBindingTarballs();
 
   // 4. Write minimal independent third-application booking-model fixture & install via pnpm --offline
   writeFileSync(
@@ -180,15 +245,20 @@ try {
           '@types/react-dom': typesReactDomVer,
           typescript: tsVer,
           vite: viteVer,
+          ...nativeTarballSpecs,
         },
       },
       null,
       2,
     ),
   );
-  const overrideLines = LIB_PACKAGES.map(
-    (lib) => `  "${lib.name}": "file:${packedTarballs.get(lib.name)}"`,
-  ).join('\n');
+  const allOverrideSpecs = {
+    ...tarballSpecs,
+    ...nativeTarballSpecs,
+  };
+  const overrideLines = Object.entries(allOverrideSpecs)
+    .map(([name, spec]) => `  "${name}": "${spec}"`)
+    .join('\n');
   writeFileSync(
     path.join(consumerDir, 'pnpm-workspace.yaml'),
     `overrides:\n${overrideLines}\n`,
@@ -202,6 +272,14 @@ try {
     cwd: consumerDir,
     stdio: 'inherit',
   });
+  for (const lib of LIB_PACKAGES) {
+    const installedPath = path.join(consumerDir, 'node_modules', ...lib.name.split('/'));
+    assert(existsSync(installedPath), `${lib.name}: missing in isolated consumer node_modules`);
+    assert(
+      !realpathSync(installedPath).startsWith(REPO_ROOT),
+      `${lib.name}: resolved via workspace symlink instead of packed tarball`,
+    );
+  }
 
   writeFileSync(
     path.join(consumerDir, 'booking-model.ts'),

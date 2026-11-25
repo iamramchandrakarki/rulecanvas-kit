@@ -86,7 +86,7 @@ jobs:
       - name: Install Playwright Chromium for browser E2E gate
         run: |
           mkdir -p "${{ runner.temp }}/pw"
-          npm install --no-save --prefix "${{ runner.temp }}/pw" playwright@1.58.2
+          npm install --no-save --prefix "${{ runner.temp }}/pw" playwright@1.65.1
           "${{ runner.temp }}/pw/node_modules/.bin/playwright" install --with-deps chromium
 
       - name: Run Playwright browser regression gate
