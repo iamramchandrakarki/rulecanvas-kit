@@ -1,6 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import type { TransitionRule, TransitionSystemModel, ValidationError } from '@rulecanvas/core';
 import { formatBoolExpr, formatUpdateAssignment } from '@rulecanvas/ui';
+import {
+  matchesDraftPrefix,
+  useIntegerDraftStore,
+  type LiftedIntDraftStore,
+} from '@rulecanvas/workbench-react';
 import {
   addAssumption,
   appendGuardClause,
@@ -10,14 +15,15 @@ import {
   importModelFromJson,
   isPrincipledOpenInnerDoorGuard,
   isRepairableInterlockModel,
-  parseStrictIntegerDraft,
   removeAssumption,
   tryExportModelJson,
   updateAssumption,
   updateRuleGuard,
   type ModelDiagnosticsIndex,
 } from '../model-inspector.js';
-import { BoolExprEditor, type LiftedIntDraftStore } from './ExprEditor.js';
+import { BoolExprEditor } from './ExprEditor.js';
+
+export { matchesDraftPrefix };
 
 export type InspectorTabId = 'guard' | 'assumptions' | 'json';
 
@@ -39,14 +45,6 @@ export interface InterlockRuleEditorProps {
 function defaultRuleSelection(rules: readonly TransitionRule[]): string {
   const openInner = rules.find((r) => r.id === 'open_inner_door');
   return openInner !== undefined ? openInner.id : (rules[0]?.id ?? '');
-}
-
-export function matchesDraftPrefix(fieldKey: string, prefix: string): boolean {
-  return (
-    fieldKey === prefix ||
-    fieldKey.startsWith(`${prefix}.`) ||
-    fieldKey.startsWith(`${prefix}:`)
-  );
 }
 
 function alignRowIds(
@@ -117,98 +115,11 @@ export function InterlockRuleEditor({
     model.assumptions.map(() => allocRowId('asm')),
   );
 
-  const [intDraftValues, setIntDraftValues] = useState<Readonly<Record<string, string>>>({});
-  const [intDraftErrors, setIntDraftErrors] = useState<Readonly<Record<string, string>>>({});
-  const intDraftErrorsRef = useRef<Readonly<Record<string, string>>>({});
-
-  const handleIntDraftChange = useCallback(
-    (fieldKey: string, rawDraft: string, errorMessage: string | null) => {
-      setIntDraftValues((prev) => {
-        if (errorMessage === null) {
-          const parsed = parseStrictIntegerDraft(rawDraft);
-          if (parsed.ok && rawDraft === String(parsed.value)) {
-            if (!Object.hasOwn(prev, fieldKey)) return prev;
-            const next = { ...prev };
-            delete next[fieldKey];
-            return next;
-          }
-        }
-        if (prev[fieldKey] === rawDraft) return prev;
-        return { ...prev, [fieldKey]: rawDraft };
-      });
-
-      setIntDraftErrors((prev) => {
-        if (errorMessage === null) {
-          if (!Object.hasOwn(prev, fieldKey)) return prev;
-          const next = { ...prev };
-          delete next[fieldKey];
-          intDraftErrorsRef.current = next;
-          return next;
-        }
-        if (prev[fieldKey] === errorMessage) return prev;
-        const next = { ...prev, [fieldKey]: errorMessage };
-        intDraftErrorsRef.current = next;
-        return next;
-      });
-
-      onDraftErrorChangeRef.current?.(fieldKey, errorMessage);
-    },
-    [],
-  );
-
-  const pruneDraftsByPrefix = useCallback((prefix: string) => {
-    setIntDraftValues((prev) => {
-      let changed = false;
-      const next: Record<string, string> = {};
-      for (const [k, v] of Object.entries(prev)) {
-        if (matchesDraftPrefix(k, prefix)) {
-          changed = true;
-        } else {
-          next[k] = v;
-        }
-      }
-      return changed ? next : prev;
-    });
-
-    const removedErrorKeys: string[] = [];
-    for (const k of Object.keys(intDraftErrorsRef.current)) {
-      if (matchesDraftPrefix(k, prefix)) {
-        removedErrorKeys.push(k);
-      }
-    }
-
-    if (removedErrorKeys.length > 0) {
-      setIntDraftErrors((prev) => {
-        let changed = false;
-        const next: Record<string, string> = {};
-        for (const [k, v] of Object.entries(prev)) {
-          if (matchesDraftPrefix(k, prefix)) {
-            changed = true;
-          } else {
-            next[k] = v;
-          }
-        }
-        if (changed) {
-          intDraftErrorsRef.current = next;
-          return next;
-        }
-        return prev;
-      });
-      for (const k of removedErrorKeys) {
-        onDraftErrorChangeRef.current?.(k, null);
-      }
-    }
-  }, []);
-
-  const intDraftStore = useMemo<LiftedIntDraftStore>(
-    () => ({
-      draftValues: intDraftValues,
-      draftErrors: intDraftErrors,
-      onDraftChange: handleIntDraftChange,
-      onPruneDrafts: pruneDraftsByPrefix,
-    }),
-    [intDraftValues, intDraftErrors, handleIntDraftChange, pruneDraftsByPrefix],
-  );
+  const intDraftStore: LiftedIntDraftStore = useIntegerDraftStore({
+    resetKey,
+    onErrorChange: onDraftErrorChange,
+  });
+  const pruneDraftsByPrefix = intDraftStore.onPruneDrafts;
 
   useEffect(() => {
     const exported = tryExportModelJson(model);
@@ -235,13 +146,6 @@ export function InterlockRuleEditor({
       prevResetKeyRef.current = resetKey;
       setSelectedRuleId(defaultRuleSelection(model.rules));
       setAsmRowIds(model.assumptions.map(() => allocRowId('asm')));
-      const prevErrKeys = Object.keys(intDraftErrorsRef.current);
-      setIntDraftValues({});
-      setIntDraftErrors({});
-      intDraftErrorsRef.current = {};
-      for (const k of prevErrKeys) {
-        onDraftErrorChangeRef.current?.(k, null);
-      }
     }
   }, [resetKey, model]);
 

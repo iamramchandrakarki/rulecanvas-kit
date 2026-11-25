@@ -1108,14 +1108,14 @@ describe('InterlockSim workbench architecture, semantics, security, and UI', () 
     expect(spoofedSchematicHtml).not.toContain('GOAL REACHED: LAB ENTRY');
     expect(spoofedSchematicHtml).toContain('UNAVAILABLE');
 
-    // R2-2a: Export and import share identical complexity budget accounting (48 rules x 60 clauses)
+    // R2-2a: Export and import share identical value-occurrence visit budget accounting (56 rules x 60 clauses > 10,000 visits)
     const manyClauses: BoolExpr[] = Array.from({ length: 60 }, () => ({ op: 'lit' as const, value: true }));
     const highBudgetModel: TransitionSystemModel = {
       id: 'high-budget',
       name: 'High Budget Model',
       schema: { flag: { kind: 'boolean' } },
       initialState: { flag: true },
-      rules: Array.from({ length: 48 }, (_, i) => ({
+      rules: Array.from({ length: 56 }, (_, i) => ({
         id: `r_${i}`,
         label: `Rule ${i}`,
         guard: { op: 'and', args: manyClauses },

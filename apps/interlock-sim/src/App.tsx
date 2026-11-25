@@ -19,6 +19,12 @@ import {
   stepReplayForward,
   type ReplaySession,
 } from '@rulecanvas/ui';
+import {
+  WorkbenchNavigation,
+  readPresetFromSearch,
+  useWorkbenchRoute,
+  type WorkbenchNavLink,
+} from '@rulecanvas/workbench-react';
 import { DEFAULT_VERIFY_OPTIONS, runInterlockPresetComparison } from './comparison.js';
 import { AirlockSchematic } from './components/AirlockSchematic.js';
 import { ComparisonPanel } from './components/ComparisonPanel.js';
@@ -73,21 +79,51 @@ function resolveModelLabel(
   return trimmedId.length > 0 ? trimmedId : 'Custom Interlock Model';
 }
 
+const ALLOWED_INTERLOCK_PRESETS: readonly InterlockPresetVariant[] = ['broken', 'fixed', 'vacuous'];
+
+const WORKBENCH_NAV_LINKS: readonly WorkbenchNavLink[] = [
+  {
+    id: 'agent-gate',
+    label: 'AgentGate',
+    href:
+      typeof import.meta !== 'undefined' &&
+      typeof (import.meta as { env?: Record<string, string | undefined> }).env?.['VITE_AGENT_GATE_URL'] ===
+        'string'
+        ? (import.meta as { env: Record<string, string> }).env['VITE_AGENT_GATE_URL']!
+        : '../agent-gate/',
+    description: 'Open AgentGate policy verification workbench',
+  },
+  {
+    id: 'interlock-sim',
+    label: 'InterlockSim',
+    href: './',
+    description: 'Current BSL-3 airlock interlock simulation workbench',
+  },
+];
+
 export function App({
-  initialVariant = 'broken',
+  initialVariant,
   initialShowComparison = false,
   workerFactory,
 }: AppProps) {
+  const resolvedInitialVariant: InterlockPresetVariant =
+    initialVariant ??
+    (typeof window !== 'undefined'
+      ? readPresetFromSearch(window.location.search, ALLOWED_INTERLOCK_PRESETS, 'broken').preset
+      : 'broken');
+
   const initialModelRef = useRef<TransitionSystemModel | null>(null);
   if (initialModelRef.current === null) {
-    initialModelRef.current = loadInterlockPresetModel(initialVariant);
+    initialModelRef.current = loadInterlockPresetModel(resolvedInitialVariant);
   }
   const initialResultRef = useRef<VerifyResult | null>(null);
   if (initialResultRef.current === null) {
     initialResultRef.current = verifyModel(initialModelRef.current, DEFAULT_VERIFY_OPTIONS);
   }
 
-  const [activePreset, setActivePreset] = useState<InterlockPresetVariant | null>(initialVariant);
+  const [activePreset, setActivePreset] = useState<InterlockPresetVariant | null>(
+    resolvedInitialVariant,
+  );
   const [model, setModel] = useState<TransitionSystemModel>(() => initialModelRef.current!);
   const [editorResetKey, setEditorResetKey] = useState<number>(0);
 
@@ -108,7 +144,7 @@ export function App({
 
   const [verifiedSnapshot, setVerifiedSnapshot] = useState<VerifiedSnapshot | null>(() => ({
     model: initialModelRef.current!,
-    modelLabel: getInterlockPresetDescriptor(initialVariant).shortLabel,
+    modelLabel: getInterlockPresetDescriptor(resolvedInitialVariant).shortLabel,
     options: DEFAULT_VERIFY_OPTIONS,
     result: initialResultRef.current!,
     executionMode: 'main-thread',
@@ -486,6 +522,16 @@ export function App({
   const activePresetInfo = activePreset !== null ? getInterlockPresetDescriptor(activePreset) : null;
   const hasAnyValidationErrors =
     optionErrors.length > 0 || editorDraftErrors.length > 0 || modelErrors.length > 0;
+  const isDirtyEditor = activePreset === null || editorDraftErrors.length > 0;
+
+  const { pendingPrompt, selectPreset, requestLinkNavigation, acceptPrompt, declinePrompt } =
+    useWorkbenchRoute<InterlockPresetVariant>({
+      allowedPresets: ALLOWED_INTERLOCK_PRESETS,
+      defaultPreset: 'broken',
+      isDirty: isDirtyEditor,
+      onCommitPreset: handleLoadPreset,
+      formatPresetLabel: (preset) => getInterlockPresetDescriptor(preset).shortLabel,
+    });
 
   return (
     <div className="is-shell">
@@ -498,6 +544,21 @@ export function App({
           <span className="is-brand-subtitle">
             Discrete BSL-3 airlock interlock simulation &amp; bounded verification workbench
           </span>
+          <WorkbenchNavigation
+            current="interlock-sim"
+            links={WORKBENCH_NAV_LINKS}
+            ariaLabel="RuleCanvasKit workbenches"
+            className="is-wb-nav"
+            listClassName="is-wb-nav-list"
+            linkClassName="is-wb-nav-link"
+            activeLinkClassName="is-wb-nav-link-active"
+            onNavigate={(link, event) => {
+              if (isDirtyEditor) {
+                event.preventDefault();
+                requestLinkNavigation(link.href, link.label);
+              }
+            }}
+          />
         </div>
 
         <div className="is-topbar-controls">
@@ -510,7 +571,7 @@ export function App({
               onChange={(e) => {
                 const val = e.target.value;
                 if (val !== 'custom') {
-                  handleLoadPreset(val as InterlockPresetVariant);
+                  selectPreset(val as InterlockPresetVariant);
                 }
               }}
             >
@@ -601,6 +662,35 @@ export function App({
           </button>
         </div>
       </header>
+
+      {/* Unsaved-changes discard confirmation dialog */}
+      {pendingPrompt !== null && (
+        <div
+          className="is-discard-banner"
+          role="alertdialog"
+          aria-labelledby="is-discard-title"
+          aria-describedby="is-discard-desc"
+        >
+          <div>
+            <strong id="is-discard-title">Unsaved Custom Edits</strong>
+            <p id="is-discard-desc">
+              {pendingPrompt.label} will discard your current unsaved custom edits.
+            </p>
+          </div>
+          <div className="is-inline-actions">
+            <button type="button" className="is-btn is-btn-sm" onClick={declinePrompt}>
+              Stay Here
+            </button>
+            <button
+              type="button"
+              className="is-btn is-btn-sm is-btn-primary"
+              onClick={acceptPrompt}
+            >
+              Discard &amp; Continue
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Permanent Educational & Non-Certification Disclaimer Bar */}
       <div className="is-safety-strip" role="note" aria-label="Simulation scope and non-certification notice">

@@ -6,6 +6,8 @@
   "dependencies": {
     "@rulecanvas/core": "workspace:*",
     "@rulecanvas/ui": "workspace:*",
+    "@rulecanvas/workbench": "workspace:*",
+    "@rulecanvas/workbench-react": "workspace:*",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },
