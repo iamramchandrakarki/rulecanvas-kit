@@ -112,16 +112,19 @@ function startStaticSubpathServer() {
       if (pathname.startsWith(mount.prefix)) {
         const rel = pathname.slice(mount.prefix.length) || 'index.html';
         const full = path.resolve(mount.dir, rel);
-        if (!full.startsWith(mount.dir)) {
+        if (!full.startsWith(mount.dir + path.sep)) {
           res.writeHead(403);
           res.end('Forbidden');
           return;
         }
-        const target =
-          existsSync(full) && statSync(full).isFile() ? full : path.join(mount.dir, 'index.html');
-        const ext = path.extname(target);
+        if (!existsSync(full) || !statSync(full).isFile()) {
+          res.writeHead(404);
+          res.end('Not Found');
+          return;
+        }
+        const ext = path.extname(full);
         res.writeHead(200, { 'Content-Type': MIME_TYPES[ext] ?? 'application/octet-stream' });
-        res.end(readFileSync(target));
+        res.end(readFileSync(full));
         return;
       }
     }
@@ -150,19 +153,19 @@ try {
   }
   browser = await chromium.launch(launchOpts);
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
-  const page = await context.newPage();
 
   const consoleErrors = [];
   const pageErrors = [];
   const httpErrors = [];
   const axeAudits = [];
-  page.on('console', (msg) => {
+  context.on('console', (msg) => {
     if (msg.type() === 'error') consoleErrors.push(msg.text());
   });
-  page.on('pageerror', (err) => pageErrors.push(err.message));
-  page.on('response', (res) => {
+  context.on('weberror', (error) => pageErrors.push(error.error().message));
+  context.on('response', (res) => {
     if (res.status() >= 400) httpErrors.push(`${res.status()} ${res.url()}`);
   });
+  const page = await context.newPage();
 
   const checkNoOverflow = async (label) => {
     const report = await page.evaluate(() => {
@@ -345,10 +348,10 @@ try {
     'AgentGate Step 1 modified stage variable',
   );
   // Step forward to Step 5 via keyboard and verify violated invariant row
-  for (let s = 1; s < 5; s += 1) {
+  for (let step = 2; step <= 5; step += 1) {
     await page.keyboard.press('Enter');
+    await page.getByText(`Step ${step} of 5`).first().waitFor({ state: 'visible' });
   }
-  await page.getByText('Step 5 of 5').first().waitFor({ state: 'visible' });
   await assertBadgeHasIconAndText(
     page.locator('tr[data-changed="true"] .ag-badge[data-tone="danger"]'),
     'VIOLATED',
@@ -407,7 +410,7 @@ try {
   // Keyboard preset switch + keyboard verification trigger -> principled-fix VERIFIED
   const agPresetSelect = page.locator('#preset-select');
   await focusViaKeyboard(agPresetSelect, 'AgentGate preset select');
-  await agPresetSelect.selectOption('principled-fix');
+  await page.keyboard.press('p');
   await page.getByText('Goal reachable: Yes').first().waitFor({ state: 'visible' });
   assert(!(await page.getByText('OUTDATED:', { exact: false }).first().isVisible()),
     'Fresh AgentGate verdict marked outdated');
@@ -573,8 +576,10 @@ try {
   await page.getByText('Step 0 of 6').first().waitFor({ state: 'visible' });
   const isStepForwardBtn = page.getByRole('button', { name: 'Step Forward', exact: true });
   await isStepForwardBtn.focus();
-  await page.keyboard.press('Enter');
-  await page.getByText('Step 1 of 6').first().waitFor({ state: 'visible' });
+  for (let step = 1; step <= 6; step += 1) {
+    await page.keyboard.press('Enter');
+    await page.getByText(`Step ${step} of 6`).first().waitFor({ state: 'visible' });
+  }
 
   // Manual airlock transitions via OperatorConsole
   await page.getByRole('button', { name: 'Reset', exact: true }).click();

@@ -52,6 +52,7 @@ const consumerDir = path.join(tmpRoot, 'third-app-consumer');
 mkdirSync(tarDir, { recursive: true });
 mkdirSync(consumerDir, { recursive: true });
 
+let verificationFailed = false;
 try {
   // 1. Build map-free artifacts in dependency order and pack all 4 library tarballs
   const packedTarballs = new Map();
@@ -59,11 +60,10 @@ try {
     const pkgDir = path.join(REPO_ROOT, lib.dir);
     execFileSync('pnpm', ['run', 'build:pack'], { cwd: pkgDir, stdio: 'inherit' });
     execFileSync('pnpm', ['pack', '--pack-destination', tarDir], { cwd: pkgDir, stdio: 'pipe' });
-    const files = readdirSync(tarDir).filter((f) => f.endsWith('.tgz'));
-    const expectedPrefix = `${lib.name.replace(/^@/, '').replace('/', '-')}-`;
-    const match = files.find((f) => f.startsWith(expectedPrefix));
-    assert(match !== undefined, `packed tarball missing for ${lib.name}`);
-    const tgzPath = path.join(tarDir, match);
+    const { version } = JSON.parse(readFileSync(path.join(pkgDir, 'package.json'), 'utf8'));
+    const fileName = `${lib.name.replace(/^@/, '').replace('/', '-')}-${version}.tgz`;
+    const tgzPath = path.join(tarDir, fileName);
+    assert(existsSync(tgzPath), `packed tarball missing: ${fileName}`);
     packedTarballs.set(lib.name, tgzPath);
 
     // 2. Inspect tarball contents against a positive archive allowlist
@@ -545,8 +545,15 @@ console.log('Isolated tarball Node ESM smoke passed.');
   console.log(
     `verify:pack passed: all 4 tarballs map-free & allowlisted, Node ESM smoke passed, NodeNext + Bundler tsc passed, and third-app Vite subpath worker build emitted (${distAssets.join(', ')}).`,
   );
+} catch (error) {
+  verificationFailed = true;
+  throw error;
 } finally {
   rmSync(tmpRoot, { recursive: true, force: true });
-  // Restore workspace dev builds
-  execFileSync('pnpm', ['run', 'build:libs'], { cwd: REPO_ROOT, stdio: 'pipe' });
+  try {
+    execFileSync('pnpm', ['run', 'build:libs'], { cwd: REPO_ROOT, stdio: 'pipe' });
+  } catch (error) {
+    if (!verificationFailed) throw error;
+    console.error('Workspace build restoration also failed:', error.message);
+  }
 }
