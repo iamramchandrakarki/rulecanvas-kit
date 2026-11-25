@@ -10,7 +10,10 @@ import {
   type ValueExpr,
   type VarDef,
 } from '@rulecanvas/core';
-import { bsl3AirlockFixedModel } from './scenarios/bsl3-airlock.js';
+import {
+  bsl3AirlockFixedModel,
+  bsl3AirlockVacuousModel,
+} from './scenarios/bsl3-airlock.js';
 
 export type DiagnosticSection =
   | 'general'
@@ -399,6 +402,58 @@ export function hasCanonicalLabEntryGoalSpec(goal: TransitionSystemModel['goal']
 
 export function hasCanonicalLabEntryGoal(model: TransitionSystemModel): boolean {
   return hasCanonicalLabEntryGoalSpec(model.goal);
+}
+
+function areVarDefsEqual(left: VarDef, right: VarDef): boolean {
+  if (left.kind !== right.kind) return false;
+  if (left.kind === 'boolean' && right.kind === 'boolean') return true;
+  if (left.kind === 'enum' && right.kind === 'enum') {
+    return (
+      left.values.length === right.values.length &&
+      left.values.every((val, i) => val === right.values[i])
+    );
+  }
+  if (left.kind === 'int' && right.kind === 'int') {
+    return left.min === right.min && left.max === right.max;
+  }
+  return false;
+}
+
+export function isCanonicalVacuousLockoutModel(model: TransitionSystemModel): boolean {
+  const refSchemaKeys = Object.keys(bsl3AirlockVacuousModel.schema);
+  const actualSchemaKeys = Object.keys(model.schema);
+  if (actualSchemaKeys.length !== refSchemaKeys.length) return false;
+  for (const key of refSchemaKeys) {
+    if (!Object.hasOwn(model.schema, key)) return false;
+    const refDef = bsl3AirlockVacuousModel.schema[key]!;
+    const actualDef = model.schema[key];
+    if (actualDef === undefined || !areVarDefsEqual(actualDef, refDef)) return false;
+    if (!Object.hasOwn(model.initialState, key)) return false;
+    const refVal = bsl3AirlockVacuousModel.initialState[key];
+    const actualVal = model.initialState[key];
+    const normRef = typeof refVal === 'number' && Object.is(refVal, -0) ? 0 : refVal;
+    const normActual = typeof actualVal === 'number' && Object.is(actualVal, -0) ? 0 : actualVal;
+    if (normActual !== normRef) return false;
+  }
+
+  if (!hasCanonicalSealAndUvInvariantSpecs(model.invariants)) return false;
+  if (!hasCanonicalLabEntryGoalSpec(model.goal)) return false;
+
+  if (model.rules.length !== bsl3AirlockVacuousModel.rules.length) return false;
+  for (const refRule of bsl3AirlockVacuousModel.rules) {
+    const actualRule = model.rules.find((r) => r.id === refRule.id);
+    if (actualRule === undefined) return false;
+    if (!areBoolExprEqual(actualRule.guard, refRule.guard)) return false;
+    if (actualRule.updates.length !== refRule.updates.length) return false;
+    for (let i = 0; i < refRule.updates.length; i += 1) {
+      const refUpd = refRule.updates[i]!;
+      const actualUpd = actualRule.updates[i]!;
+      if (actualUpd.var !== refUpd.var || !areValueExprEqual(actualUpd.value, refUpd.value)) {
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 export function isPrincipledOpenInnerDoorGuard(model: TransitionSystemModel): boolean {

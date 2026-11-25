@@ -25,6 +25,7 @@ import {
   stepReplayForward,
 } from '@rulecanvas/ui';
 import { describe, expect, it, vi } from 'vitest';
+import { isCanonicalVacuousLockoutModel } from '../src/model-inspector.js';
 import { App } from '../src/App.js';
 import { AirlockSchematic } from '../src/components/AirlockSchematic.js';
 import { ComparisonPanel } from '../src/components/ComparisonPanel.js';
@@ -1228,6 +1229,67 @@ describe('InterlockSim workbench architecture, semantics, security, and UI', () 
     expect(customVacuousHtml).toContain('goal_unrelated');
     expect(customVacuousHtml).not.toContain('goal_safe_lab_entry');
     expect(customVacuousHtml).not.toContain('open_inner_door');
+
+    // R2-5 (Round 3): Canonical vacuous lockout matches isCanonicalVacuousLockoutModel; custom alternate opener renders non-causal generic warning
+    expect(isCanonicalVacuousLockoutModel(bsl3AirlockVacuousModel)).toBe(true);
+    const brokenWithFalseOpen: TransitionSystemModel = {
+      ...bsl3AirlockBrokenModel,
+      rules: bsl3AirlockBrokenModel.rules.map((r) =>
+        r.id === 'open_inner_door' ? { ...r, guard: { op: 'lit', value: false } } : r,
+      ),
+    };
+    expect(isCanonicalVacuousLockoutModel(brokenWithFalseOpen)).toBe(true);
+
+    const alternateOpenerVacuousModel: TransitionSystemModel = {
+      ...bsl3AirlockVacuousModel,
+      rules: bsl3AirlockVacuousModel.rules.map((r) => {
+        if (r.id === 'enter_corridor_to_airlock') {
+          return {
+            ...r,
+            id: 'alt_open_inner',
+            label: 'Alternate inner door opener',
+            guard: { op: 'lit', value: true },
+            updates: [{ var: 'innerDoor', value: { op: 'lit', value: 'open' } }],
+          };
+        }
+        if (r.id === 'run_air_purge') {
+          return { ...r, guard: { op: 'lit', value: false } };
+        }
+        return r;
+      }),
+    };
+    const altResult = verifyModel(alternateOpenerVacuousModel, DEFAULT_VERIFY_OPTIONS);
+    expect(altResult.status).toBe('VERIFIED');
+    if (altResult.status === 'VERIFIED') {
+      expect(altResult.goalReachable).toBe(false);
+    }
+    expect(isCanonicalVacuousLockoutModel(alternateOpenerVacuousModel)).toBe(false);
+    const altVacuousHtml = renderToStaticMarkup(
+      createElement(VerificationWorkbenchPane, {
+        model: alternateOpenerVacuousModel,
+        isRunning: false,
+        runningExecutionMode: 'main-thread',
+        isStale: false,
+        workerError: null,
+        cancelledNotice: null,
+        optionErrors: [],
+        editorDraftErrors: [],
+        modelErrors: [],
+        verifiedSnapshot: {
+          model: alternateOpenerVacuousModel,
+          modelLabel: 'Alternate Opener Model',
+          options: DEFAULT_VERIFY_OPTIONS,
+          result: altResult,
+          executionMode: 'main-thread',
+        },
+        replaySession: null,
+        onCancelRun: () => {},
+        onVerifyNow: () => {},
+        onJumpToStep: () => {},
+      }),
+    );
+    expect(altVacuousHtml).toContain('goal_safe_lab_entry');
+    expect(altVacuousHtml).not.toContain('open_inner_door');
 
     // R2-7a: Valid JSON nested 257 levels returns IMPORT_COMPLEXITY_EXCEEDED (not JSON_PARSE_ERROR)
     const nested257 = `${'['.repeat(257)}${']'.repeat(257)}`;

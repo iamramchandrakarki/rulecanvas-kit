@@ -13,7 +13,7 @@ import {
   type ReplaySession,
 } from '@rulecanvas/ui';
 import { isWebWorkerSupported, type VerifyExecutionMode } from '../verify-client.js';
-import { hasCanonicalLabEntryGoal, isRepairableInterlockModel } from '../model-inspector.js';
+import { isCanonicalVacuousLockoutModel } from '../model-inspector.js';
 
 export interface VerifiedSnapshot {
   readonly model: TransitionSystemModel;
@@ -302,34 +302,24 @@ export function VerificationWorkbenchPane({
           {verdictView.vacuousGoalWarning && (
             <div className="is-alert is-alert-warning" role="alert">
               <strong>Vacuous Goal Reachability Warning</strong>
-              {(() => {
-                const openInner = verifiedSnapshot.model.rules.find(
-                  (r) => r.id === 'open_inner_door',
-                );
-                const isKnownLockout =
-                  isRepairableInterlockModel(verifiedSnapshot.model) &&
-                  hasCanonicalLabEntryGoal(verifiedSnapshot.model) &&
-                  openInner?.guard.op === 'lit' &&
-                  openInner.guard.value === false;
-                return isKnownLockout ? (
-                  <p>
-                    Safety invariants hold trivially because lab entry (
-                    <code className="is-mono">open_inner_door</code>) has guard{' '}
-                    <code className="is-mono">false</code> and is never enabled. A functional
-                    BSL-3 interlock must preserve containment while letting{' '}
-                    <code className="is-mono">goal_safe_lab_entry</code> remain reachable.
-                  </p>
-                ) : (
-                  <p>
-                    Every reachable state satisfies the declared invariants, but the declared goal (
-                    <code className="is-mono">
-                      {verifiedSnapshot.model.goal?.id ?? 'goal'}
-                    </code>
-                    ) is unreachable within this model. Verify that both transition guards and the
-                    goal predicate permit intended progress.
-                  </p>
-                );
-              })()}
+              {isCanonicalVacuousLockoutModel(verifiedSnapshot.model) ? (
+                <p>
+                  Safety invariants hold trivially because lab entry (
+                  <code className="is-mono">open_inner_door</code>) has guard{' '}
+                  <code className="is-mono">false</code> and is never enabled. A functional
+                  BSL-3 interlock must preserve containment while letting{' '}
+                  <code className="is-mono">goal_safe_lab_entry</code> remain reachable.
+                </p>
+              ) : (
+                <p>
+                  Every reachable state satisfies the declared invariants, but the declared goal (
+                  <code className="is-mono">
+                    {verifiedSnapshot.model.goal?.id ?? 'goal'}
+                  </code>
+                  ) is unreachable within this model. Verify that both transition guards and the
+                  goal predicate permit intended progress.
+                </p>
+              )}
             </div>
           )}
 
