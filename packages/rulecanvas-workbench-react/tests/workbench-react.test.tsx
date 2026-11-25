@@ -358,4 +358,56 @@ describe('@rulecanvas/workbench-react components, navigation, and race-safe hist
     expect(committed).toBe('b');
     ctrl.dispose();
   });
+
+  it('pushes URL on same-preset reselect after Back and keeps selector prompt open when delayed traverseTo completes', () => {
+    const fake = createFakeHistoryHost('https://example.org/app/?preset=a', true);
+    let dirty = false;
+    let committed: TestPreset = 'a';
+    const box: { prompt: PendingDiscardPrompt<TestPreset> | null } = { prompt: null };
+
+    const ctrl = createWorkbenchHistoryController<TestPreset>({
+      host: fake.host,
+      allowedPresets: ['a', 'b', 'c'],
+      defaultPreset: 'a',
+      isDirty: () => dirty,
+      onCommitPreset: (p) => {
+        committed = p;
+      },
+      onPromptChange: (p) => {
+        box.prompt = p;
+      },
+    });
+
+    // 1. Load b, edit dirty, go Back to a, select b again, approve discard -> live URL must be ?preset=b
+    ctrl.selectPreset('b');
+    expect(committed).toBe('b');
+    dirty = true;
+    fake.navigateToIndex(0);
+    expect(new URL(fake.host.location.href).searchParams.get('preset')).toBe('a');
+    expect(box.prompt?.kind).toBe('popstate');
+
+    ctrl.selectPreset('b');
+    expect(box.prompt?.kind).toBe('preset');
+    dirty = false;
+    ctrl.acceptPrompt();
+    expect(committed).toBe('b');
+    expect(new URL(fake.host.location.href).searchParams.get('preset')).toBe('b');
+
+    // 2. Load b dirty, go Back to a, decline (delayed traverseTo in flight), open selector prompt for c,
+    //    then settle delayed traverseTo -> selector prompt for c must NOT be erased
+    dirty = true;
+    fake.navigateToIndex(0);
+    expect(box.prompt?.kind).toBe('popstate');
+    ctrl.declinePrompt();
+    ctrl.selectPreset('c');
+    expect(box.prompt?.kind).toBe('preset');
+    expect(box.prompt?.targetPreset).toBe('c');
+
+    fake.flushTraversals();
+    expect(new URL(fake.host.location.href).searchParams.get('preset')).toBe('b');
+    expect(box.prompt?.kind).toBe('preset');
+    expect(box.prompt?.targetPreset).toBe('c');
+
+    ctrl.dispose();
+  });
 });

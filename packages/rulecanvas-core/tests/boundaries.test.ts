@@ -855,6 +855,63 @@ describe('architecture and honesty boundaries', () => {
     expect(violations).toEqual([]);
   });
 
+  it('forbids non-deterministic or host-coupled APIs and domain leaks in @rulecanvas/workbench and @rulecanvas/workbench-react', () => {
+    const wbSrcDir = path.join(REPO_ROOT, 'packages/rulecanvas-workbench/src');
+    const wbReactSrcDir = path.join(REPO_ROOT, 'packages/rulecanvas-workbench-react/src');
+
+    const wbFiles = walkFiles(wbSrcDir, (p) => p.endsWith('.ts'));
+    expect(wbFiles.length).toBeGreaterThan(0);
+
+    // Every file in packages/rulecanvas-workbench/src except verify.ts (which checks typeof globalThis.Worker)
+    // must satisfy full FORBIDDEN_GLOBALS; all workbench files must avoid Date/performance/setTimeout/setInterval/Math.random/eval/Function.
+    const hostViolations: string[] = [];
+    for (const filePath of wbFiles) {
+      const apis = checkForbiddenApisInSource(filePath, readFileSync(filePath, 'utf8'));
+      if (path.basename(filePath) === 'verify.ts') {
+        const filtered = apis.filter((msg) => !msg.includes('[globalThis]'));
+        hostViolations.push(...filtered);
+      } else {
+        hostViolations.push(...apis);
+      }
+    }
+    expect(hostViolations).toEqual([]);
+
+    const domainLeakPatterns: readonly RegExp[] = [
+      /airlock/i,
+      /autoclave/i,
+      /bsl/i,
+      /steril/i,
+      /agent/i,
+      /trifecta/i,
+      /launder/i,
+      /approval/i,
+      /exfil/i,
+      /webhook/i,
+      /interlock/i,
+      /valve/i,
+      /door/i,
+      /\bmcp\b/i,
+    ];
+    const leakViolations: string[] = [];
+    for (const baseDir of [wbSrcDir, wbReactSrcDir]) {
+      for (const filePath of walkFiles(baseDir)) {
+        const rel = path.relative(baseDir, filePath);
+        const content = readFileSync(filePath, 'utf8');
+        for (const pattern of domainLeakPatterns) {
+          if (pattern.test(rel)) {
+            leakViolations.push(`filename "${rel}" matches forbidden domain pattern ${pattern}`);
+          }
+          if (pattern.test(content)) {
+            leakViolations.push(
+              `${path.relative(REPO_ROOT, filePath)} content matches forbidden domain pattern ${pattern}`,
+            );
+          }
+        }
+      }
+    }
+    expect(leakViolations).toEqual([]);
+  });
+
   it('contains zero overclaim phrases across claim-bearing non-test files', () => {
     const forbiddenPhrases = [
       '100% secure',
@@ -975,6 +1032,21 @@ describe('architecture and honesty boundaries', () => {
       '@rulecanvas/workbench-react',
     ]);
 
+    const allowedBareImportsByLib: Readonly<Record<string, ReadonlySet<string>>> = {
+      '@rulecanvas/core': new Set([]),
+      '@rulecanvas/ui': new Set(['@rulecanvas/core']),
+      '@rulecanvas/workbench': new Set(['@rulecanvas/core']),
+      '@rulecanvas/workbench-react': new Set([
+        '@rulecanvas/core',
+        '@rulecanvas/ui',
+        '@rulecanvas/workbench/verify',
+        '@rulecanvas/workbench/verify-worker',
+        '@rulecanvas/workbench/model-json',
+        'react',
+        'react/jsx-runtime',
+      ]),
+    };
+
     const graph = new Map<string, string[]>();
     const violations: string[] = [];
 
@@ -1079,6 +1151,26 @@ describe('architecture and honesty boundaries', () => {
             }
           }
           for (const spec of specs) {
+            if (spec.startsWith('.')) {
+              const resolved = path.resolve(path.dirname(filePath), spec);
+              if (!resolved.startsWith(`${wsDir}${path.sep}`) && resolved !== wsDir) {
+                violations.push(`${relFile}: relative import escapes workspace package ("${spec}")`);
+              }
+              continue;
+            }
+
+            // All non-relative specifiers (node:*, bare npm, @rulecanvas/*, aliases) must be explicitly allowlisted
+            if (spec.startsWith('node:')) {
+              violations.push(`${relFile}: disallowed Node built-in import "${spec}"`);
+              continue;
+            }
+            if (group === 'packages') {
+              const allowedSet = allowedBareImportsByLib[name];
+              if (allowedSet === undefined || !allowedSet.has(spec)) {
+                violations.push(`${relFile}: disallowed bare import "${spec}" in ${name}`);
+                continue;
+              }
+            }
             if (spec.startsWith('@rulecanvas/')) {
               if (!allowedPackageSubpaths.has(spec)) {
                 violations.push(`${relFile}: disallowed @rulecanvas subpath "${spec}"`);
@@ -1092,11 +1184,6 @@ describe('architecture and honesty boundaries', () => {
               }
               if (group === 'apps' && (spec.includes('agent-gate') || spec.includes('interlock-sim'))) {
                 violations.push(`${relFile}: cross-app bare import "${spec}"`);
-              }
-            } else if (spec.startsWith('.')) {
-              const resolved = path.resolve(path.dirname(filePath), spec);
-              if (!resolved.startsWith(`${wsDir}${path.sep}`) && resolved !== wsDir) {
-                violations.push(`${relFile}: relative import escapes workspace package ("${spec}")`);
               }
             }
           }

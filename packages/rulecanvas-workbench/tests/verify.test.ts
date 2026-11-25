@@ -294,4 +294,95 @@ describe('@rulecanvas/workbench verification transport and ownership contracts',
     expect(res2.kind).toBe('result');
     legacyClient.dispose();
   });
+
+  it('freezes factory clients and ignores malformed/accessor replies from superseded request IDs', async () => {
+    // 1. Native protocol worker: freeze check + superseded malformed reply ignored
+    let nativeWorker!: VerifyWorkerInstance;
+    const nativeClient = createVerifyClient({
+      execution: {
+        kind: 'injected-worker',
+        createWorker: () => {
+          nativeWorker = {
+            onmessage: null,
+            onerror: null,
+            onmessageerror: null,
+            postMessage() {},
+            terminate() {},
+          };
+          return nativeWorker;
+        },
+      },
+    });
+    expect(Object.isFrozen(nativeClient)).toBe(true);
+    expect(() => {
+      (nativeClient as { verify: unknown }).verify = () => Promise.resolve(null);
+    }).toThrow(TypeError);
+
+    const n1 = nativeClient.verify(counterModel, { maxStates: 50, maxDepth: 10 });
+    const n2 = nativeClient.verify(counterModel, { maxStates: 50, maxDepth: 10 });
+    expect((await n1).kind).toBe('cancelled');
+
+    const poisonedSuperseded = { requestId: 1, generation: 1, protocolVersion: VERIFY_PROTOCOL_VERSION };
+    Object.defineProperty(poisonedSuperseded, 'type', {
+      enumerable: true,
+      get() {
+        throw new Error('must not inspect payload of superseded request');
+      },
+    });
+    nativeWorker.onmessage?.({ data: poisonedSuperseded });
+
+    nativeWorker.onmessage?.({
+      data: {
+        protocolVersion: VERIFY_PROTOCOL_VERSION,
+        generation: 1,
+        requestId: 2,
+        type: 'result',
+        result: verifyModel(counterModel, { maxStates: 50, maxDepth: 10 }),
+      },
+    });
+    const nativeRes2 = await n2;
+    expect(nativeRes2.kind).toBe('result');
+    nativeClient.dispose();
+
+    // 2. Legacy WorkerLike adapter: superseded malformed reply ignored before reading payload accessors
+    let legacyWorker!: LegacyWorkerLike;
+    const legacyClient = createVerifyClient({
+      execution: {
+        kind: 'injected-worker',
+        createWorker: createLegacyWorkerAdapter(() => {
+          legacyWorker = {
+            onmessage: null,
+            onerror: null,
+            postMessage() {},
+            terminate() {},
+          };
+          return legacyWorker;
+        }),
+      },
+    });
+
+    const l1 = legacyClient.verify(counterModel, { maxStates: 50, maxDepth: 10 });
+    const l2 = legacyClient.verify(counterModel, { maxStates: 50, maxDepth: 10 });
+    expect((await l1).kind).toBe('cancelled');
+
+    const legacyPoisonedSuperseded = { requestId: 1 };
+    Object.defineProperty(legacyPoisonedSuperseded, 'type', {
+      enumerable: true,
+      get() {
+        throw new Error('must not inspect payload of superseded legacy reply');
+      },
+    });
+    legacyWorker.onmessage?.({ data: legacyPoisonedSuperseded });
+
+    legacyWorker.onmessage?.({
+      data: {
+        type: 'result',
+        requestId: 2,
+        result: verifyModel(counterModel, { maxStates: 50, maxDepth: 10 }),
+      },
+    });
+    const legacyRes2 = await l2;
+    expect(legacyRes2.kind).toBe('result');
+    legacyClient.dispose();
+  });
 });

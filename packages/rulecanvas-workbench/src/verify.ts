@@ -162,12 +162,21 @@ export function createLegacyWorkerAdapter(
       if (typeof raw !== 'object' || raw === null) {
         return;
       }
+      // Correlate requestId before touching payload or error fields
       let reqIdField: { readonly present: boolean; readonly value?: unknown };
+      try {
+        reqIdField = readOwnDataProperty(raw, 'requestId');
+      } catch {
+        return;
+      }
+      if (!reqIdField.present || reqIdField.value !== tuple.requestId) {
+        return;
+      }
+
       let msgTypeField: { readonly present: boolean; readonly value?: unknown };
       let resultField: { readonly present: boolean; readonly value?: unknown };
       let messageField: { readonly present: boolean; readonly value?: unknown };
       try {
-        reqIdField = readOwnDataProperty(raw, 'requestId');
         msgTypeField = readOwnDataProperty(raw, 'type');
         resultField = readOwnDataProperty(raw, 'result');
         messageField = readOwnDataProperty(raw, 'message');
@@ -180,9 +189,6 @@ export function createLegacyWorkerAdapter(
             type: '__invalid_accessor__',
           },
         });
-        return;
-      }
-      if (!reqIdField.present || reqIdField.value !== tuple.requestId) {
         return;
       }
       const msgType = msgTypeField.present ? msgTypeField.value : undefined;
@@ -343,15 +349,29 @@ export function createVerifyClient(config: {
         const data = event?.data;
         if (typeof data !== 'object' || data === null) return;
 
+        // Correlate requestId and generation before inspecting envelope payload fields
         let reqIdField: { readonly present: boolean; readonly value?: unknown };
         let genField: { readonly present: boolean; readonly value?: unknown };
+        try {
+          reqIdField = readOwnDataProperty(data, 'requestId');
+          genField = readOwnDataProperty(data, 'generation');
+        } catch {
+          return;
+        }
+        if (
+          !reqIdField.present ||
+          !genField.present ||
+          reqIdField.value !== active.requestId ||
+          genField.value !== gen
+        ) {
+          return;
+        }
+
         let protoField: { readonly present: boolean; readonly value?: unknown };
         let typeField: { readonly present: boolean; readonly value?: unknown };
         let msgField: { readonly present: boolean; readonly value?: unknown };
         let resField: { readonly present: boolean; readonly value?: unknown };
         try {
-          reqIdField = readOwnDataProperty(data, 'requestId');
-          genField = readOwnDataProperty(data, 'generation');
           protoField = readOwnDataProperty(data, 'protocolVersion');
           typeField = readOwnDataProperty(data, 'type');
           msgField = readOwnDataProperty(data, 'message');
@@ -367,15 +387,6 @@ export function createVerifyClient(config: {
           return;
         }
 
-        // Must have usable correlation data matching the active request
-        if (
-          !reqIdField.present ||
-          !genField.present ||
-          reqIdField.value !== active.requestId ||
-          genField.value !== gen
-        ) {
-          return;
-        }
         if (!protoField.present || protoField.value !== VERIFY_PROTOCOL_VERSION) {
           discardWorker();
           settlePending(active, {
@@ -624,6 +635,7 @@ export function createVerifyClient(config: {
     },
   };
 
-  FACTORY_CLIENTS.add(client);
-  return client;
+  const frozenClient = Object.freeze(client);
+  FACTORY_CLIENTS.add(frozenClient);
+  return frozenClient;
 }

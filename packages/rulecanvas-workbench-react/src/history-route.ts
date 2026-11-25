@@ -165,6 +165,11 @@ export function createWorkbenchHistoryController<TPreset extends string>(
   let approvedUnloadHref: string | null = null;
   let historyUrlDiverged = false;
 
+  const getLiveRelativeUrl = (): string => {
+    const parsedUrl = new URL(host.location.href);
+    return `${parsedUrl.pathname}${parsedUrl.search}${parsedUrl.hash}`;
+  };
+
   const setPrompt = (next: PendingDiscardPrompt<TPreset> | null): void => {
     activePrompt = next;
     onPromptChange(next);
@@ -174,7 +179,9 @@ export function createWorkbenchHistoryController<TPreset extends string>(
     restorationToken = null;
     pendingPopstateCandidate = null;
     historyUrlDiverged = false;
-    setPrompt(null);
+    if (activePrompt?.kind === 'popstate') {
+      setPrompt(null);
+    }
 
     sessionId = allocSessionId();
     acceptedStamp = {
@@ -234,6 +241,7 @@ export function createWorkbenchHistoryController<TPreset extends string>(
   };
 
   const commitPresetWithPush = (nextPreset: TPreset): void => {
+    restorationToken = null;
     historyUrlDiverged = false;
     pendingPopstateCandidate = null;
     const nextUrl = buildCanonicalPresetUrl(host.location.href, nextPreset);
@@ -244,13 +252,15 @@ export function createWorkbenchHistoryController<TPreset extends string>(
       index: acceptedStamp.index + 1,
       preset: nextPreset,
     };
-    if (nextUrl !== acceptedUrl) {
+    if (nextUrl !== getLiveRelativeUrl()) {
       host.history.pushState(nextStamp, '', nextUrl);
       acceptedStamp = nextStamp;
       acceptedUrl = nextUrl;
       acceptedNavKey = currentNavKey();
     } else {
       acceptedStamp = { ...acceptedStamp, preset: nextPreset };
+      acceptedUrl = nextUrl;
+      acceptedNavKey = currentNavKey();
     }
     onCommitPreset(nextPreset);
   };
@@ -273,7 +283,9 @@ export function createWorkbenchHistoryController<TPreset extends string>(
         restorationToken = null;
         pendingPopstateCandidate = null;
         historyUrlDiverged = false;
-        setPrompt(null);
+        if (activePrompt?.kind === 'popstate') {
+          setPrompt(null);
+        }
         return;
       }
       // Unowned or superseding navigation while restoring -> fresh-session replaceState recovery

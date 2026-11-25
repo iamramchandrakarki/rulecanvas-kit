@@ -33,6 +33,10 @@ export type ModelJsonEncodeResult =
   | { readonly ok: true; readonly text: string }
   | { readonly ok: false; readonly error: ValidationError };
 
+export interface ModelJsonCodecOptions {
+  readonly duplicateKeys?: 'reject' | 'last-value' | undefined;
+}
+
 export interface ModelJsonCodec {
   readonly limits: ModelJsonLimits;
   decode(text: unknown): ModelJsonDecodeResult;
@@ -1452,8 +1456,12 @@ function buildDetachedCanonicalModel(candidate: unknown, ctx: TraversalContext):
   }
 }
 
-export function createModelJsonCodec(overrides?: Partial<ModelJsonLimits>): ModelJsonCodec {
+export function createModelJsonCodec(
+  overrides?: Partial<ModelJsonLimits>,
+  options?: ModelJsonCodecOptions,
+): ModelJsonCodec {
   const limits = resolveLimits(overrides);
+  const duplicateKeysPolicy = options?.duplicateKeys ?? 'reject';
 
   const validateValue = (candidate: unknown): ModelJsonDecodeResult => {
     try {
@@ -1542,7 +1550,7 @@ export function createModelJsonCodec(overrides?: Partial<ModelJsonLimits>): Mode
           ],
         };
       }
-      if (scan.duplicateKeyErrors.length > 0) {
+      if (duplicateKeysPolicy === 'reject' && scan.duplicateKeyErrors.length > 0) {
         return { ok: false, errors: scan.duplicateKeyErrors };
       }
       if (scan.numberErrors.length > 0) {
