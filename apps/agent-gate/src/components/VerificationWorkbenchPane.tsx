@@ -234,6 +234,9 @@ export function VerificationWorkbenchPane({
           <section className="ag-verdict" role="status" aria-live="polite" data-tone="warning">
             <div className="ag-verdict-top">
               <span className="ag-badge" data-tone="warning">
+                <span aria-hidden="true">
+                  {cancelledNotice !== null || activeErrors.length > 0 ? '!' : '○'}
+                </span>{' '}
                 {cancelledNotice !== null
                   ? 'VERIFICATION CANCELLED'
                   : activeErrors.length > 0
@@ -298,7 +301,9 @@ export function VerificationWorkbenchPane({
                 data-tone={isStale ? 'warning' : verdictView.tone}
               >
                 {isStale ? (
-                  <>OUTDATED: {verdictView.badge}</>
+                  <>
+                    <span aria-hidden="true">!</span> OUTDATED: {verdictView.badge}
+                  </>
                 ) : (
                   <>
                     <span aria-hidden="true">{verdictView.symbol}</span> {verdictView.badge}
@@ -310,6 +315,7 @@ export function VerificationWorkbenchPane({
                   className="ag-badge"
                   data-tone={verdictView.goalReachable ? 'success' : 'warning'}
                 >
+                  <span aria-hidden="true">{verdictView.goalReachable ? '✓' : '○'}</span>{' '}
                   {verdictView.goalReachable ? 'Goal reachable: Yes' : 'Goal reachable: No'}
                 </span>
               )}
@@ -511,7 +517,12 @@ export function VerificationWorkbenchPane({
                   </span>
                 </div>
 
-                <div className="ag-table-wrap">
+                <div
+                  className="ag-table-wrap"
+                  tabIndex={0}
+                  role="region"
+                  aria-label={`State variables table for ${stateTableView.modelName}`}
+                >
                   <table
                     className="ag-table"
                     aria-label={`State variables for ${stateTableView.modelName}`}
@@ -559,7 +570,12 @@ export function VerificationWorkbenchPane({
             {invariantsPanelView !== null && invariantsPanelView.status === 'VALID' && (
               <div className="ag-section">
                 <h4 className="ag-section-title">Invariants &amp; Goal at Step {replaySession.cursor}</h4>
-                <div className="ag-table-wrap">
+                <div
+                  className="ag-table-wrap"
+                  tabIndex={0}
+                  role="region"
+                  aria-label="Invariants and goal evaluation table"
+                >
                   <table className="ag-table" aria-label="Invariant and goal evaluation">
                     <thead>
                       <tr>

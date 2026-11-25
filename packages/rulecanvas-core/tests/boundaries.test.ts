@@ -811,6 +811,9 @@ describe('architecture and honesty boundaries', () => {
     expect(findTestHygieneViolations('probe.test.ts', "it.concurrent('pending');")).toHaveLength(1);
     expect(findTestHygieneViolations('probe.test.ts', "import { test as myTest } from 'vitest'; myTest.fails('pending', undefined);")).toHaveLength(1);
     expect(findTestHygieneViolations('probe.test.ts', "import * as v from 'vitest'; v.bench.sequential('pending');")).toHaveLength(1);
+    expect(findTestHygieneViolations('tests/browser/probe-e2e.mjs', "import { test } from '@playwright/test'; test.fixme('x', () => {});")).toHaveLength(1);
+    expect(findTestHygieneViolations('tests/browser/probe-e2e.mjs', "test.describe.skip('x', () => {});")).toHaveLength(1);
+    expect(findTestHygieneViolations('tests/browser/probe-e2e.mjs', "await page.waitForTimeout(250);")).toHaveLength(1);
   });
 
   it('contains zero domain leaks in packages/rulecanvas-core/src/** filenames or contents', () => {

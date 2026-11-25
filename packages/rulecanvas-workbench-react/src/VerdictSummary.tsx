@@ -37,7 +37,9 @@ export function VerdictSummary({
           data-tone={stale ? 'warning' : view.tone}
         >
           {stale ? (
-            <>OUTDATED: {view.badge}</>
+            <>
+              <span aria-hidden="true">!</span> OUTDATED: {view.badge}
+            </>
           ) : (
             <>
               <span aria-hidden="true">{view.symbol}</span> {view.badge}

@@ -192,7 +192,7 @@ export function OperatorConsole({
                   <div className="is-actuator-head">
                     <span className="is-actuator-id">{item.ruleId}</span>
                     <span className="is-badge" data-tone="success">
-                      READY
+                      <span aria-hidden="true">✓</span> READY
                     </span>
                   </div>
                   <span className="is-actuator-label">{item.label}</span>

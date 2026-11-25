@@ -10,18 +10,20 @@ const TEST_ROOT_NAMES = new Set(['it', 'test', 'describe', 'suite', 'bench']);
 const PENDING_BODY_ROOT_NAMES = new Set(['it', 'test', 'bench']);
 const TEST_BODY_MODIFIERS = new Set(['concurrent', 'sequential', 'fails']);
 const FORBIDDEN_DIRECT_CALLS = new Set(['xit', 'fit', 'xdescribe', 'fdescribe', 'xtest', 'ftest']);
-const FORBIDDEN_MODIFIERS = new Set(['skip', 'only', 'todo', 'skipIf', 'runIf']);
+const FORBIDDEN_MODIFIERS = new Set(['skip', 'only', 'todo', 'skipIf', 'runIf', 'fixme']);
 const TEST_FILE_RE = /\.(test|spec)\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/;
+const E2E_SCRIPT_FILE_RE = /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/;
 
-function walkTestFiles(dir, out) {
+function walkTestFiles(dir, out, includeAllScripts = false) {
   if (!existsSync(dir)) return;
+  const matcher = includeAllScripts ? E2E_SCRIPT_FILE_RE : TEST_FILE_RE;
   for (const entry of readdirSync(dir)) {
     if (entry === 'node_modules' || entry === 'dist' || entry === '.git') continue;
     const full = path.join(dir, entry);
     const st = statSync(full);
     if (st.isDirectory()) {
-      walkTestFiles(full, out);
-    } else if (TEST_FILE_RE.test(entry)) {
+      walkTestFiles(full, out, includeAllScripts);
+    } else if (matcher.test(entry)) {
       out.push(full);
     }
   }
@@ -84,8 +86,8 @@ export function findTestHygieneViolations(filePath, source) {
   const directForbidden = new Set(FORBIDDEN_DIRECT_CALLS);
   const testNamespaces = new Set();
 
-  // Collect aliased and namespace imports from test runners (vitest / node:test / @jest/globals)
-  const TEST_RUNNERS = new Set(['vitest', 'node:test', '@jest/globals']);
+  // Collect aliased and namespace imports from test runners (vitest / node:test / @jest/globals / @playwright/test)
+  const TEST_RUNNERS = new Set(['vitest', 'node:test', '@jest/globals', '@playwright/test']);
   for (const stmt of parsed.program.body ?? []) {
     if (stmt?.type !== 'ImportDeclaration' || !TEST_RUNNERS.has(stmt.source?.value)) continue;
     for (const spec of stmt.specifiers ?? []) {
@@ -124,7 +126,9 @@ export function findTestHygieneViolations(filePath, source) {
           effective = chain.slice(1);
         }
         const root = effective[0];
-        if (directForbidden.has(root)) {
+        if (effective.length >= 2 && effective[effective.length - 1] === 'waitForTimeout') {
+          violations.push(`${filePath}:${lineNumberAt(source, node.start)}: forbidden arbitrary wait ${chain.join('.')}`);
+        } else if (directForbidden.has(root)) {
           violations.push(`${filePath}:${lineNumberAt(source, node.start)}: forbidden call ${chain.join('.')}`);
         } else if (testRoots.has(root)) {
           let hasForbiddenModifier = false;
@@ -166,11 +170,14 @@ export function findTestHygieneViolations(filePath, source) {
 function main() {
   const files = [];
   for (const dir of ['packages', 'apps']) {
-    walkTestFiles(path.join(REPO_ROOT, dir), files);
+    walkTestFiles(path.join(REPO_ROOT, dir), files, false);
   }
+  const browserFiles = [];
+  walkTestFiles(path.join(REPO_ROOT, 'tests'), browserFiles, true);
+  files.push(...browserFiles);
 
-  if (files.length === 0) {
-    console.error('ERROR: No test files found under packages/ or apps/.');
+  if (files.length === 0 || browserFiles.length === 0) {
+    console.error('ERROR: Missing unit/integration or browser test files under packages/, apps/, or tests/.');
     process.exit(1);
   }
 

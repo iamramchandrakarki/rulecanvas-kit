@@ -372,7 +372,12 @@ export function InterlockRuleEditor({
               </button>
             </div>
 
-            <div className="is-guard-tree-scroll">
+            <div
+              className="is-guard-tree-scroll"
+              tabIndex={0}
+              role="region"
+              aria-label="Guard expression AST editor"
+            >
               <BoolExprEditor
                 key={`${resetKey}:${selectedRule.id}:${repairGen}`}
                 value={selectedRule.guard}

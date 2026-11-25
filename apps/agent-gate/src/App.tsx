@@ -596,7 +596,9 @@ export function App({
               role="status"
             >
               {isStale ? (
-                <>OUTDATED: {topVerdictSummary.badge}</>
+                <>
+                  <span aria-hidden="true">!</span> OUTDATED: {topVerdictSummary.badge}
+                </>
               ) : (
                 <>
                   <span aria-hidden="true">{topVerdictSummary.symbol}</span>{' '}
@@ -606,19 +608,19 @@ export function App({
             </span>
           ) : hasAnyValidationErrors ? (
             <span className="ag-badge" data-status="INVALID" data-tone="error" role="status">
-              INVALID
+              <span aria-hidden="true">!</span> INVALID
             </span>
           ) : cancelledNotice !== null ? (
             <span className="ag-badge" data-tone="warning" role="status">
-              CANCELLED
+              <span aria-hidden="true">!</span> CANCELLED
             </span>
           ) : workerError !== null ? (
             <span className="ag-badge" data-tone="error" role="status">
-              ERROR
+              <span aria-hidden="true">!</span> ERROR
             </span>
           ) : (
             <span className="ag-badge" data-tone="warning" role="status">
-              NOT VERIFIED
+              <span aria-hidden="true">○</span> NOT VERIFIED
             </span>
           )}
 
@@ -647,6 +649,12 @@ export function App({
           role="alertdialog"
           aria-labelledby="ag-discard-title"
           aria-describedby="ag-discard-desc"
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') {
+              e.preventDefault();
+              declinePrompt();
+            }
+          }}
         >
           <div>
             <strong id="ag-discard-title">Unsaved Custom Edits</strong>

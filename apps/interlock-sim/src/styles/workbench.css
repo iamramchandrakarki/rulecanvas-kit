@@ -164,6 +164,8 @@ svg {
   padding: var(--space-2xs) var(--space-xs);
   font-size: var(--text-sm);
   min-height: 36px;
+  min-width: 0;
+  max-width: 100%;
   transition: border-color var(--dur-micro) var(--ease-out);
 }
 
@@ -900,7 +902,7 @@ svg {
   display: flex;
   flex-direction: column;
   gap: var(--space-xs);
-  min-width: max-content;
+  min-width: 0;
 }
 
 .is-expr-node[data-depth-capped='true'] {
@@ -920,6 +922,7 @@ svg {
   flex-direction: column;
   gap: var(--space-2xs);
   min-width: 0;
+  max-width: 100%;
 }
 
 .is-field label,
@@ -931,8 +934,11 @@ svg {
 
 .is-inline-field {
   display: inline-flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-xs);
+  min-width: 0;
+  max-width: 100%;
 }
 
 .is-row-grid {
@@ -1044,6 +1050,26 @@ svg {
   .is-transition-grid {
     grid-template-columns: minmax(0, 1fr);
   }
+
+  .is-badge {
+    max-width: 100%;
+    white-space: normal;
+  }
+
+  .is-table .is-badge {
+    white-space: nowrap;
+  }
+
+  .is-table th,
+  .is-table td {
+    padding: var(--space-2xs) var(--space-xs);
+  }
+}
+
+.is-alert code,
+.is-inline-errors code,
+.is-telemetry-cell dd {
+  overflow-wrap: anywhere;
 }
 
 .is-wb-nav {
