@@ -149,15 +149,15 @@ RuleCanvasKit powers two domain-separated applications built on `@rulecanvas/cor
 
 ### AgentGate (`apps/agent-gate`)
 
-AgentGate is the primary commercially relevant application in RuleCanvasKit for verifying AI agent permissions, security policies, and approval workflows before rollout. In the `v0.1.0` milestone, `@rulecanvas/agent-gate` provides executable TypeScript policy models (`broken`, `naive-patch-a`, `naive-patch-b`, `principled-fix`, and `vacuous-fix`) demonstrating how multi-step approval bypasses are discovered, replayed, and closed without breaking legitimate publish goals, with the interactive visual workbench scheduled for `v0.3.0`.
+AgentGate is the primary commercially relevant application in RuleCanvasKit for verifying AI agent permissions, security policies, and approval workflows before rollout. As of `v0.3.0`, `@rulecanvas/agent-gate` provides both executable TypeScript policy models (`broken`, `naive-patch-a`, `naive-patch-b`, `principled-fix`, and `vacuous-fix`) and an interactive React + Vite verification workbench (`pnpm --filter @rulecanvas/agent-gate dev` / `build` / `preview`) featuring a structured policy and AST guard editor, strict integer draft and raw JSON number pre-validation, non-blocking Web Worker verification with main-thread fallback, `@rulecanvas/ui` counterexample replay, and a reactive 5-preset comparison matrix.
 
 ### InterlockSim (`apps/interlock-sim`)
 
-InterlockSim is an educational discrete-state simulator for modeling and verifying industrial safety interlock rules, demonstrating the shared engine's domain versatility beyond software security policies. In the `v0.1.0` milestone, `@rulecanvas/interlock-sim` provides discrete BSL-3 airlock interlock models (`broken`, `fixed`, and `vacuous`) covering mutual-exclusion hazards, maintenance overrides, and goal reachability.
+InterlockSim is an educational discrete-state simulator for modeling and verifying industrial safety interlock rules, demonstrating the shared engine's domain versatility beyond software security policies. Currently `@rulecanvas/interlock-sim` provides discrete BSL-3 airlock interlock models (`broken`, `fixed`, and `vacuous`) covering mutual-exclusion hazards, maintenance overrides, and goal reachability, with the interactive browser workbench scheduled for `v0.4.0`.
 
 ## Screenshots
 
-The `v0.1.0`–`v0.2.0` milestones (tracked under `Unreleased` in [CHANGELOG.md](./CHANGELOG.md) until tagged) provide programmatic verification APIs and the shared `@rulecanvas/ui` component and replay-controller foundation. Interactive browser workbenches for AgentGate and InterlockSim, along with UI screenshots, arrive in `v0.3.0`–`v0.4.0`.
+Releases `v0.1.0`–`v0.3.0` deliver `@rulecanvas/core`, `@rulecanvas/ui`, and the AgentGate interactive workbench (`apps/agent-gate`). The InterlockSim interactive workbench (`v0.4.0`), multi-app shell integration (`v0.5.0`), and repository screenshot documentation (`v1.0.0`) follow in upcoming milestones.
 
 ## Testing Instructions
 
@@ -166,6 +166,9 @@ Run the full build, typecheck, test, boundary, hygiene, and benchmark suite loca
 ```bash
 # Build @rulecanvas/core and @rulecanvas/ui
 pnpm build
+
+# Build the AgentGate interactive browser workbench
+pnpm --filter @rulecanvas/agent-gate build
 
 # Typecheck all workspace packages and strict ES2022 core/UI configs
 pnpm typecheck
