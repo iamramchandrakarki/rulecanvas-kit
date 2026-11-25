@@ -153,11 +153,20 @@ AgentGate is the primary commercially relevant application in RuleCanvasKit for 
 
 ### InterlockSim (`apps/interlock-sim`)
 
-InterlockSim is an educational discrete-state simulator for modeling and verifying industrial safety interlock rules, demonstrating the shared engine's domain versatility beyond software security policies. Currently `@rulecanvas/interlock-sim` provides discrete BSL-3 airlock interlock models (`broken`, `fixed`, and `vacuous`) covering mutual-exclusion hazards, maintenance overrides, and goal reachability, with the interactive browser workbench scheduled for `v0.4.0`.
+InterlockSim is an educational browser workbench for exploring discrete airlock interlocks. Compare the broken, repaired, and vacuous-lockout presets, replay a counterexample, and step through enabled operator actions. The guard inspector explains blocked actions and offers a guided repair for the built-in broken preset. The workbench also supports JSON import and export for custom finite-state models.
+
+After installing workspace dependencies, build the shared packages and launch the workbench:
+
+```bash
+pnpm build
+pnpm --filter @rulecanvas/interlock-sim dev
+```
+
+For a production build, use `pnpm --filter @rulecanvas/interlock-sim build`. See the [v0.4.0 release notes](docs/releases/v0.4.0.md) for a walkthrough and verification limits.
 
 ## Screenshots
 
-Releases `v0.1.0`–`v0.3.0` deliver `@rulecanvas/core`, `@rulecanvas/ui`, and the AgentGate interactive workbench (`apps/agent-gate`). The InterlockSim interactive workbench (`v0.4.0`), multi-app shell integration (`v0.5.0`), and repository screenshot documentation (`v1.0.0`) follow in upcoming milestones.
+Repository screenshot documentation is planned for the `v1.0.0` milestone.
 
 ## Testing Instructions
 
@@ -169,6 +178,7 @@ pnpm build
 
 # Build the AgentGate interactive browser workbench
 pnpm --filter @rulecanvas/agent-gate build
+pnpm --filter @rulecanvas/interlock-sim build
 
 # Typecheck all workspace packages and strict ES2022 core/UI configs
 pnpm typecheck

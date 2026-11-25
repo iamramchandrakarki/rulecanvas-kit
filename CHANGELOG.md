@@ -7,7 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Upcoming `v0.4.0` InterlockSim workbench changes will be tracked here.
+## [0.4.0] - 2026-11-25
+
+See [docs/releases/v0.4.0.md](./docs/releases/v0.4.0.md) for usage, verification limits, and the release checks.
+
+### Added
+
+- InterlockSim browser workbench with an accessible airlock schematic, operator console, and three presets for comparing a violation, a repair, and a lockout that makes the model's goal unreachable.
+- Shortest counterexample replay, enabled-action simulation, predicate-level guard explanations, a rule inspector, and a guided repair for the built-in broken preset.
+- Bounded verification in a Web Worker with a main-thread fallback. Results are tied to the model snapshot, bounds, and assumptions used at the time of verification.
+- Strict JSON import and export with integer and structural validation, plus ten workbench tests that bring the workspace suite to 131 tests.
+
+### Changed
+
+- CI now builds the InterlockSim production bundle in addition to the AgentGate bundle and shared packages.
 
 ## [0.3.0] - 2026-11-25
 
@@ -74,7 +87,8 @@ See [docs/releases/v0.2.0.md](./docs/releases/v0.2.0.md) and the [`v0.2.0`](http
   - GitHub Actions CI workflow (`.github/workflows/ci.yml`) running build, strict ES2022 typecheck, tests, seeded PBT, boundary checks, anti-skip hygiene, tracked workspace config verification, and benchmarks.
   - Open-source documentation and repository templates (`README.md`, `docs/ARCHITECTURE.md`, `CONTRIBUTING.md`, `SECURITY.md`, `CHANGELOG.md`, GitHub issue and pull request templates).
 
-[Unreleased]: https://github.com/iamramchandrakarki/rulecanvas-kit/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/iamramchandrakarki/rulecanvas-kit/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/iamramchandrakarki/rulecanvas-kit/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/iamramchandrakarki/rulecanvas-kit/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/iamramchandrakarki/rulecanvas-kit/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/iamramchandrakarki/rulecanvas-kit/releases/tag/v0.1.0
