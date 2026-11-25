@@ -258,6 +258,12 @@ importers:
         specifier: workspace:*
         version: link:../rulecanvas-core
 
+  packages/rulecanvas-workbench:
+    dependencies:
+      '@rulecanvas/core':
+        specifier: workspace:*
+        version: link:../rulecanvas-core
+
 packages:
 
   '@emnapi/core@2.0.0-beta.2':

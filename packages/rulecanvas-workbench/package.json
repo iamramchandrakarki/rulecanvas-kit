@@ -1,0 +1,36 @@
+{
+  "name": "@rulecanvas/workbench",
+  "version": "0.5.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "exports": {
+    "./verify": {
+      "types": "./dist/verify.d.ts",
+      "import": "./dist/verify.js"
+    },
+    "./verify-worker": {
+      "types": "./dist/verify-worker.d.ts",
+      "import": "./dist/verify-worker.js"
+    },
+    "./model-json": {
+      "types": "./dist/model-json.d.ts",
+      "import": "./dist/model-json.js"
+    }
+  },
+  "dependencies": {
+    "@rulecanvas/core": "workspace:*"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "build:pack": "node -e \"import('node:fs').then((fs)=>fs.rmSync('dist',{recursive:true,force:true}))\" && tsc -p tsconfig.json --declarationMap false --sourceMap false",
+    "prepack": "pnpm run build:pack",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.test.json",
+    "test": "pnpm --filter @rulecanvas/core build && pnpm run build && vitest run"
+  }
+}
