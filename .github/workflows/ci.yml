@@ -28,6 +28,9 @@ jobs:
       - name: Build core package
         run: pnpm build
 
+      - name: Build AgentGate workbench
+        run: pnpm --filter @rulecanvas/agent-gate build
+
       - name: Typecheck workspace
         run: pnpm typecheck
 

@@ -1,0 +1,76 @@
+/* Hallmark · shape: app screen · genre: modern-minimal · theme: Cobalt (dealt 3/3) · v2.0.0 */
+
+:root {
+  /* Paper & surface hierarchy */
+  --color-paper: oklch(98.6% 0.005 250);
+  --color-surface: oklch(100% 0 0);
+  --color-surface-subtle: oklch(96.6% 0.008 250);
+  --color-surface-tint: oklch(94.6% 0.014 252);
+
+  /* Hairlines & borders */
+  --color-rule: oklch(88.5% 0.014 250);
+  --color-rule-strong: oklch(78% 0.02 250);
+  --color-control-border: oklch(59% 0.025 252);
+
+  /* Ink */
+  --color-ink: oklch(20.5% 0.02 256);
+  --color-ink-secondary: oklch(39% 0.02 254);
+  --color-ink-muted: oklch(52% 0.018 252);
+
+  /* Graphite inspection surface */
+  --color-graphite: oklch(21.5% 0.018 256);
+  --color-graphite-elevated: oklch(26% 0.02 256);
+  --color-graphite-rule: oklch(34% 0.02 256);
+  --color-graphite-ink: oklch(96% 0.006 250);
+  --color-graphite-muted: oklch(76% 0.015 252);
+
+  /* Cobalt signal */
+  --color-accent: oklch(49% 0.19 258);
+  --color-accent-hover: oklch(43% 0.19 258);
+  --color-accent-soft: oklch(94.5% 0.032 258);
+  --color-accent-ink: oklch(99% 0.004 250);
+
+  /* Semantic verdict & diagnostic tokens */
+  --color-success: oklch(45% 0.14 152);
+  --color-success-soft: oklch(95% 0.035 152);
+  --color-success-border: oklch(80% 0.08 152);
+
+  --color-warning: oklch(52% 0.145 72);
+  --color-warning-soft: oklch(96% 0.04 78);
+  --color-warning-border: oklch(82% 0.09 76);
+
+  --color-danger: oklch(50% 0.195 25);
+  --color-danger-soft: oklch(96% 0.032 25);
+  --color-danger-border: oklch(82% 0.085 25);
+
+  --color-error: oklch(47% 0.18 14);
+  --color-error-soft: oklch(95.5% 0.03 14);
+  --color-error-border: oklch(80% 0.08 14);
+
+  /* Typography */
+  --font-display: 'Familjen Grotesk', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-body: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, Monaco, Consolas, monospace;
+
+  /* Spacing & radii */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+
+  /* Motion */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --dur-fast: 120ms;
+  --dur-base: 160ms;
+
+  scrollbar-color: var(--color-rule-strong) var(--color-paper);
+}
+
+::selection {
+  background-color: var(--color-accent-soft);
+  color: var(--color-ink);
+}
