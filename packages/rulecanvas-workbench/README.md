@@ -13,7 +13,7 @@ Framework-independent verification worker/main-thread transport, detached captur
 ### `@rulecanvas/workbench/verify` (`./dist/verify.js`)
 
 - Functions & constants: `createVerifyClient`, `createLegacyWorkerAdapter`, `isFactoryVerifyClient`, `isWebWorkerSupported`, `captureVerificationRequest`, `sanitizeAndFreezeVerifyResult`, `deepFreeze`, `VERIFY_PROTOCOL_VERSION`
-- Types: `VerifyClient`, `VerifyExecutionMode`, `VerifyExecutionPolicy`, `VerifyRunOptions`, `VerifySettlement`, `VerifyWorkerErrorEvent`, `VerifyWorkerInstance`, `LegacyWorkerLike`, `CapturedRequestResult`, `ValidatedResultOutcome`, `VerifyWorkerRequestMessage`, `VerifyWorkerResponseMessage`
+- Types: `VerifyClient`, `VerifyExecutionMode`, `VerifyExecutionPolicy`, `VerifyRunOptions`, `VerifySettlement`, `VerifyWorkerErrorEvent`, `VerifyWorkerInstance`, `LegacyWorkerLike`, `VerifyWorkerRequestMessage`, `VerifyWorkerResponseMessage`
 
 ### `@rulecanvas/workbench/verify-worker` (`./dist/verify-worker.js`)
 

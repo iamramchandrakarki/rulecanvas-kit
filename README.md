@@ -68,8 +68,8 @@ Boundary tests automatically enforce an acyclic 4-library package graph (`@rulec
 
 | Package | Version | Visibility | Export Subpaths | Primary Role | README |
 | --- | --- | --- | --- | --- | --- |
-| `@rulecanvas/core` | `0.1.0` | Public | `.` | Pure ES2022 GTS validator, BFS verifier, and replay APIs | [packages/rulecanvas-core/README.md](./packages/rulecanvas-core/README.md) |
-| `@rulecanvas/ui` | `0.2.0` | Public | `.` | Formatters, replay controller, HTML renderers, and diagnostics | [packages/rulecanvas-ui/README.md](./packages/rulecanvas-ui/README.md) |
+| `@rulecanvas/core` | `0.1.0` | Packable | `.` | Pure ES2022 GTS validator, BFS verifier, and replay APIs | [packages/rulecanvas-core/README.md](./packages/rulecanvas-core/README.md) |
+| `@rulecanvas/ui` | `0.2.0` | Packable | `.` | Formatters, replay controller, HTML renderers, and diagnostics | [packages/rulecanvas-ui/README.md](./packages/rulecanvas-ui/README.md) |
 | `@rulecanvas/workbench` | `0.5.0` | Private | `./verify`, `./verify-worker`, `./model-json` | Worker/main-thread transport, detached capture, portable JSON codec | [packages/rulecanvas-workbench/README.md](./packages/rulecanvas-workbench/README.md) |
 | `@rulecanvas/workbench-react` | `0.5.0` | Private | `.` | React 19 workbench controls, snapshot hook, nav, and `?preset=` routing | [packages/rulecanvas-workbench-react/README.md](./packages/rulecanvas-workbench-react/README.md) |
 
@@ -80,7 +80,7 @@ Prerequisites: Node.js `^22.12.0 || ^24.0.0 || >=26.0.0` (Node 24 LTS recommende
 ```bash
 git clone https://github.com/iamramchandrakarki/rulecanvas-kit.git
 cd rulecanvas-kit
-pnpm install
+pnpm install --frozen-lockfile
 pnpm build
 pnpm test
 ```
@@ -102,6 +102,8 @@ pnpm build
 pnpm --filter @rulecanvas/agent-gate preview
 pnpm --filter @rulecanvas/interlock-sim preview
 ```
+
+To use the navigation between apps, serve the two production builds as sibling directories on one origin. The [static preview and release instructions](./docs/releases/workbench-integration.md) show the directory layout.
 
 ## Usage Examples
 
@@ -201,6 +203,13 @@ AgentGate is the primary policy-modeling workbench in RuleCanvasKit for verifyin
 
 InterlockSim is an educational browser workbench for exploring discrete BSL-3 airlock interlocks (`broken`, `fixed`, and `vacuous` presets). It pairs an accessible airlock schematic and operator console with shortest counterexample replay, predicate-level guard explanations, a guided repair for the built-in broken preset, a 3-preset comparison matrix, strict 512,000-character export (allowing clean zero-invariant drafts), and legacy duplicate-key import compatibility. See the [v0.4.0 release notes](docs/releases/v0.4.0.md) for a walkthrough.
 
+## Build another workbench on this foundation
+
+1. Add an app under `apps/`. Give it its own scenario, interface, and Vite entry point. Use `workspace:*` for the shared packages your app imports.
+2. Define a bounded model with invariants, an optional goal, and explicit assumptions. Start with `verifyModel` and `replayTrace` from `@rulecanvas/core`.
+3. Add only the adapters your app needs. The UI library can format and replay results. For a React workbench with module-worker verification, follow the worker entry and snapshot hook used by either existing app.
+4. Add a domain test with an expected verdict and, for a failing model, an expected replay. Run `pnpm build`, `pnpm test`, and `pnpm verify:boundaries`. Run `pnpm verify:pack` to see the shared packages build and verify a booking model in an independent consumer.
+
 ## Screenshots
 
 Authentic screenshots and a sub-three-minute walkthrough video for the `v1.0.0` milestone are pending maintainer capture and integration. Headless Chromium regression screenshots generated during `pnpm test:browser` are written to `SCREENSHOT_DIR` (outside git tracking) and are not checked in as marketing assets.
@@ -245,9 +254,13 @@ pnpm bench
 To run the headless Chromium browser regression gate (`pnpm test:browser`) against both built workbenches and, optionally, the packed third-app consumer produced by `pnpm verify:pack`:
 
 ```bash
-# Optional: share a build directory between verify:pack and test:browser for /booking-demo/
-BOOKING_FIXTURE_DIST=/tmp/rulecanvas-booking-demo pnpm verify:pack
-BOOKING_FIXTURE_DIST=/tmp/rulecanvas-booking-demo pnpm test:browser
+qa_dir=$(mktemp -d)
+npm install --no-save --prefix "$qa_dir" playwright@1.65.1
+"$qa_dir/node_modules/.bin/playwright" install chromium
+BOOKING_FIXTURE_DIST="$qa_dir/booking" pnpm verify:pack
+PLAYWRIGHT_MODULE="$qa_dir/node_modules/playwright/index.mjs" \
+  BOOKING_FIXTURE_DIST="$qa_dir/booking" \
+  SCREENSHOT_DIR="$qa_dir/screenshots" pnpm test:browser
 ```
 
 Note: `tests/browser/workbench-e2e.mjs` resolves Playwright from `PLAYWRIGHT_MODULE`, `'playwright'`, or the local Homebrew Playwright path, and honors `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` and `SCREENSHOT_DIR`.
@@ -259,7 +272,6 @@ Note: `tests/browser/workbench-e2e.mjs` resolves Playwright from `PLAYWRIGHT_MOD
 - **Educational interlock modeling (`InterlockSim`)**: `@rulecanvas/interlock-sim` models discrete interlock logic for educational exploration only. It does not model continuous physics, sensor failures, or hardware timing and must not be used for real-world physical containment or SIL / IEC 61508 engineering.
 - **Bounded finite-state exploration and JSON budgets**: Core exploration is bounded by `maxStates` (`<= 100,000`), `maxDepth` (`<= 10,000`), and AST complexity (`depth <= 32`, `visits <= 256`). Models exceeding these limits return `INCONCLUSIVE` or structured validation errors. Portable JSON export defaults to `512,000` UTF-16 code units and `10,000` nodes (`2,000,000` characters / `50,000` nodes hard ceiling).
 - **Private workbench packages and sibling static hosting**: `@rulecanvas/workbench` and `@rulecanvas/workbench-react` are currently `"private": true` workspace packages tested via local tarballs (`pnpm verify:pack`) rather than published to npm. Relative cross-workbench links assume `agent-gate` and `interlock-sim` static builds are served as sibling directories unless `VITE_INTERLOCK_SIM_URL` / `VITE_AGENT_GATE_URL` is set at build time.
-- **No fabricated Kiro IDE spec execution**: `.kiro/specs/` contains no fabricated spec execution logs; formal core specifications live under `docs/specs/01-gts-verification-core/` (see [docs/TOOL_ATTRIBUTION.md](./docs/TOOL_ATTRIBUTION.md)).
 
 ## Contribution Guidelines
 

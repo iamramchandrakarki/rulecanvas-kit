@@ -17,6 +17,12 @@ RuleCanvasKit (`@rulecanvas/core`) is a design-time finite-state model checker f
 - **Prototype and accessor safety**: Validation captures a single `Reflect.ownKeys` snapshot per inspected object or array, rejects any own symbol property (`INVALID_SYMBOL_PROPERTY`), rejects own getter/setter accessors (`INVALID_ACCESSOR_PROPERTY`) across string and symbol keys without invoking accessor functions, rejects non-enumerable or undeclared own keys on schemas and state snapshots, ignores inherited properties such as `Object.prototype.goal`, rejects reserved prototype keys (`__proto__`, `constructor`, `prototype`), and formats untrusted values without invoking user `.toString()` or `Symbol.toPrimitive`.
 - **Total error handling**: Top-level public functions catch exotic `Proxy` trap exceptions and other unexpected runtime errors, returning fresh, frozen structured `INVALID` / `{ ok: false }` results with `UNEXPECTED_INPUT_ERROR`.
 
+## Browser workbenches
+
+- The workbenches process models and results in the browser. The module worker runs the same verifier as direct execution.
+- Verification clients correlate a reply with the active request, validate its shape and bounds, and bind replay to the captured model. Only supply worker factories you trust. Protocol correlation and replay checks do not establish that an arbitrary worker ran the engine.
+- The portable codec checks structural and size budgets before accepting model JSON. The workbenches preserve last-value behavior for duplicate keys in legacy imports. The shared codec rejects duplicate keys by default.
+
 ## Reporting a Vulnerability
 
 If you discover a security issue in RuleCanvasKit — such as an uncaught exception on untrusted input, a validator bypass, an AST complexity DoS, a soundness bug that produces a false `VERIFIED` verdict, or a prototype-pollution vector — please report it responsibly:
