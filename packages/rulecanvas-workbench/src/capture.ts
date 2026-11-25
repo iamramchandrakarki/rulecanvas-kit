@@ -511,6 +511,9 @@ export function sanitizeAndFreezeVerifyResult(
       if (!validateOwnedTrace(owned['trace'], capturedModel, stats.maxDepthReached)) {
         return { ok: false, message: 'VIOLATED result trace is malformed or exceeds maxDepthReached.' };
       }
+      if (owned['trace'].length !== stats.maxDepthReached) {
+        return { ok: false, message: 'VIOLATED result trace length must match maxDepthReached.' };
+      }
       if (!validateOwnedStateSnapshot(owned['terminalState'], capturedModel)) {
         return { ok: false, message: 'VIOLATED result terminalState does not match model schema.' };
       }
@@ -522,8 +525,11 @@ export function sanitizeAndFreezeVerifyResult(
       ) {
         return { ok: false, message: 'VIOLATED result has invalid violatedInvariantIds.' };
       }
-      if (owned['goalReachable'] !== undefined && owned['goalReachable'] !== true) {
-        return { ok: false, message: 'VIOLATED result goalReachable may only be true when present.' };
+      if (
+        owned['goalReachable'] !== undefined &&
+        (owned['goalReachable'] !== true || capturedModel.goal === undefined || owned['trace'].length === 0)
+      ) {
+        return { ok: false, message: 'VIOLATED result has inconsistent goalReachable metadata.' };
       }
       return { ok: true, result: deepFreeze(owned as unknown as VerifyResult) };
     }
@@ -566,8 +572,11 @@ export function sanitizeAndFreezeVerifyResult(
         message: 'MAX_DEPTH result does not match captured maxDepth bound.',
       };
     }
-    if (owned['goalReachable'] !== undefined && owned['goalReachable'] !== true) {
-      return { ok: false, message: 'INCONCLUSIVE result goalReachable may only be true when present.' };
+    if (
+      owned['goalReachable'] !== undefined &&
+      (owned['goalReachable'] !== true || capturedModel.goal === undefined)
+    ) {
+      return { ok: false, message: 'INCONCLUSIVE result has inconsistent goalReachable metadata.' };
     }
     return { ok: true, result: deepFreeze(owned as unknown as VerifyResult) };
   } catch (err) {

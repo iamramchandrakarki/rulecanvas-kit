@@ -19,6 +19,7 @@ import {
   stepReplayForward,
 } from '@rulecanvas/ui';
 import { describe, expect, it, vi } from 'vitest';
+import { installVerifyWorker, type VerifyWorkerPort } from '@rulecanvas/workbench/verify-worker';
 import { App } from '../src/App.js';
 import { ComparisonPanel } from '../src/components/ComparisonPanel.js';
 import {
@@ -51,6 +52,7 @@ import {
   appendRuleGuardClause,
   approvalLaunderingBrokenModel,
   createDefaultRule,
+  createBrowserVerifyWorker,
   createSynchronousWorkerFactory,
   exportModelToJson,
   getErrorsForPathPrefix,
@@ -284,6 +286,51 @@ describe('AgentGate workbench domain modules and UI', () => {
 
     expect(imported.model).toEqual(model);
     expect(validateModel(imported.model)).toEqual([]);
+  });
+
+  it('round-trips the legacy browser worker through the shared protocol', () => {
+    class LoopbackWorker {
+      onmessage: ((event: { data: unknown }) => void) | null = null;
+      readonly port: VerifyWorkerPort = {
+        onmessage: null,
+        postMessage: (data) => this.onmessage?.({ data }),
+      };
+
+      constructor() {
+        installVerifyWorker(this.port);
+      }
+
+      postMessage(data: unknown) {
+        this.port.onmessage?.({ data });
+      }
+
+      terminate() {
+        this.port.onmessage = null;
+      }
+    }
+
+    vi.stubGlobal('Worker', LoopbackWorker);
+    try {
+      const worker = createBrowserVerifyWorker();
+      const onmessage = vi.fn();
+      worker.onmessage = onmessage;
+      worker.postMessage({
+        type: 'verify',
+        requestId: 0,
+        model: approvalLaunderingBrokenModel,
+        options: DEFAULT_VERIFY_OPTIONS,
+      });
+      expect(onmessage).toHaveBeenCalledExactlyOnceWith({
+        data: {
+          type: 'result',
+          requestId: 0,
+          result: verifyModel(approvalLaunderingBrokenModel, DEFAULT_VERIFY_OPTIONS),
+        },
+      });
+      worker.terminate();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('handles VerifyWorkerClient request IDs, stale-response suppression, cancellation, and error recovery', async () => {

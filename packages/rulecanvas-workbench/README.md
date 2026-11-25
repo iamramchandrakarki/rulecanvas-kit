@@ -51,6 +51,7 @@ if (decoded.ok) {
 ## Security, Protocol & Budget Details
 
 - **Worker transport (`./verify`, `./verify-worker`)**: Factory clients are tracked via a `WeakSet` (`isFactoryVerifyClient`) and frozen; requests capture plain-data snapshots without invoking ordinary getters before posting; responses correlate `(requestId, generation)` before reading payload fields and validate/deep-freeze `VerifyResult` against the captured model and options (`VERIFY_PROTOCOL_VERSION = 1`).
+- A `result` settlement is a detached, structurally checked reply from a trusted engine or worker. Use a trusted worker factory and replay a counterexample against the captured model before displaying it. Transport validation alone cannot establish that a worker ran the exhaustive search.
 - **Portable JSON codec (`./model-json`)**: Pre-scans raw JSON before `JSON.parse` to reject duplicate decoded object keys (default `duplicateKeys: 'reject'`, or opt-in `'last-value'` for legacy compatibility), non-integer decimal/exponent numbers (`NON_INTEGER_JSON_NUMBER`), and out-of-range integers (`UNSAFE_INTEGER_JSON_NUMBER`), then enforces strict field allowlists, reserved-key/accessor/cycle checks, and `@rulecanvas/core` `validateModel`.
 
 ## Limitations

@@ -5,6 +5,7 @@ import {
   createLegacyWorkerAdapter,
   createVerifyClient,
   isFactoryVerifyClient,
+  sanitizeAndFreezeVerifyResult,
   type LegacyWorkerLike,
   type VerifyWorkerInstance,
 } from '../src/verify.js';
@@ -79,6 +80,33 @@ function createPairedWorker(): {
 }
 
 describe('@rulecanvas/workbench verification transport and ownership contracts', () => {
+  it('rejects inconsistent goal and trace metadata while keeping core verdicts admissible', () => {
+    const model: TransitionSystemModel = {
+      ...counterModel,
+      invariants: [{ id: 'initial', label: 'Initial invariant', holds: { op: 'lit', value: false } }],
+    };
+    const options = { maxStates: 100, maxDepth: 10 };
+    const result = verifyModel(model, options);
+    if (result.status !== 'VIOLATED') throw new Error('Expected a depth-zero violation');
+
+    expect(sanitizeAndFreezeVerifyResult(result, model, options).ok).toBe(true);
+    expect(sanitizeAndFreezeVerifyResult({ ...result, goalReachable: true }, model, options).ok).toBe(false);
+    expect(sanitizeAndFreezeVerifyResult({
+      ...result,
+      stats: { ...result.stats, maxDepthReached: 1 },
+    }, model, options).ok).toBe(false);
+
+    const { goal: _goal, ...withoutGoal } = counterModel;
+    const shallowOptions = { maxStates: 100, maxDepth: 0 };
+    const bounded = verifyModel(withoutGoal, shallowOptions);
+    expect(bounded.status).toBe('INCONCLUSIVE');
+    expect(sanitizeAndFreezeVerifyResult(bounded, withoutGoal, shallowOptions).ok).toBe(true);
+    expect(sanitizeAndFreezeVerifyResult({
+      ...bounded,
+      goalReachable: true,
+    }, withoutGoal, shallowOptions).ok).toBe(false);
+  });
+
   it('validates factory brand, freezes owned results, and isolates caller mutations after dispatch', async () => {
     const client = createVerifyClient({
       execution: {

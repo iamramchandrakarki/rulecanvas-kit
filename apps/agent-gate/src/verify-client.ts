@@ -48,13 +48,24 @@ function createProtocolWorker(): VerifyWorkerInstance {
 
 export function createBrowserVerifyWorker(): WorkerLike {
   const worker = createProtocolWorker();
+  const generation = 1;
+  let nextRequestId = 0;
+  const legacyRequestIds = new Map<number, number>();
   const legacy: WorkerLike = {
     onmessage: null,
     onerror: null,
     postMessage(message) {
-      worker.postMessage({ ...message, protocolVersion: VERIFY_PROTOCOL_VERSION, generation: 0 });
+      const requestId = ++nextRequestId;
+      legacyRequestIds.set(requestId, message.requestId);
+      try {
+        worker.postMessage({ ...message, protocolVersion: VERIFY_PROTOCOL_VERSION, generation, requestId });
+      } catch (error) {
+        legacyRequestIds.delete(requestId);
+        throw error;
+      }
     },
     terminate() {
+      legacyRequestIds.clear();
       worker.onmessage = null;
       worker.onerror = null;
       worker.terminate();
@@ -62,8 +73,11 @@ export function createBrowserVerifyWorker(): WorkerLike {
   };
   worker.onmessage = ({ data }) => {
     const message = data as import('@rulecanvas/workbench/verify').VerifyWorkerResponseMessage;
-    if (message.protocolVersion !== VERIFY_PROTOCOL_VERSION || message.generation !== 0) return;
-    const { type, requestId } = message;
+    if (message.protocolVersion !== VERIFY_PROTOCOL_VERSION || message.generation !== generation) return;
+    const requestId = legacyRequestIds.get(message.requestId);
+    if (requestId === undefined) return;
+    legacyRequestIds.delete(message.requestId);
+    const { type } = message;
     legacy.onmessage?.({
       data: type === 'result'
         ? { type, requestId, result: message.result }
