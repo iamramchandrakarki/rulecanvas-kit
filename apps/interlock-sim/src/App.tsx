@@ -690,7 +690,7 @@ export function App({
           bounds={comparisonBounds}
           boundsHasErrors={comparisonBoundsInvalid}
           activeVariant={activePreset}
-          onLoadPreset={handleLoadPreset}
+          onLoadPreset={selectPreset}
           onClose={() => setShowComparison(false)}
         />
       )}

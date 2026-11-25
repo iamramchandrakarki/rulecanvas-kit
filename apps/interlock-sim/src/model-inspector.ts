@@ -447,6 +447,14 @@ const interlockLegacyImportCodec = createModelJsonCodec(DEFAULT_MODEL_JSON_LIMIT
   duplicateKeys: 'last-value',
 });
 
+const DRAFT_RESERVED_KEYS: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype']);
+
+function isCanonicalArrayIndex(key: string, length: number): boolean {
+  if (!/^(?:0|[1-9][0-9]*)$/.test(key)) return false;
+  const idx = Number(key);
+  return Number.isSafeInteger(idx) && idx >= 0 && idx < length;
+}
+
 function detachZeroInvariantDraftValue(
   raw: unknown,
   depth: number,
@@ -469,6 +477,14 @@ function detachZeroInvariantDraftValue(
   ancestors.add(raw);
   try {
     if (Array.isArray(raw)) {
+      for (const key of Reflect.ownKeys(raw)) {
+        if (typeof key === 'symbol') {
+          throw new TypeError('Draft array contains symbol property.');
+        }
+        if (key !== 'length' && !isCanonicalArrayIndex(key, raw.length)) {
+          throw new TypeError('Draft array contains unsupported extra property.');
+        }
+      }
       const out: unknown[] = [];
       for (let i = 0; i < raw.length; i += 1) {
         const desc = Object.getOwnPropertyDescriptor(raw, i);
@@ -484,7 +500,13 @@ function detachZeroInvariantDraftValue(
       throw new TypeError('Draft contains non-plain object.');
     }
     const out: Record<string, unknown> = {};
-    for (const key of Object.keys(raw)) {
+    for (const key of Reflect.ownKeys(raw)) {
+      if (typeof key === 'symbol') {
+        throw new TypeError('Draft object contains symbol property.');
+      }
+      if (DRAFT_RESERVED_KEYS.has(key)) {
+        throw new TypeError('Draft object contains reserved property key.');
+      }
       const desc = Object.getOwnPropertyDescriptor(raw, key);
       if (desc === undefined || 'get' in desc || 'set' in desc || !desc.enumerable) {
         throw new TypeError('Draft object contains accessor or non-enumerable property.');

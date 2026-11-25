@@ -1625,5 +1625,30 @@ describe('AgentGate workbench domain modules and UI', () => {
     if (!commonExportFail.ok) {
       expect(commonExportFail.error.code).toBe('JSON_EXPORT_ERROR');
     }
+
+    // Exact v0.4.0 legacy compatibility:
+    // 1. Non-enumerable dense rule slot on an object candidate is accepted
+    const rulesWithNonEnumSlot = [...broken.rules];
+    Object.defineProperty(rulesWithNonEnumSlot, 0, {
+      value: structuredClone(broken.rules[0]!),
+      enumerable: false,
+      writable: true,
+      configurable: true,
+    });
+    const nonEnumSlotCandidate: TransitionSystemModel = {
+      ...broken,
+      rules: rulesWithNonEnumSlot,
+    };
+    const nonEnumValueRes = validateImportedModelValue(nonEnumSlotCandidate);
+    expect(nonEnumValueRes.ok).toBe(true);
+    const nonEnumImportRes = importModelFromJson(nonEnumSlotCandidate);
+    expect(nonEnumImportRes.ok).toBe(true);
+
+    // 2. Malformed trailing comma with non-integer number reports NON_INTEGER_JSON_NUMBER first (pre-JSON.parse precedence)
+    const nonIntWithTrailingComma = importModelFromJson('{"x": 1.5,}');
+    expect(nonIntWithTrailingComma.ok).toBe(false);
+    if (!nonIntWithTrailingComma.ok) {
+      expect(nonIntWithTrailingComma.errors[0]?.code).toBe('NON_INTEGER_JSON_NUMBER');
+    }
   });
 });

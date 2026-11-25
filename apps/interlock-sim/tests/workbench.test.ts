@@ -716,6 +716,64 @@ describe('InterlockSim workbench architecture, semantics, security, and UI', () 
       tryExportModelJson({ ...bsl3AirlockFixedModel, schema: schemaWithReserved }).ok,
     ).toBe(false);
 
+    // Zero-invariant drafts reject non-enumerable object props, extra array props, and symbols (never silently stripped)
+    const zeroInvDraft: TransitionSystemModel = {
+      ...bsl3AirlockFixedModel,
+      invariants: [],
+    };
+    const zeroInvExported = tryExportModelJson(zeroInvDraft);
+    expect(zeroInvExported.ok).toBe(true);
+
+    const zeroInvWithNonEnumObjProp = { ...zeroInvDraft };
+    Object.defineProperty(zeroInvWithNonEnumObjProp, 'hiddenMeta', {
+      value: 'should-reject',
+      enumerable: false,
+      configurable: true,
+    });
+    expect(tryExportModelJson(zeroInvWithNonEnumObjProp).ok).toBe(false);
+
+    const zeroInvRuleWithNonEnumProp = { ...zeroInvDraft.rules[0]! };
+    Object.defineProperty(zeroInvRuleWithNonEnumProp, 'hiddenRuleMeta', {
+      value: 1,
+      enumerable: false,
+      configurable: true,
+    });
+    expect(
+      tryExportModelJson({
+        ...zeroInvDraft,
+        rules: [zeroInvRuleWithNonEnumProp, ...zeroInvDraft.rules.slice(1)],
+      }).ok,
+    ).toBe(false);
+
+    const zeroInvRulesWithExtraEnumProp = [...zeroInvDraft.rules];
+    (zeroInvRulesWithExtraEnumProp as unknown as Record<string, unknown>)['extraProp'] = 123;
+    expect(
+      tryExportModelJson({ ...zeroInvDraft, rules: zeroInvRulesWithExtraEnumProp }).ok,
+    ).toBe(false);
+
+    const zeroInvRulesWithNonEnumExtraProp = [...zeroInvDraft.rules];
+    Object.defineProperty(zeroInvRulesWithNonEnumExtraProp, 'hiddenExtra', {
+      value: 'nope',
+      enumerable: false,
+      configurable: true,
+    });
+    expect(
+      tryExportModelJson({ ...zeroInvDraft, rules: zeroInvRulesWithNonEnumExtraProp }).ok,
+    ).toBe(false);
+
+    const zeroInvRulesWithSymbol = [...zeroInvDraft.rules];
+    Object.defineProperty(zeroInvRulesWithSymbol, Symbol('tag'), {
+      value: true,
+      enumerable: true,
+    });
+    expect(tryExportModelJson({ ...zeroInvDraft, rules: zeroInvRulesWithSymbol }).ok).toBe(false);
+
+    const zeroInvObjWithSymbol: Record<PropertyKey, unknown> = { ...zeroInvDraft };
+    zeroInvObjWithSymbol[Symbol('meta')] = true;
+    expect(tryExportModelJson(zeroInvObjWithSymbol as unknown as TransitionSystemModel).ok).toBe(
+      false,
+    );
+
     // Compact JSON fallback keeps near-limit exports re-importable, and > 512KB triggers JSON_EXPORT_ERROR
     const largePadding = 'A'.repeat(498_000);
     const compactableModel: TransitionSystemModel = {

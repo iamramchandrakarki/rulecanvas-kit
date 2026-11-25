@@ -224,6 +224,32 @@ try {
     'Dirty InterlockSim JSON draft lost after declining discard prompt',
   );
 
+  // ComparisonPanel Load preset obeys discard guard and updates live URL in InterlockSim
+  await page.getByRole('button', { name: 'Compare Presets (3)' }).click();
+  const isCompareRow = page.locator('.is-comparison-section tbody tr', {
+    hasText: 'Vacuous Lockout',
+  });
+  await isCompareRow.getByRole('button', { name: 'Load preset' }).click();
+  await page.getByRole('alertdialog').waitFor({ state: 'visible' });
+  await page.getByRole('button', { name: 'Stay Here' }).click();
+  assert(
+    !page.url().includes('preset=vacuous'),
+    `InterlockSim ComparisonPanel stay-here unexpectedly changed URL: ${page.url()}`,
+  );
+  assert(
+    (await interlockJsonArea.inputValue()) === `${originalInterlockJson}\n `,
+    'InterlockSim ComparisonPanel stay-here lost dirty JSON draft',
+  );
+  await isCompareRow.getByRole('button', { name: 'Load preset' }).click();
+  await page.getByRole('alertdialog').waitFor({ state: 'visible' });
+  await page.getByRole('button', { name: 'Discard & Continue' }).click();
+  await page.waitForURL('**/suite/interlock-sim/?preset=vacuous');
+  assert(
+    page.url().includes('preset=vacuous'),
+    `InterlockSim ComparisonPanel discard approval did not update URL: ${page.url()}`,
+  );
+  await page.getByRole('button', { name: 'Compare Presets (3)' }).click();
+
   // Preset URL direct load (?preset=vacuous)
   await page.goto(`${baseUrl}/suite/interlock-sim/?preset=vacuous`, { waitUntil: 'networkidle' });
   await page.getByText('VERIFIED (GOAL UNREACHABLE)').first().waitFor({ state: 'visible' });
@@ -305,6 +331,35 @@ try {
     page.url().includes('preset=principled-fix'),
     `Expected URL to restore preset=principled-fix after discard approval, got ${page.url()}`,
   );
+
+  // ComparisonPanel Load preset obeys discard guard and updates live URL in AgentGate
+  await page.getByRole('tab', { name: 'JSON' }).click();
+  const curAgJson = await page.locator('#model-json-textarea').inputValue();
+  await page.locator('#model-json-textarea').fill(`${curAgJson}\n `);
+  await page.getByRole('button', { name: 'Compare All 5 Presets' }).click();
+  const agCompareRow = page.locator('.ag-comparison-section tbody tr', {
+    hasText: 'Naive Patch A',
+  });
+  await agCompareRow.getByRole('button', { name: 'Load preset' }).click();
+  await page.getByRole('alertdialog').waitFor({ state: 'visible' });
+  await page.getByRole('button', { name: 'Stay Here' }).click();
+  assert(
+    page.url().includes('preset=principled-fix'),
+    `AgentGate ComparisonPanel stay-here unexpectedly changed URL: ${page.url()}`,
+  );
+  assert(
+    (await page.locator('#model-json-textarea').inputValue()) === `${curAgJson}\n `,
+    'AgentGate ComparisonPanel stay-here lost dirty JSON draft',
+  );
+  await agCompareRow.getByRole('button', { name: 'Load preset' }).click();
+  await page.getByRole('alertdialog').waitFor({ state: 'visible' });
+  await page.getByRole('button', { name: 'Discard & Continue' }).click();
+  await page.waitForURL('**/suite/agent-gate/?preset=naive-patch-a');
+  assert(
+    page.url().includes('preset=naive-patch-a'),
+    `AgentGate ComparisonPanel discard approval did not update URL: ${page.url()}`,
+  );
+  await page.getByRole('button', { name: 'Compare All 5 Presets' }).click();
 
   // --- 4. No-Navigation-API fallback recovery (fresh-session replaceState) ---
   const fallbackPage = await context.newPage();

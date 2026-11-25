@@ -25,7 +25,6 @@ import {
 } from '@rulecanvas/ui';
 import {
   DEFAULT_MODEL_JSON_LIMITS,
-  HARD_CEILING_MODEL_JSON_LIMITS,
   createModelJsonCodec,
 } from '@rulecanvas/workbench/model-json';
 
@@ -39,9 +38,6 @@ export {
 };
 
 const agentGateCommonExportCodec = createModelJsonCodec(DEFAULT_MODEL_JSON_LIMITS);
-const agentGateLegacyImportCodec = createModelJsonCodec(HARD_CEILING_MODEL_JSON_LIMITS, {
-  duplicateKeys: 'last-value',
-});
 
 export type JsonImportResult =
   | { readonly ok: true; readonly model: TransitionSystemModel }
@@ -2119,12 +2115,108 @@ function validateRawJsonNumbers(rawText: string): ValidationError[] {
 }
 
 export function validateImportedModelValue(candidate: unknown): JsonImportResult {
-  return agentGateLegacyImportCodec.validateValue(candidate);
+  try {
+    const structuralErrors: ValidationError[] = [];
+    const detached = buildDetachedModelSnapshot(candidate, structuralErrors);
+    if (structuralErrors.length > 0) {
+      return { ok: false, errors: structuralErrors };
+    }
+    const errors = validateModel(detached);
+    if (errors.length > 0) {
+      return { ok: false, errors };
+    }
+    return { ok: true, model: detached as TransitionSystemModel };
+  } catch {
+    return {
+      ok: false,
+      errors: [
+        {
+          code: 'UNEXPECTED_INPUT_ERROR',
+          path: '$',
+          message: 'Unexpected error while validating imported model value.',
+        },
+      ],
+    };
+  }
 }
 
 export function importModelFromJson(rawText: unknown): JsonImportResult {
-  if (typeof rawText !== 'string' && rawText !== null && typeof rawText === 'object') {
-    return agentGateLegacyImportCodec.validateValue(rawText);
+  try {
+    if (typeof rawText !== 'string') {
+      if (rawText !== null && typeof rawText === 'object') {
+        return validateImportedModelValue(rawText);
+      }
+      return {
+        ok: false,
+        errors: [
+          {
+            code: 'INVALID_JSON_INPUT',
+            path: '$',
+            message: `Model import expects a JSON string, received ${typeof rawText}.`,
+          },
+        ],
+      };
+    }
+
+    if (rawText.trim().length === 0) {
+      return {
+        ok: false,
+        errors: [
+          {
+            code: 'JSON_PARSE_ERROR',
+            path: '$',
+            message: 'JSON input is empty.',
+          },
+        ],
+      };
+    }
+
+    if (rawText.length > MAX_IMPORT_JSON_CHARS) {
+      return {
+        ok: false,
+        errors: [
+          {
+            code: 'JSON_TOO_LARGE',
+            path: '$',
+            message: `JSON input exceeds maximum size of ${MAX_IMPORT_JSON_CHARS} characters.`,
+          },
+        ],
+      };
+    }
+
+    const numberErrors = validateRawJsonNumbers(rawText);
+    if (numberErrors.length > 0) {
+      return { ok: false, errors: numberErrors };
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(rawText);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : 'Malformed JSON syntax.';
+      return {
+        ok: false,
+        errors: [
+          {
+            code: 'JSON_PARSE_ERROR',
+            path: '$',
+            message: `Invalid JSON: ${detail}`,
+          },
+        ],
+      };
+    }
+
+    return validateImportedModelValue(parsed);
+  } catch {
+    return {
+      ok: false,
+      errors: [
+        {
+          code: 'UNEXPECTED_INPUT_ERROR',
+          path: '$',
+          message: 'Unexpected error while importing JSON model.',
+        },
+      ],
+    };
   }
-  return agentGateLegacyImportCodec.decode(rawText);
 }
