@@ -1,0 +1,39 @@
+{
+  "name": "@rulecanvas/workbench-react",
+  "version": "0.5.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@rulecanvas/core": "workspace:*",
+    "@rulecanvas/ui": "workspace:*",
+    "@rulecanvas/workbench": "workspace:*"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "build:pack": "node -e \"import('node:fs').then((fs)=>fs.rmSync('dist',{recursive:true,force:true}))\" && tsc -p tsconfig.json --declarationMap false --sourceMap false",
+    "prepack": "pnpm run build:pack",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.test.json",
+    "test": "pnpm --filter @rulecanvas/workbench build && pnpm run build && vitest run"
+  }
+}

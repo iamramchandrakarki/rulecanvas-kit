@@ -12,7 +12,7 @@
     ]
   },
   "scripts": {
-    "build:libs": "pnpm --filter @rulecanvas/core build && pnpm --filter @rulecanvas/ui build && pnpm --filter @rulecanvas/workbench build",
+    "build:libs": "pnpm --filter @rulecanvas/core build && pnpm --filter @rulecanvas/ui build && pnpm --filter @rulecanvas/workbench build && pnpm --filter @rulecanvas/workbench-react build",
     "build": "pnpm run build:libs && pnpm --filter @rulecanvas/agent-gate build && pnpm --filter @rulecanvas/interlock-sim build",
     "typecheck": "pnpm run build:libs && pnpm -r typecheck",
     "test": "pnpm run build:libs && vitest run",

@@ -366,7 +366,8 @@ function validateOwnedTrace(
     const step = rawTrace[i];
     if (!isPlainRecord(step)) return false;
     if (typeof step['ruleId'] !== 'string' || !ruleIds.has(step['ruleId'])) return false;
-    if (!validateOwnedStateSnapshot(step['state'], model)) return false;
+    if (!validateOwnedStateSnapshot(step['stateBefore'], model)) return false;
+    if (!validateOwnedStateSnapshot(step['stateAfter'], model)) return false;
     if (!Array.isArray(step['changedVars'])) return false;
     for (const v of step['changedVars']) {
       if (typeof v !== 'string' || !schemaKeys.has(v)) return false;
@@ -378,14 +379,28 @@ function validateOwnedTrace(
 function validateOwnedStats(
   rawStats: unknown,
   options: VerifyOptions,
-): rawStats is { statesExplored: number; transitionsEvaluated: number; maxDepthReached: number } {
+): rawStats is {
+  theoreticalStates: string;
+  statesExplored: number;
+  transitionsEvaluated: number;
+  maxDepthReached: number;
+  deadlockStatesFound: number;
+} {
   if (!isPlainRecord(rawStats)) return false;
+  if (typeof rawStats['theoreticalStates'] !== 'string') return false;
   if (!isSafeIntInRange(rawStats['statesExplored'], 1, options.maxStates)) return false;
   if (!isSafeIntInRange(rawStats['maxDepthReached'], 0, options.maxDepth)) return false;
   if (
     typeof rawStats['transitionsEvaluated'] !== 'number' ||
     !Number.isSafeInteger(rawStats['transitionsEvaluated']) ||
     rawStats['transitionsEvaluated'] < 0
+  ) {
+    return false;
+  }
+  if (
+    typeof rawStats['deadlockStatesFound'] !== 'number' ||
+    !Number.isSafeInteger(rawStats['deadlockStatesFound']) ||
+    rawStats['deadlockStatesFound'] < 0
   ) {
     return false;
   }
