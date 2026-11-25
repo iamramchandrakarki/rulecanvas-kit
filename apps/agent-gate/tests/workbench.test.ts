@@ -1596,5 +1596,34 @@ describe('AgentGate workbench domain modules and UI', () => {
     } finally {
       parseSpy.mockRestore();
     }
+
+    // Legacy import wrapper preserves last-value duplicate-key compatibility while core-valid exports enforce 512k common envelope
+    const dupNameJson = validJson.replace(
+      `"name": ${JSON.stringify(broken.name)},`,
+      `"name": "Legacy First",\n  "name": "Legacy Second",`,
+    );
+    const dupImport = importModelFromJson(dupNameJson);
+    expect(dupImport.ok).toBe(true);
+    if (dupImport.ok) {
+      expect(dupImport.model.name).toBe('Legacy Second');
+    }
+
+    const oversizedCommonValidModel: TransitionSystemModel = {
+      ...broken,
+      assumptions: [
+        {
+          id: 'asm_oversized',
+          category: 'scope',
+          statement: 'X'.repeat(540_000),
+          notModeled: 'Timing',
+        },
+      ],
+    };
+    expect(validateModel(oversizedCommonValidModel)).toEqual([]);
+    const commonExportFail = tryExportModelJson(oversizedCommonValidModel);
+    expect(commonExportFail.ok).toBe(false);
+    if (!commonExportFail.ok) {
+      expect(commonExportFail.error.code).toBe('JSON_EXPORT_ERROR');
+    }
   });
 });

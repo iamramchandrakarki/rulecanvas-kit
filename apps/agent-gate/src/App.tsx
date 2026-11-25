@@ -69,7 +69,11 @@ function resolveAllowedNavPrefix(baseUrl: string): string | undefined {
   return normalized.slice(0, lastSlash);
 }
 
-const ALLOWED_NAV_PREFIX = resolveAllowedNavPrefix(import.meta.env.BASE_URL ?? '/');
+const ALLOWED_NAV_PREFIX = resolveAllowedNavPrefix(
+  (typeof import.meta !== 'undefined' &&
+    (import.meta as { readonly env?: { readonly BASE_URL?: string } }).env?.BASE_URL) ||
+    '/',
+);
 
 function resolveModelLabel(
   model: TransitionSystemModel,

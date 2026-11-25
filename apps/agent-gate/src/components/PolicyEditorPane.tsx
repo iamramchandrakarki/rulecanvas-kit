@@ -743,7 +743,9 @@ export function PolicyEditorPane({
         // Fallback below
       }
     }
+    committedJsonRef.current = text;
     setJsonDraft(text);
+    onJsonDraftDirtyChangeRef.current?.(false);
     setJsonNotice('Synchronized current model JSON in the text area.');
   };
 

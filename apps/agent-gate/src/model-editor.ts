@@ -24,6 +24,7 @@ import {
   type StrictIntegerParseResult,
 } from '@rulecanvas/ui';
 import {
+  DEFAULT_MODEL_JSON_LIMITS,
   HARD_CEILING_MODEL_JSON_LIMITS,
   createModelJsonCodec,
 } from '@rulecanvas/workbench/model-json';
@@ -37,7 +38,10 @@ export {
   type StrictIntegerParseResult,
 };
 
-const agentGateJsonCodec = createModelJsonCodec(HARD_CEILING_MODEL_JSON_LIMITS);
+const agentGateCommonExportCodec = createModelJsonCodec(DEFAULT_MODEL_JSON_LIMITS);
+const agentGateLegacyImportCodec = createModelJsonCodec(HARD_CEILING_MODEL_JSON_LIMITS, {
+  duplicateKeys: 'last-value',
+});
 
 export type JsonImportResult =
   | { readonly ok: true; readonly model: TransitionSystemModel }
@@ -2003,7 +2007,15 @@ function cloneCanonicalModelForExport(model: TransitionSystemModel): Record<stri
 
 export function exportModelToJson(model: TransitionSystemModel): string {
   const canonical = cloneCanonicalModelForExport(model);
-  return JSON.stringify(canonical, null, 2);
+  if (validateModel(canonical).length === 0) {
+    const common = agentGateCommonExportCodec.encode(canonical);
+    if (!common.ok) {
+      throw new TypeError(common.error.message);
+    }
+    return common.text;
+  }
+  const pretty = JSON.stringify(canonical, null, 2);
+  return pretty.length <= DEFAULT_MODEL_JSON_LIMITS.maxChars ? pretty : JSON.stringify(canonical);
 }
 
 const RFC8259_JSON_NUMBER_RE = /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$/;
@@ -2107,12 +2119,12 @@ function validateRawJsonNumbers(rawText: string): ValidationError[] {
 }
 
 export function validateImportedModelValue(candidate: unknown): JsonImportResult {
-  return agentGateJsonCodec.validateValue(candidate);
+  return agentGateLegacyImportCodec.validateValue(candidate);
 }
 
 export function importModelFromJson(rawText: unknown): JsonImportResult {
   if (typeof rawText !== 'string' && rawText !== null && typeof rawText === 'object') {
-    return agentGateJsonCodec.validateValue(rawText);
+    return agentGateLegacyImportCodec.validateValue(rawText);
   }
-  return agentGateJsonCodec.decode(rawText);
+  return agentGateLegacyImportCodec.decode(rawText);
 }
