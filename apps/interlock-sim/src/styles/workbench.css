@@ -903,8 +903,9 @@ svg {
   min-width: max-content;
 }
 
-.is-expr-node .is-expr-node .is-expr-node .is-expr-node .is-expr-node .is-expr-node .is-expr-node {
-  padding-left: var(--space-2xs);
+.is-expr-node[data-depth-capped='true'] {
+  padding-left: 0;
+  border-left: none;
 }
 
 .is-expr-node-root {

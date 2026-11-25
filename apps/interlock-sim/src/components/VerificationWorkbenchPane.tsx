@@ -13,6 +13,7 @@ import {
   type ReplaySession,
 } from '@rulecanvas/ui';
 import { isWebWorkerSupported, type VerifyExecutionMode } from '../verify-client.js';
+import { hasCanonicalLabEntryGoal, isRepairableInterlockModel } from '../model-inspector.js';
 
 export interface VerifiedSnapshot {
   readonly model: TransitionSystemModel;
@@ -306,7 +307,10 @@ export function VerificationWorkbenchPane({
                   (r) => r.id === 'open_inner_door',
                 );
                 const isKnownLockout =
-                  openInner?.guard.op === 'lit' && openInner.guard.value === false;
+                  isRepairableInterlockModel(verifiedSnapshot.model) &&
+                  hasCanonicalLabEntryGoal(verifiedSnapshot.model) &&
+                  openInner?.guard.op === 'lit' &&
+                  openInner.guard.value === false;
                 return isKnownLockout ? (
                   <p>
                     Safety invariants hold trivially because lab entry (

@@ -1062,6 +1062,227 @@ describe('InterlockSim workbench architecture, semantics, security, and UI', () 
     expect(comparisonPanelHtml).toContain('Current Bounds Inputs Are Invalid');
   });
 
+  it('prevents misleading preset labels, budget skew, non-enumerable elements, deep scan confusion, and poisoned descriptor escapes (Round 2 fixes)', () => {
+    // R2-1: Custom Boolean model borrowing canonical invariant & goal IDs with literal-true predicates
+    const spoofedIdsModel: TransitionSystemModel = {
+      id: 'spoofed-ids',
+      name: 'Spoofed IDs Boolean Model',
+      schema: { ready: { kind: 'boolean' } },
+      initialState: { ready: true },
+      rules: [
+        {
+          id: 'open_inner_door',
+          label: 'Close instead of open',
+          guard: { op: 'lit', value: true },
+          updates: [{ var: 'ready', value: { op: 'lit', value: false } }],
+        },
+      ],
+      invariants: [
+        { id: 'inv_containment_seal', label: 'Fake seal', holds: { op: 'lit', value: true } },
+        { id: 'inv_uv_exposure_lock', label: 'Fake uv', holds: { op: 'lit', value: true } },
+      ],
+      goal: { id: 'goal_safe_lab_entry', label: 'Fake entry', reached: { op: 'lit', value: true } },
+      assumptions: [
+        { id: 'asm_custom', category: 'scope', statement: 'Bool test', notModeled: 'Hardware' },
+      ],
+    };
+    const spoofedSchematicHtml = renderToStaticMarkup(
+      createElement(AirlockSchematic, {
+        schema: spoofedIdsModel.schema,
+        state: spoofedIdsModel.initialState,
+        changedVars: [],
+        violatedInvariantIds: [],
+        evaluatedInvariantIds: spoofedIdsModel.invariants.map((i) => i.id),
+        invariants: spoofedIdsModel.invariants,
+        goal: spoofedIdsModel.goal,
+        isEvaluated: true,
+        goalReached: true,
+        stepNumber: 0,
+        modeLabel: 'Trace Replay',
+      }),
+    );
+    expect(spoofedSchematicHtml).toContain('INVARIANTS SAFE (2)');
+    expect(spoofedSchematicHtml).not.toContain('SEAL &amp; UV SAFE');
+    expect(spoofedSchematicHtml).toContain('GOAL REACHED (goal_safe_lab_entry)');
+    expect(spoofedSchematicHtml).not.toContain('GOAL REACHED: LAB ENTRY');
+    expect(spoofedSchematicHtml).toContain('UNAVAILABLE');
+
+    // R2-2a: Export and import share identical complexity budget accounting (48 rules x 60 clauses)
+    const manyClauses: BoolExpr[] = Array.from({ length: 60 }, () => ({ op: 'lit' as const, value: true }));
+    const highBudgetModel: TransitionSystemModel = {
+      id: 'high-budget',
+      name: 'High Budget Model',
+      schema: { flag: { kind: 'boolean' } },
+      initialState: { flag: true },
+      rules: Array.from({ length: 48 }, (_, i) => ({
+        id: `r_${i}`,
+        label: `Rule ${i}`,
+        guard: { op: 'and', args: manyClauses },
+        updates: [{ var: 'flag', value: { op: 'lit', value: true } }],
+      })),
+      invariants: [
+        { id: 'inv_flag', label: 'Flag true', holds: { op: 'var', name: 'flag' } },
+      ],
+      assumptions: [
+        { id: 'asm_1', category: 'scope', statement: 'Budget check', notModeled: 'None' },
+      ],
+    };
+    expect(validateModel(highBudgetModel)).toEqual([]);
+    const highBudgetExport = tryExportModelJson(highBudgetModel);
+    expect(highBudgetExport.ok).toBe(false);
+    if (!highBudgetExport.ok) {
+      expect(highBudgetExport.error.code).toBe('JSON_EXPORT_ERROR');
+    }
+
+    // Any model whose export succeeds (near-budget 28 rules x 60 clauses) must re-import cleanly
+    const reimportableModel: TransitionSystemModel = {
+      ...highBudgetModel,
+      rules: highBudgetModel.rules.slice(0, 28),
+    };
+    const okExport = tryExportModelJson(reimportableModel);
+    expect(okExport.ok).toBe(true);
+    if (okExport.ok) {
+      expect(importModelFromJson(okExport.text).ok).toBe(true);
+    }
+
+    // R2-2b: Both import and export reject non-enumerable numeric array elements
+    const nonEnumRules = bsl3AirlockFixedModel.rules.map((r) => ({ ...r }));
+    const firstRule = nonEnumRules[0]!;
+    Object.defineProperty(nonEnumRules, 0, {
+      value: firstRule,
+      enumerable: false,
+      configurable: true,
+      writable: true,
+    });
+    const modelWithNonEnumRule = {
+      ...bsl3AirlockFixedModel,
+      rules: nonEnumRules,
+    } as TransitionSystemModel;
+    expect(importModelFromJson(modelWithNonEnumRule).ok).toBe(false);
+    expect(tryExportModelJson(modelWithNonEnumRule).ok).toBe(false);
+
+    // R2-4: Closing or multi-variable open_inner_door rules are not eligible for guided repair
+    const closingDoorModel: TransitionSystemModel = {
+      ...bsl3AirlockBrokenModel,
+      rules: bsl3AirlockBrokenModel.rules.map((rule) =>
+        rule.id === 'open_inner_door'
+          ? {
+              ...rule,
+              updates: [{ var: 'innerDoor', value: { op: 'lit', value: 'closed' } }],
+            }
+          : rule,
+      ),
+    };
+    expect(validateModel(closingDoorModel)).toEqual([]);
+    expect(isRepairableInterlockModel(closingDoorModel)).toBe(false);
+    expect(applyPrincipledInterlockRepair(closingDoorModel)).toBe(closingDoorModel);
+
+    // R2-5: Disabled open_inner_door + unrelated literal-false goal renders generic vacuity warning
+    const customVacuousModel: TransitionSystemModel = {
+      id: 'custom-vacuous',
+      name: 'Custom Vacuous Model',
+      schema: { ready: { kind: 'boolean' } },
+      initialState: { ready: false },
+      rules: [
+        {
+          id: 'open_inner_door',
+          label: 'Disabled unrelated rule',
+          guard: { op: 'lit', value: false },
+          updates: [{ var: 'ready', value: { op: 'lit', value: true } }],
+        },
+      ],
+      invariants: [
+        { id: 'inv_ready', label: 'Not ready', holds: { op: 'not', arg: { op: 'var', name: 'ready' } } },
+      ],
+      goal: { id: 'goal_unrelated', label: 'Never reachable', reached: { op: 'lit', value: false } },
+      assumptions: [
+        { id: 'asm_1', category: 'scope', statement: 'Vacuous test', notModeled: 'Hardware' },
+      ],
+    };
+    const customVacuousResult = verifyModel(customVacuousModel, DEFAULT_VERIFY_OPTIONS);
+    expect(customVacuousResult.status).toBe('VERIFIED');
+    const customVacuousHtml = renderToStaticMarkup(
+      createElement(VerificationWorkbenchPane, {
+        model: customVacuousModel,
+        isRunning: false,
+        runningExecutionMode: 'main-thread',
+        isStale: false,
+        workerError: null,
+        cancelledNotice: null,
+        optionErrors: [],
+        editorDraftErrors: [],
+        modelErrors: [],
+        verifiedSnapshot: {
+          model: customVacuousModel,
+          modelLabel: 'Custom Vacuous Model',
+          options: DEFAULT_VERIFY_OPTIONS,
+          result: customVacuousResult,
+          executionMode: 'main-thread',
+        },
+        replaySession: null,
+        onCancelRun: () => {},
+        onVerifyNow: () => {},
+        onJumpToStep: () => {},
+      }),
+    );
+    expect(customVacuousHtml).toContain('goal_unrelated');
+    expect(customVacuousHtml).not.toContain('goal_safe_lab_entry');
+    expect(customVacuousHtml).not.toContain('open_inner_door');
+
+    // R2-7a: Valid JSON nested 257 levels returns IMPORT_COMPLEXITY_EXCEEDED (not JSON_PARSE_ERROR)
+    const nested257 = `${'['.repeat(257)}${']'.repeat(257)}`;
+    const deepJsonResult = importModelFromJson(nested257);
+    expect(deepJsonResult.ok).toBe(false);
+    if (!deepJsonResult.ok) {
+      expect(deepJsonResult.errors[0]?.code).toBe('IMPORT_COMPLEXITY_EXCEEDED');
+    }
+
+    // R2-7b: Throwing descriptor lookup on model.rules inside explainRuleGuards degrades safely
+    let descriptorReads = 0;
+    const baseRules = bsl3AirlockFixedModel.rules;
+    const poisonedRules = new Proxy(baseRules, {
+      getOwnPropertyDescriptor(target, prop) {
+        if (prop === '0') {
+          descriptorReads += 1;
+          if (descriptorReads > 1) {
+            throw new Error('poisoned rule index lookup');
+          }
+        }
+        return Reflect.getOwnPropertyDescriptor(target, prop);
+      },
+    });
+    const poisonedExplainModel = {
+      ...bsl3AirlockFixedModel,
+      rules: poisonedRules,
+    } as TransitionSystemModel;
+    const explained = explainRuleGuards(poisonedExplainModel, bsl3AirlockFixedModel.initialState);
+    expect(explained.ok).toBe(true);
+    if (explained.ok) {
+      expect(explained.rules[0]?.guardText).toBe('<unavailable>');
+    }
+
+    // R1 #12: Deep expression rendering caps cumulative indentation beyond depth 6
+    let deepNot: BoolExpr = { op: 'var', name: 'occupied' };
+    for (let i = 0; i < 9; i += 1) {
+      deepNot = { op: 'not', arg: deepNot };
+    }
+    const deepExprHtml = renderToStaticMarkup(
+      createElement(BoolExprEditor, {
+        value: deepNot,
+        schema: bsl3AirlockFixedModel.schema,
+        fieldPath: 'test.deep',
+        intDraftStore: {
+          draftValues: {},
+          draftErrors: {},
+          onDraftChange: () => {},
+          onPruneDrafts: () => {},
+        },
+        onChange: () => {},
+      }),
+    );
+    expect(deepExprHtml).toContain('data-depth-capped="true"');
+  });
+
   it('enforces Option A isolation boundaries (zero imports from agent-gate) and styling hygiene', () => {
     const appDir = path.resolve(import.meta.dirname, '..');
     const tokensCss = readFileSync(path.join(appDir, 'src/styles/tokens.css'), 'utf8');

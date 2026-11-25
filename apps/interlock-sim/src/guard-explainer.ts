@@ -594,7 +594,12 @@ export function explainRuleGuards(
 
   const rules: RuleGuardExplanation[] = coreResult.transitions.map((coreTransition, index) => {
     const coreEnabled = coreTransition.enabled;
-    const rule = readOwnRuleAt(rawRules, index);
+    let rule: TransitionSystemModel['rules'][number] | null = null;
+    try {
+      rule = readOwnRuleAt(rawRules, index);
+    } catch {
+      rule = null;
+    }
     if (rule === null || schema === null) {
       const fallbackReasons = coreEnabled
         ? []

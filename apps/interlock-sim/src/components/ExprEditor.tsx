@@ -123,7 +123,10 @@ export function ValueExprEditor({
   const litIntFieldKey = fieldPath !== undefined ? `${fieldPath}.value` : undefined;
 
   return (
-    <div className={depth === 0 ? 'is-expr-node is-expr-node-root' : 'is-expr-node'}>
+    <div
+      className={depth === 0 ? 'is-expr-node is-expr-node-root' : 'is-expr-node'}
+      data-depth-capped={depth > 6 ? 'true' : undefined}
+    >
       <div className="is-expr-row">
         <span className="is-inline-field">
           <label htmlFor={opId} className="is-inline-label">
@@ -388,7 +391,10 @@ export function BoolExprEditor({
   const varId = `${baseId}-var`;
 
   return (
-    <div className={depth === 0 ? 'is-expr-node is-expr-node-root' : 'is-expr-node'}>
+    <div
+      className={depth === 0 ? 'is-expr-node is-expr-node-root' : 'is-expr-node'}
+      data-depth-capped={depth > 6 ? 'true' : undefined}
+    >
       <div className="is-expr-row">
         <span className="is-inline-field">
           <label htmlFor={opId} className="is-inline-label">

@@ -296,7 +296,109 @@ export function isRepairableInterlockModel(model: TransitionSystemModel): boolea
 
   const rule = model.rules.find((r) => r.id === 'open_inner_door');
   if (rule === undefined) return false;
-  return rule.updates.some((u) => u.var === 'innerDoor');
+  return (
+    rule.updates.length === 1 &&
+    rule.updates[0]!.var === 'innerDoor' &&
+    rule.updates[0]!.value.op === 'lit' &&
+    rule.updates[0]!.value.value === 'open'
+  );
+}
+
+export function areValueExprEqual(left: ValueExpr, right: ValueExpr): boolean {
+  if (left.op !== right.op) return false;
+  if (left.op === 'lit' && right.op === 'lit') {
+    const a = typeof left.value === 'number' && Object.is(left.value, -0) ? 0 : left.value;
+    const b = typeof right.value === 'number' && Object.is(right.value, -0) ? 0 : right.value;
+    return a === b;
+  }
+  if (left.op === 'var' && right.op === 'var') {
+    return left.name === right.name;
+  }
+  if ((left.op === 'add' || left.op === 'sub') && right.op === left.op) {
+    return areValueExprEqual(left.left, right.left) && areValueExprEqual(left.right, right.right);
+  }
+  return false;
+}
+
+export function areBoolExprEqual(left: BoolExpr, right: BoolExpr): boolean {
+  if (left.op !== right.op) return false;
+  if (left.op === 'lit' && right.op === 'lit') {
+    return left.value === right.value;
+  }
+  if (left.op === 'var' && right.op === 'var') {
+    return left.name === right.name;
+  }
+  if (left.op === 'not' && right.op === 'not') {
+    return areBoolExprEqual(left.arg, right.arg);
+  }
+  if ((left.op === 'and' || left.op === 'or') && right.op === left.op) {
+    if (left.args.length !== right.args.length) return false;
+    return left.args.every((arg, i) => areBoolExprEqual(arg, right.args[i]!));
+  }
+  if (
+    (left.op === 'eq' ||
+      left.op === 'neq' ||
+      left.op === 'lt' ||
+      left.op === 'lte' ||
+      left.op === 'gt' ||
+      left.op === 'gte') &&
+    right.op === left.op
+  ) {
+    return areValueExprEqual(left.left, right.left) && areValueExprEqual(left.right, right.right);
+  }
+  if (left.op === 'in' && right.op === 'in') {
+    if (left.values.length !== right.values.length) return false;
+    if (!areValueExprEqual(left.expr, right.expr)) return false;
+    return left.values.every((val, i) => {
+      const other = right.values[i];
+      const a = typeof val === 'number' && Object.is(val, -0) ? 0 : val;
+      const b = typeof other === 'number' && Object.is(other, -0) ? 0 : other;
+      return a === b;
+    });
+  }
+  return false;
+}
+
+const CANONICAL_CONTAINMENT_INVARIANT = bsl3AirlockFixedModel.invariants.find(
+  (inv) => inv.id === 'inv_containment_seal',
+)!;
+const CANONICAL_UV_INVARIANT = bsl3AirlockFixedModel.invariants.find(
+  (inv) => inv.id === 'inv_uv_exposure_lock',
+)!;
+const CANONICAL_LAB_ENTRY_GOAL = bsl3AirlockFixedModel.goal!;
+
+export function hasCanonicalContainmentInvariantSpec(
+  invariants: TransitionSystemModel['invariants'],
+): boolean {
+  const found = invariants.find((inv) => inv.id === CANONICAL_CONTAINMENT_INVARIANT.id);
+  return found !== undefined && areBoolExprEqual(found.holds, CANONICAL_CONTAINMENT_INVARIANT.holds);
+}
+
+export function hasCanonicalUvInvariantSpec(invariants: TransitionSystemModel['invariants']): boolean {
+  const found = invariants.find((inv) => inv.id === CANONICAL_UV_INVARIANT.id);
+  return found !== undefined && areBoolExprEqual(found.holds, CANONICAL_UV_INVARIANT.holds);
+}
+
+export function hasCanonicalSealAndUvInvariantSpecs(
+  invariants: TransitionSystemModel['invariants'],
+): boolean {
+  return (
+    invariants.length === 2 &&
+    hasCanonicalContainmentInvariantSpec(invariants) &&
+    hasCanonicalUvInvariantSpec(invariants)
+  );
+}
+
+export function hasCanonicalLabEntryGoalSpec(goal: TransitionSystemModel['goal']): boolean {
+  return (
+    goal !== undefined &&
+    goal.id === CANONICAL_LAB_ENTRY_GOAL.id &&
+    areBoolExprEqual(goal.reached, CANONICAL_LAB_ENTRY_GOAL.reached)
+  );
+}
+
+export function hasCanonicalLabEntryGoal(model: TransitionSystemModel): boolean {
+  return hasCanonicalLabEntryGoalSpec(model.goal);
 }
 
 export function isPrincipledOpenInnerDoorGuard(model: TransitionSystemModel): boolean {
@@ -650,6 +752,15 @@ function inspectStrictPlainArray(
         code: 'UNSUPPORTED_PROPERTY',
         path: `${path}[${i}]`,
         message: `Array element at index ${i} must be a plain data property, not an accessor.`,
+      });
+      ok = false;
+      continue;
+    }
+    if (!desc.enumerable) {
+      errors.push({
+        code: 'UNSUPPORTED_PROPERTY',
+        path: `${path}[${i}]`,
+        message: `Array element at index ${i} must be an enumerable own data property.`,
       });
       ok = false;
       continue;
@@ -1201,6 +1312,7 @@ function requireExportPlainObject(
     throw new TypeError(`Cannot export model: expected plain object at "${path}".`);
   }
   for (const key of Reflect.ownKeys(value)) {
+    consumeExportBudget(budget, depth + 1, path);
     if (typeof key === 'symbol') {
       throw new TypeError(`Cannot export model: symbol property is not allowed at "${path}".`);
     }
@@ -1229,6 +1341,22 @@ function requireExportPlainObject(
     }
   }
   return value;
+}
+
+function checkExportAllowedKeys(
+  obj: Record<string, unknown>,
+  path: string,
+  allowedKeys: ReadonlySet<string>,
+): void {
+  for (const key of Reflect.ownKeys(obj)) {
+    if (typeof key !== 'string') continue;
+    if (!allowedKeys.has(key)) {
+      const childPath = path === '$' ? key : `${path}.${key}`;
+      throw new TypeError(
+        `Cannot export model: unsupported field "${key}" at "${childPath}".`,
+      );
+    }
+  }
 }
 
 function readRequiredOwnData(obj: Record<string, unknown>, key: string, path: string): unknown {
@@ -1279,6 +1407,7 @@ function readExportArrayElements(
   }
   const length = lenDesc.value;
   for (const key of Reflect.ownKeys(raw)) {
+    consumeExportBudget(budget, depth, path);
     if (typeof key === 'symbol') {
       throw new TypeError(`Cannot export model: array symbol property is not allowed at "${path}".`);
     }
@@ -1300,6 +1429,11 @@ function readExportArrayElements(
     if (isAccessorDescriptor(desc)) {
       throw new TypeError(
         `Cannot export model: accessor element is not allowed at "${path}[${i}]".`,
+      );
+    }
+    if (!desc.enumerable) {
+      throw new TypeError(
+        `Cannot export model: non-enumerable element is not allowed at "${path}[${i}]".`,
       );
     }
     out.push(desc.value);
@@ -1350,13 +1484,13 @@ function cloneValueExprForExport(
   depth: number,
   budget: ExportBudget,
 ): ValueExpr {
-  const preObj = requireExportPlainObject(raw, path, budget, depth);
-  const op = requireSafeString(readRequiredOwnData(preObj, 'op', `${path}.op`), `${path}.op`);
+  const obj = requireExportPlainObject(raw, path, budget, depth);
+  const op = requireSafeString(readRequiredOwnData(obj, 'op', `${path}.op`), `${path}.op`);
   const allowed = VALUE_EXPR_KEYS_BY_OP[op];
   if (allowed === undefined) {
     throw new TypeError(`Cannot export model: unsupported value expression op "${op}" at "${path}".`);
   }
-  const obj = requireExportPlainObject(raw, path, budget, depth, allowed);
+  checkExportAllowedKeys(obj, path, allowed);
   if (op === 'lit') {
     return {
       op: 'lit',
@@ -1395,15 +1529,15 @@ function cloneBoolExprForExport(
   depth: number,
   budget: ExportBudget,
 ): BoolExpr {
-  const preObj = requireExportPlainObject(raw, path, budget, depth);
-  const op = requireSafeString(readRequiredOwnData(preObj, 'op', `${path}.op`), `${path}.op`);
+  const obj = requireExportPlainObject(raw, path, budget, depth);
+  const op = requireSafeString(readRequiredOwnData(obj, 'op', `${path}.op`), `${path}.op`);
   const allowed = BOOL_EXPR_KEYS_BY_OP[op];
   if (allowed === undefined) {
     throw new TypeError(
       `Cannot export model: unsupported boolean expression op "${op}" at "${path}".`,
     );
   }
-  const obj = requireExportPlainObject(raw, path, budget, depth, allowed);
+  checkExportAllowedKeys(obj, path, allowed);
   if (op === 'lit') {
     return {
       op: 'lit',
@@ -1513,9 +1647,9 @@ function cloneCanonicalModelForExport(model: TransitionSystemModel): Record<stri
     const varPath = `schema.${key}`;
     const desc = Object.getOwnPropertyDescriptor(rawSchema, key);
     if (desc === undefined) continue;
-    const preDef = requireExportPlainObject(desc.value, varPath, budget, 2);
+    const defObj = requireExportPlainObject(desc.value, varPath, budget, 2);
     const kind = requireSafeString(
-      readRequiredOwnData(preDef, 'kind', `${varPath}.kind`),
+      readRequiredOwnData(defObj, 'kind', `${varPath}.kind`),
       `${varPath}.kind`,
     );
     const allowedDefKeys =
@@ -1529,7 +1663,7 @@ function cloneCanonicalModelForExport(model: TransitionSystemModel): Record<stri
     if (allowedDefKeys === undefined) {
       throw new TypeError(`Cannot export model: unsupported variable kind "${kind}" at "${varPath}".`);
     }
-    const defObj = requireExportPlainObject(desc.value, varPath, budget, 2, allowedDefKeys);
+    checkExportAllowedKeys(defObj, varPath, allowedDefKeys);
     if (kind === 'boolean') {
       defineSafeDataProp(detachedSchema, key, { kind: 'boolean' });
       schemaVarNames.push(key);
@@ -1725,7 +1859,11 @@ const MAX_JSON_SCAN_DEPTH = 256;
 
 type JsonScanResult =
   | { readonly ok: true; readonly numberErrors: readonly ValidationError[] }
-  | { readonly ok: false; readonly syntaxError: string };
+  | {
+      readonly ok: false;
+      readonly code: 'JSON_PARSE_ERROR' | 'IMPORT_COMPLEXITY_EXCEEDED';
+      readonly syntaxError: string;
+    };
 
 function skipJsonWhitespace(raw: string, start: number): number {
   let i = start;
@@ -1790,7 +1928,7 @@ function scanAndValidateRawJson(raw: string): JsonScanResult {
   const numberErrors: ValidationError[] = [];
   let i = skipJsonWhitespace(raw, 0);
   if (i >= raw.length) {
-    return { ok: false, syntaxError: 'JSON input is empty.' };
+    return { ok: false, code: 'JSON_PARSE_ERROR', syntaxError: 'JSON input is empty.' };
   }
 
   type ExpectMode = 'value' | 'after-value' | 'key-or-end' | 'key' | 'colon' | 'comma-or-end';
@@ -1802,19 +1940,31 @@ function scanAndValidateRawJson(raw: string): JsonScanResult {
 
     if (rootDone && stack.length === 0) {
       return i < raw.length
-        ? { ok: false, syntaxError: `Unexpected trailing token at index ${i}.` }
+        ? {
+            ok: false,
+            code: 'JSON_PARSE_ERROR',
+            syntaxError: `Unexpected trailing token at index ${i}.`,
+          }
         : { ok: true, numberErrors };
     }
 
     if (i >= raw.length) {
-      return { ok: false, syntaxError: 'Unexpected end of JSON input.' };
+      return {
+        ok: false,
+        code: 'JSON_PARSE_ERROR',
+        syntaxError: 'Unexpected end of JSON input.',
+      };
     }
 
     const ch = raw[i]!;
 
     if (expectMode === 'colon') {
       if (ch !== ':') {
-        return { ok: false, syntaxError: `Expected ":" at index ${i}.` };
+        return {
+          ok: false,
+          code: 'JSON_PARSE_ERROR',
+          syntaxError: `Expected ":" at index ${i}.`,
+        };
       }
       i += 1;
       expectMode = 'value';
@@ -1824,7 +1974,11 @@ function scanAndValidateRawJson(raw: string): JsonScanResult {
     if (expectMode === 'key-or-end') {
       if (ch === '}') {
         if (stack.pop() !== 'object') {
-          return { ok: false, syntaxError: `Mismatched "}" at index ${i}.` };
+          return {
+            ok: false,
+            code: 'JSON_PARSE_ERROR',
+            syntaxError: `Mismatched "}" at index ${i}.`,
+          };
         }
         i += 1;
         if (stack.length === 0) {
@@ -1835,11 +1989,15 @@ function scanAndValidateRawJson(raw: string): JsonScanResult {
         continue;
       }
       if (ch !== '"') {
-        return { ok: false, syntaxError: `Expected string key or "}" at index ${i}.` };
+        return {
+          ok: false,
+          code: 'JSON_PARSE_ERROR',
+          syntaxError: `Expected string key or "}" at index ${i}.`,
+        };
       }
       const strRes = scanJsonString(raw, i);
       if ('error' in strRes) {
-        return { ok: false, syntaxError: strRes.error };
+        return { ok: false, code: 'JSON_PARSE_ERROR', syntaxError: strRes.error };
       }
       i = strRes.nextIndex;
       expectMode = 'colon';
@@ -1848,11 +2006,15 @@ function scanAndValidateRawJson(raw: string): JsonScanResult {
 
     if (expectMode === 'key') {
       if (ch !== '"') {
-        return { ok: false, syntaxError: `Expected property key string at index ${i}.` };
+        return {
+          ok: false,
+          code: 'JSON_PARSE_ERROR',
+          syntaxError: `Expected property key string at index ${i}.`,
+        };
       }
       const strRes = scanJsonString(raw, i);
       if ('error' in strRes) {
-        return { ok: false, syntaxError: strRes.error };
+        return { ok: false, code: 'JSON_PARSE_ERROR', syntaxError: strRes.error };
       }
       i = strRes.nextIndex;
       expectMode = 'colon';
@@ -1886,13 +2048,21 @@ function scanAndValidateRawJson(raw: string): JsonScanResult {
         }
         continue;
       }
-      return { ok: false, syntaxError: `Expected "," or closing delimiter at index ${i}.` };
+      return {
+        ok: false,
+        code: 'JSON_PARSE_ERROR',
+        syntaxError: `Expected "," or closing delimiter at index ${i}.`,
+      };
     }
 
     // expectMode === 'value'
     if (ch === '{') {
       if (stack.length >= MAX_JSON_SCAN_DEPTH) {
-        return { ok: false, syntaxError: 'JSON nesting exceeds scanner depth limit.' };
+        return {
+          ok: false,
+          code: 'IMPORT_COMPLEXITY_EXCEEDED',
+          syntaxError: `JSON nesting exceeds maximum depth (${MAX_JSON_SCAN_DEPTH}).`,
+        };
       }
       stack.push('object');
       i += 1;
@@ -1902,7 +2072,11 @@ function scanAndValidateRawJson(raw: string): JsonScanResult {
 
     if (ch === '[') {
       if (stack.length >= MAX_JSON_SCAN_DEPTH) {
-        return { ok: false, syntaxError: 'JSON nesting exceeds scanner depth limit.' };
+        return {
+          ok: false,
+          code: 'IMPORT_COMPLEXITY_EXCEEDED',
+          syntaxError: `JSON nesting exceeds maximum depth (${MAX_JSON_SCAN_DEPTH}).`,
+        };
       }
       stack.push('array');
       i += 1;
@@ -1924,7 +2098,7 @@ function scanAndValidateRawJson(raw: string): JsonScanResult {
     if (ch === '"') {
       const strRes = scanJsonString(raw, i);
       if ('error' in strRes) {
-        return { ok: false, syntaxError: strRes.error };
+        return { ok: false, code: 'JSON_PARSE_ERROR', syntaxError: strRes.error };
       }
       i = strRes.nextIndex;
       if (stack.length === 0) {
@@ -1960,12 +2134,20 @@ function scanAndValidateRawJson(raw: string): JsonScanResult {
       const start = i;
       if (raw[i] === '-') i += 1;
       if (i >= raw.length || raw[i]! < '0' || raw[i]! > '9') {
-        return { ok: false, syntaxError: `Invalid number token at index ${start}.` };
+        return {
+          ok: false,
+          code: 'JSON_PARSE_ERROR',
+          syntaxError: `Invalid number token at index ${start}.`,
+        };
       }
       if (raw[i] === '0') {
         i += 1;
         if (i < raw.length && raw[i]! >= '0' && raw[i]! <= '9') {
-          return { ok: false, syntaxError: `Leading zero in JSON number at index ${start}.` };
+          return {
+            ok: false,
+            code: 'JSON_PARSE_ERROR',
+            syntaxError: `Leading zero in JSON number at index ${start}.`,
+          };
         }
       } else {
         while (i < raw.length && raw[i]! >= '0' && raw[i]! <= '9') {
@@ -1975,7 +2157,11 @@ function scanAndValidateRawJson(raw: string): JsonScanResult {
       if (i < raw.length && raw[i] === '.') {
         i += 1;
         if (i >= raw.length || raw[i]! < '0' || raw[i]! > '9') {
-          return { ok: false, syntaxError: `Invalid fractional number at index ${start}.` };
+          return {
+            ok: false,
+            code: 'JSON_PARSE_ERROR',
+            syntaxError: `Invalid fractional number at index ${start}.`,
+          };
         }
         while (i < raw.length && raw[i]! >= '0' && raw[i]! <= '9') {
           i += 1;
@@ -1987,7 +2173,11 @@ function scanAndValidateRawJson(raw: string): JsonScanResult {
           i += 1;
         }
         if (i >= raw.length || raw[i]! < '0' || raw[i]! > '9') {
-          return { ok: false, syntaxError: `Invalid exponent in JSON number at index ${start}.` };
+          return {
+            ok: false,
+            code: 'JSON_PARSE_ERROR',
+            syntaxError: `Invalid exponent in JSON number at index ${start}.`,
+          };
         }
         while (i < raw.length && raw[i]! >= '0' && raw[i]! <= '9') {
           i += 1;
@@ -1996,7 +2186,11 @@ function scanAndValidateRawJson(raw: string): JsonScanResult {
 
       const token = raw.slice(start, i);
       if (!RFC8259_JSON_NUMBER_RE.test(token)) {
-        return { ok: false, syntaxError: `Invalid JSON number token "${token}".` };
+        return {
+          ok: false,
+          code: 'JSON_PARSE_ERROR',
+          syntaxError: `Invalid JSON number token "${token}".`,
+        };
       }
 
       if (numberErrors.length < 64) {
@@ -2032,7 +2226,11 @@ function scanAndValidateRawJson(raw: string): JsonScanResult {
       continue;
     }
 
-    return { ok: false, syntaxError: `Unexpected token "${ch}" at index ${i}.` };
+    return {
+      ok: false,
+      code: 'JSON_PARSE_ERROR',
+      syntaxError: `Unexpected token "${ch}" at index ${i}.`,
+    };
   }
 }
 
@@ -2112,9 +2310,12 @@ export function importModelFromJson(rawText: unknown): JsonImportResult {
         ok: false,
         errors: [
           {
-            code: 'JSON_PARSE_ERROR',
+            code: scanResult.code,
             path: '$',
-            message: `Invalid JSON: ${scanResult.syntaxError}`,
+            message:
+              scanResult.code === 'IMPORT_COMPLEXITY_EXCEEDED'
+                ? scanResult.syntaxError
+                : `Invalid JSON: ${scanResult.syntaxError}`,
           },
         ],
       };

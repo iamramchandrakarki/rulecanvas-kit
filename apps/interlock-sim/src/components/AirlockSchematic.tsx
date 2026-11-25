@@ -1,4 +1,10 @@
-import type { StateSchema, StateSnapshot } from '@rulecanvas/core';
+import type { StateSchema, StateSnapshot, TransitionSystemModel } from '@rulecanvas/core';
+import {
+  hasCanonicalContainmentInvariantSpec,
+  hasCanonicalLabEntryGoalSpec,
+  hasCanonicalSealAndUvInvariantSpecs,
+  hasCanonicalUvInvariantSpec,
+} from '../model-inspector.js';
 
 export interface AirlockSchematicProps {
   readonly schema?: StateSchema | undefined;
@@ -6,6 +12,8 @@ export interface AirlockSchematicProps {
   readonly changedVars: readonly string[];
   readonly violatedInvariantIds: readonly string[];
   readonly evaluatedInvariantIds?: readonly string[] | undefined;
+  readonly invariants?: TransitionSystemModel['invariants'] | undefined;
+  readonly goal?: TransitionSystemModel['goal'] | undefined;
   readonly isEvaluated?: boolean | undefined;
   readonly goalReached: boolean | undefined;
   readonly stepNumber: number;
@@ -37,6 +45,8 @@ export function AirlockSchematic({
   changedVars,
   violatedInvariantIds,
   evaluatedInvariantIds = [],
+  invariants,
+  goal,
   isEvaluated = false,
   goalReached,
   stepNumber,
@@ -109,12 +119,31 @@ export function AirlockSchematic({
       : 'off'
     : 'unavailable';
 
-  const containmentBreach = isEvaluated && violatedInvariantIds.includes('inv_containment_seal');
-  const uvHazard = isEvaluated && violatedInvariantIds.includes('inv_uv_exposure_lock');
+  const hasCanonicalContainment =
+    invariants !== undefined && hasCanonicalContainmentInvariantSpec(invariants);
+  const hasCanonicalUv = invariants !== undefined && hasCanonicalUvInvariantSpec(invariants);
+  const containmentBreach =
+    isEvaluated && hasCanonicalContainment && violatedInvariantIds.includes('inv_containment_seal');
+  const uvHazard =
+    isEvaluated && hasCanonicalUv && violatedInvariantIds.includes('inv_uv_exposure_lock');
   const hasViolation = isEvaluated && violatedInvariantIds.length > 0;
   const hasAirlockInvariants =
-    evaluatedInvariantIds.includes('inv_containment_seal') &&
-    evaluatedInvariantIds.includes('inv_uv_exposure_lock');
+    invariants !== undefined && hasCanonicalSealAndUvInvariantSpecs(invariants);
+  const isCanonicalGoal = hasCanonicalLabEntryGoalSpec(goal);
+  const goalBadgeText =
+    goalReached === undefined
+      ? ''
+      : isCanonicalGoal
+        ? goalReached
+          ? 'GOAL REACHED: LAB ENTRY'
+          : 'GOAL NOT REACHED'
+        : goal !== undefined
+          ? goalReached
+            ? `GOAL REACHED (${goal.id})`
+            : `GOAL NOT REACHED (${goal.id})`
+          : goalReached
+            ? 'GOAL REACHED'
+            : 'GOAL NOT REACHED';
   const changedSet = new Set(changedVars);
 
   const safetyBadgeTone = !isEvaluated
@@ -288,8 +317,7 @@ export function AirlockSchematic({
           </span>
           {isEvaluated && goalReached !== undefined && (
             <span className="is-badge" data-tone={goalReached ? 'success' : 'info'}>
-              <span aria-hidden="true">{goalReached ? '✓' : '○'}</span>{' '}
-              {goalReached ? 'GOAL REACHED: LAB ENTRY' : 'GOAL NOT REACHED'}
+              <span aria-hidden="true">{goalReached ? '✓' : '○'}</span> {goalBadgeText}
             </span>
           )}
         </div>

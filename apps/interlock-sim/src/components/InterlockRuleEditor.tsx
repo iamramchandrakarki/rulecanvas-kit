@@ -106,10 +106,12 @@ export function InterlockRuleEditor({
   const [jsonDraft, setJsonDraft] = useState<string>(() =>
     initialJsonExport.ok ? initialJsonExport.text : '',
   );
-  const [jsonErrors, setJsonErrors] = useState<readonly ValidationError[]>(() =>
-    initialJsonExport.ok ? [] : [initialJsonExport.error],
+  const [exportError, setExportError] = useState<ValidationError | null>(() =>
+    initialJsonExport.ok ? null : initialJsonExport.error,
   );
+  const [jsonErrors, setJsonErrors] = useState<readonly ValidationError[]>([]);
   const [jsonNotice, setJsonNotice] = useState<string | null>(null);
+  const [repairGen, setRepairGen] = useState<number>(0);
 
   const [asmRowIds, setAsmRowIds] = useState<readonly string[]>(() =>
     model.assumptions.map(() => allocRowId('asm')),
@@ -212,6 +214,7 @@ export function InterlockRuleEditor({
     const exported = tryExportModelJson(model);
     if (exported.ok) {
       setJsonDraft(exported.text);
+      setExportError(null);
       setJsonErrors([]);
       if (preserveNextNoticeRef.current) {
         preserveNextNoticeRef.current = false;
@@ -221,7 +224,8 @@ export function InterlockRuleEditor({
     } else {
       preserveNextNoticeRef.current = false;
       setJsonDraft('');
-      setJsonErrors([exported.error]);
+      setExportError(exported.error);
+      setJsonErrors([]);
       setJsonNotice(null);
     }
   }, [model]);
@@ -250,7 +254,7 @@ export function InterlockRuleEditor({
   const repairableOpenInnerDoor = isRepairableInterlockModel(model);
   const openInnerDoorRepaired = isPrincipledOpenInnerDoorGuard(model);
   const schemaKeys = Object.keys(model.schema);
-  const exportBlocked = jsonErrors.some((err) => err.code === 'JSON_EXPORT_ERROR');
+  const exportBlocked = exportError !== null;
 
   const handleTabKeyDown = (e: KeyboardEvent<HTMLButtonElement>, currentIdx: number) => {
     let targetIdx: number | null = null;
@@ -272,7 +276,8 @@ export function InterlockRuleEditor({
   };
 
   const handleApplyPrincipledRepair = () => {
-    pruneDraftsByPrefix('rule:open_inner_door.guard');
+    pruneDraftsByPrefix('rule');
+    setRepairGen((g) => g + 1);
     onChangeModel(applyPrincipledInterlockRepair(model));
     setSelectedRuleId('open_inner_door');
   };
@@ -305,10 +310,11 @@ export function InterlockRuleEditor({
   const handleCopyJson = async () => {
     const exported = tryExportModelJson(model);
     if (!exported.ok) {
-      setJsonErrors([exported.error]);
+      setExportError(exported.error);
       setJsonNotice(null);
       return;
     }
+    setExportError(null);
     try {
       if (typeof navigator !== 'undefined' && navigator.clipboard !== undefined) {
         await navigator.clipboard.writeText(exported.text);
@@ -324,10 +330,11 @@ export function InterlockRuleEditor({
   const handleDownloadJson = () => {
     const exported = tryExportModelJson(model);
     if (!exported.ok) {
-      setJsonErrors([exported.error]);
+      setExportError(exported.error);
       setJsonNotice(null);
       return;
     }
+    setExportError(null);
     const blob = new Blob([exported.text], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -454,12 +461,12 @@ export function InterlockRuleEditor({
 
             <div className="is-guard-tree-scroll">
               <BoolExprEditor
-                key={`${resetKey}:${selectedRule.id}`}
+                key={`${resetKey}:${selectedRule.id}:${repairGen}`}
                 value={selectedRule.guard}
                 schema={model.schema}
                 schemaKeysOrder={schemaKeys}
                 ariaLabelPrefix={`Guard for ${selectedRule.id}`}
-                resetKey={`${resetKey}:${selectedRule.id}`}
+                resetKey={`${resetKey}:${selectedRule.id}:${repairGen}`}
                 fieldPath={`rule:${selectedRule.id}.guard`}
                 intDraftStore={intDraftStore}
                 onChange={(nextGuard) =>
@@ -657,13 +664,21 @@ export function InterlockRuleEditor({
           </div>
         )}
 
+        {exportError !== null && (
+          <div className="is-alert" role="alert">
+            <strong>JSON Export Failed</strong>
+            <ul>
+              <li>
+                <code>{exportError.path}</code>: {exportError.message} (
+                <code>{exportError.code}</code>)
+              </li>
+            </ul>
+          </div>
+        )}
+
         {jsonErrors.length > 0 && (
           <div className="is-alert" role="alert">
-            <strong>
-              {jsonErrors.every((err) => err.code === 'JSON_EXPORT_ERROR')
-                ? `JSON Export Failed (${jsonErrors.length})`
-                : `JSON Import Validation Failed (${jsonErrors.length})`}
-            </strong>
+            <strong>JSON Import Validation Failed ({jsonErrors.length})</strong>
             <ul>
               {jsonErrors.map((err, idx) => (
                 <li key={`${err.code}-${err.path}-${idx}`}>

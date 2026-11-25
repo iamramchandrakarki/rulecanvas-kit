@@ -639,6 +639,8 @@ export function App({
             evaluatedInvariantIds={
               replaySession !== null ? replaySession.model.invariants.map((inv) => inv.id) : []
             }
+            invariants={replaySession !== null ? replaySession.model.invariants : model.invariants}
+            goal={replaySession !== null ? replaySession.model.goal : model.goal}
             isEvaluated={replaySession !== null}
             goalReached={replaySession?.goalReached}
             stepNumber={replaySession?.cursor ?? 0}
