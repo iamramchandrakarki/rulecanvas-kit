@@ -410,4 +410,73 @@ describe('@rulecanvas/workbench-react components, navigation, and race-safe hist
 
     ctrl.dispose();
   });
+
+  it('adopts the live entry stamp when selecting the preset already in the live URL and allocates a fresh stamp for unowned live state', () => {
+    const fake = createFakeHistoryHost('https://example.org/app/?preset=a', true);
+    let dirty = false;
+    let committed: TestPreset = 'a';
+    const box: { prompt: PendingDiscardPrompt<TestPreset> | null } = { prompt: null };
+
+    const ctrl = createWorkbenchHistoryController<TestPreset>({
+      host: fake.host,
+      allowedPresets: ['a', 'b', 'c'],
+      defaultPreset: 'a',
+      isDirty: () => dirty,
+      onCommitPreset: (p) => {
+        committed = p;
+      },
+      onPromptChange: (p) => {
+        box.prompt = p;
+      },
+    });
+
+    const initialAStamp = ctrl.getAcceptedStamp();
+    ctrl.selectPreset('b');
+    expect(committed).toBe('b');
+
+    // Back while dirty onto live entry `a`, then select `a` (already in live URL) and approve discard
+    dirty = true;
+    fake.navigateToIndex(0);
+    expect(new URL(fake.host.location.href).searchParams.get('preset')).toBe('a');
+    ctrl.selectPreset('a');
+    expect(box.prompt?.kind).toBe('preset');
+    dirty = false;
+    ctrl.acceptPrompt();
+    expect(committed).toBe('a');
+
+    // Accepted stamp must match live entry `a`, NOT stale entry `b`
+    const adoptedStamp = ctrl.getAcceptedStamp();
+    expect(adoptedStamp.sessionId).toBe(initialAStamp.sessionId);
+    expect(adoptedStamp.entryId).toBe(initialAStamp.entryId);
+    expect(adoptedStamp.index).toBe(initialAStamp.index);
+    expect(adoptedStamp.preset).toBe('a');
+
+    // Declining a Forward navigation from `a` -> `b` while dirty uses Navigation API traverseTo without falling back to a new session
+    dirty = true;
+    fake.navigateToIndex(1);
+    expect(box.prompt?.kind).toBe('popstate');
+    ctrl.declinePrompt();
+    fake.flushTraversals();
+    expect(ctrl.getAcceptedStamp().sessionId).toBe(initialAStamp.sessionId);
+    expect(new URL(fake.host.location.href).searchParams.get('preset')).toBe('a');
+
+    // If the live entry carries a foreign/stale session stamp when matching live URL, allocate a fresh session and replaceState it
+    dirty = false;
+    fake.entries[fake.getCursor()]!.state = {
+      __rulecanvasRoute: true,
+      sessionId: 'foreign-session',
+      entryId: 'foreign-entry',
+      index: 9,
+      preset: 'b',
+    };
+    ctrl.selectPreset('a');
+    const recovered = ctrl.getAcceptedStamp();
+    expect(recovered.sessionId).not.toBe(initialAStamp.sessionId);
+    expect(recovered.sessionId).not.toBe('foreign-session');
+    expect(recovered.index).toBe(0);
+    expect(recovered.preset).toBe('a');
+    expect(fake.host.history.state).toEqual(recovered);
+
+    ctrl.dispose();
+  });
 });

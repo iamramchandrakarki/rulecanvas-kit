@@ -258,7 +258,24 @@ export function createWorkbenchHistoryController<TPreset extends string>(
       acceptedUrl = nextUrl;
       acceptedNavKey = currentNavKey();
     } else {
-      acceptedStamp = { ...acceptedStamp, preset: nextPreset };
+      const liveRaw = host.history.state;
+      const liveStamp = isHistoryStamp(liveRaw) ? liveRaw : null;
+      if (liveStamp !== null && liveStamp.sessionId === sessionId) {
+        acceptedStamp = { ...liveStamp, preset: nextPreset };
+        if (liveStamp.preset !== nextPreset) {
+          host.history.replaceState(acceptedStamp, '', nextUrl);
+        }
+      } else {
+        sessionId = allocSessionId();
+        acceptedStamp = {
+          __rulecanvasRoute: true,
+          sessionId,
+          entryId: allocEntryId(),
+          index: 0,
+          preset: nextPreset,
+        };
+        host.history.replaceState(acceptedStamp, '', nextUrl);
+      }
       acceptedUrl = nextUrl;
       acceptedNavKey = currentNavKey();
     }
