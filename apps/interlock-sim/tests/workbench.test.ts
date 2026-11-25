@@ -1069,7 +1069,7 @@ describe('InterlockSim workbench architecture, semantics, security, and UI', () 
     expect(tokensCss).toContain('--color-paper:');
     expect(tokensCss).toContain('--color-accent:');
     expect(tokensCss).toContain('--color-control-border:');
-    expect(tokensCss).not.toMatch(/#fff\b|#ffffff\b|oklch\(100%\s+0\s+0\)|Hallmark|dealt|agent-gate/i);
+    expect(tokensCss).not.toMatch(/#fff\b|#ffffff\b|oklch\(100%\s+0\s+0\)|seed\s+[a-z0-9-]+|agent-gate/i);
 
     const filesToCheck = [
       'src/App.tsx',
