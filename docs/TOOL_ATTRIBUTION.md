@@ -8,6 +8,7 @@ RuleCanvasKit is authored and maintained by Ramchandra Karki using AI-assisted s
 - **Reproducible verification**: Every change is validated deterministically via strict ES2022 TypeScript compilation, unit and regression tests, seeded property-based differential tests, package-boundary checks, and benchmarks (`pnpm test`, `pnpm verify:boundaries`, `pnpm verify:hygiene`, `pnpm bench`).
 - **Kiro workspace configuration**: `.kiro/steering/` and `.kiro/hooks/` store versioned workspace rules (`inclusion: always` and `fileMatchPattern`) and a `PostFileSave` command hook definition aligned with Kiro's `v1` hook schema. The underlying `@rulecanvas/core` build and test commands referenced by the hook are executed directly via `pnpm` locally and in GitHub Actions CI.
 - **Kiro review**: Kiro independently reviewed the workbench integration against the package boundaries and verification contracts. It identified a legacy worker protocol mismatch and highlighted verdict metadata and preset-history cases that needed closer checks. Those findings guided the worker compatibility fix and regression tests.
+- **Kiro CLI steering**: In a clean workspace containing the tracked Kiro configuration, Kiro CLI loaded the architecture steering and used it to explain why the verifier stays domain-neutral, deterministic, and separate from the browser workbenches.
 
 ## Specification Honesty Policy
 

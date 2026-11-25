@@ -10,7 +10,9 @@ The verification core uses exact integer arithmetic and atomic transitions. Shar
 
 ## How we built it
 
-The root [Kiro workspace](../.kiro/) tracks architectural steering, engine rules, and a save-hook definition for core checks. The [tooling disclosure](./TOOL_ATTRIBUTION.md) describes which Kiro activities were performed and how the underlying checks were run. The core uses differential property-based tests against an independent reference evaluator. The package and browser gates check the exported packages and both workbenches outside the development server.
+The root [Kiro workspace](../.kiro/) tracks architectural steering, engine rules, and a save-hook definition for core checks. Kiro reviewed the shared workbench integration and caught a compatibility defect in the legacy worker protocol. We fixed it and added a regression check. A separate Kiro CLI session loaded the tracked architecture steering and explained the design boundary it enforces. The [tooling disclosure](./TOOL_ATTRIBUTION.md) describes the recorded activities and how the checks were run.
+
+The core uses differential property-based tests against an independent reference evaluator. The package and browser gates check the exported packages and both workbenches outside the development server.
 
 ## Demo outline
 
