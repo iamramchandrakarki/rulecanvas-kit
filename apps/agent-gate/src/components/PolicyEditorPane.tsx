@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import type {
   BoolExpr,
   TransitionRule,
@@ -45,7 +45,7 @@ import {
   updateSchemaVariable,
   type ModelDiagnosticsIndex,
 } from '../model-editor.js';
-import { BoolExprEditor, ValueExprEditor } from './ExprEditor.js';
+import { BoolExprEditor, ValueExprEditor, type LiftedIntDraftStore } from './ExprEditor.js';
 import { StrictIntegerInput } from './StrictIntegerInput.js';
 
 export type EditorTabId = 'schema' | 'rules' | 'invariants' | 'assumptions' | 'json';
@@ -96,7 +96,11 @@ function guardContainsNegatedVar(expr: BoolExpr, varName: string): boolean {
   return false;
 }
 
-function buildInitialRowIds(prefix: string, count: number, counterRef: { current: number }): string[] {
+function buildInitialRowIds(
+  prefix: string,
+  count: number,
+  counterRef: { current: number },
+): string[] {
   const ids: string[] = [];
   for (let i = 0; i < count; i += 1) {
     counterRef.current += 1;
@@ -105,7 +109,37 @@ function buildInitialRowIds(prefix: string, count: number, counterRef: { current
   return ids;
 }
 
-function alignRowIds(current: readonly string[], targetLength: number, prefix: string): readonly string[] {
+function buildInitialSchemaRowMap(
+  keys: readonly string[],
+  counterRef: { current: number },
+): Record<string, string> {
+  const map: Record<string, string> = {};
+  for (const key of keys) {
+    counterRef.current += 1;
+    map[key] = `schema-row-${counterRef.current}`;
+  }
+  return map;
+}
+
+function buildInitialUpdateRowIdsByRule(
+  rules: readonly TransitionRule[],
+  ruleIds: readonly string[],
+  counterRef: { current: number },
+): Record<string, readonly string[]> {
+  const map: Record<string, readonly string[]> = {};
+  for (let i = 0; i < rules.length; i += 1) {
+    const rule = rules[i]!;
+    const ruleRowId = ruleIds[i]!;
+    map[ruleRowId] = buildInitialRowIds('upd-row', rule.updates.length, counterRef);
+  }
+  return map;
+}
+
+function alignRowIds(
+  current: readonly string[],
+  targetLength: number,
+  prefix: string,
+): readonly string[] {
   if (current.length === targetLength) return current;
   if (current.length > targetLength) return current.slice(0, targetLength);
   const next = [...current];
@@ -113,6 +147,45 @@ function alignRowIds(current: readonly string[], targetLength: number, prefix: s
     next.push(`${prefix}-sync-${i}`);
   }
   return next;
+}
+
+export function matchesDraftPrefix(fieldKey: string, prefix: string): boolean {
+  return (
+    fieldKey === prefix ||
+    fieldKey.startsWith(`${prefix}.`) ||
+    fieldKey.startsWith(`${prefix}:`)
+  );
+}
+
+export function applySchemaVarRenameState(
+  currentOrder: readonly string[],
+  varNameToRowId: Readonly<Record<string, string>>,
+  oldKey: string,
+  newKey: string,
+  rowId: string,
+): {
+  readonly schemaVarOrder: readonly string[];
+  readonly varNameToRowId: Readonly<Record<string, string>>;
+} {
+  const nextOrder = currentOrder.map((k) => (k === oldKey ? newKey : k));
+  const nextMap: Record<string, string> = { ...varNameToRowId };
+  delete nextMap[oldKey];
+  nextMap[newKey] = rowId;
+  return {
+    schemaVarOrder: nextOrder,
+    varNameToRowId: nextMap,
+  };
+}
+
+export function resolveOrderedSchemaKeys(
+  schemaVarOrder: readonly string[],
+  schema: TransitionSystemModel['schema'],
+): readonly string[] {
+  const rawSchemaKeys = Object.keys(schema);
+  return [
+    ...schemaVarOrder.filter((k) => Object.hasOwn(schema, k)),
+    ...rawSchemaKeys.filter((k) => !schemaVarOrder.includes(k)),
+  ];
 }
 
 export function PolicyEditorPane({
@@ -125,6 +198,9 @@ export function PolicyEditorPane({
 }: PolicyEditorPaneProps) {
   const nextRowIdRef = useRef<number>(0);
   const prevResetKeyRef = useRef<string | number>(resetKey);
+  const preserveNextNoticeRef = useRef<boolean>(false);
+  const onDraftErrorChangeRef = useRef(onDraftErrorChange);
+  onDraftErrorChangeRef.current = onDraftErrorChange;
 
   const allocRowId = (prefix: string): string => {
     nextRowIdRef.current += 1;
@@ -153,12 +229,22 @@ export function PolicyEditorPane({
   const [jsonErrors, setJsonErrors] = useState<readonly ValidationError[]>([]);
   const [jsonNotice, setJsonNotice] = useState<string | null>(null);
 
-  const [schemaRowIds, setSchemaRowIds] = useState<readonly string[]>(() =>
-    buildInitialRowIds('schema-row', Object.keys(model.schema).length, nextRowIdRef),
+  // Logical variable identity & visual order (stable across numeric-key renames)
+  const [schemaVarOrder, setSchemaVarOrder] = useState<readonly string[]>(() =>
+    Object.keys(model.schema),
   );
+  const [varNameToRowId, setVarNameToRowId] = useState<Readonly<Record<string, string>>>(() =>
+    buildInitialSchemaRowMap(Object.keys(model.schema), nextRowIdRef),
+  );
+  const fallbackSchemaRowMapRef = useRef<Record<string, string>>({});
+
   const [ruleRowIds, setRuleRowIds] = useState<readonly string[]>(() =>
     buildInitialRowIds('rule-row', model.rules.length, nextRowIdRef),
   );
+  const [updateRowIdsByRule, setUpdateRowIdsByRule] = useState<
+    Readonly<Record<string, readonly string[]>>
+  >(() => buildInitialUpdateRowIdsByRule(model.rules, ruleRowIds, nextRowIdRef));
+
   const [invRowIds, setInvRowIds] = useState<readonly string[]>(() =>
     buildInitialRowIds('inv-row', model.invariants.length, nextRowIdRef),
   );
@@ -180,26 +266,129 @@ export function PolicyEditorPane({
   const [varNameDrafts, setVarNameDrafts] = useState<Readonly<Record<string, string>>>({});
   const [varNameErrors, setVarNameErrors] = useState<Readonly<Record<string, string>>>({});
 
+  // Lifted integer drafts & errors keyed by stable logical fieldKey
+  const [intDraftValues, setIntDraftValues] = useState<Readonly<Record<string, string>>>({});
+  const [intDraftErrors, setIntDraftErrors] = useState<Readonly<Record<string, string>>>({});
+  const intDraftErrorsRef = useRef<Readonly<Record<string, string>>>({});
+
+  const handleIntDraftChange = useCallback(
+    (fieldKey: string, rawDraft: string, errorMessage: string | null) => {
+      setIntDraftValues((prev) => {
+        if (errorMessage === null) {
+          const parsed = parseStrictIntegerDraft(rawDraft);
+          if (parsed.ok && rawDraft === String(parsed.value)) {
+            if (!Object.hasOwn(prev, fieldKey)) return prev;
+            const next = { ...prev };
+            delete next[fieldKey];
+            return next;
+          }
+        }
+        if (prev[fieldKey] === rawDraft) return prev;
+        return { ...prev, [fieldKey]: rawDraft };
+      });
+
+      setIntDraftErrors((prev) => {
+        if (errorMessage === null) {
+          if (!Object.hasOwn(prev, fieldKey)) return prev;
+          const next = { ...prev };
+          delete next[fieldKey];
+          intDraftErrorsRef.current = next;
+          return next;
+        }
+        if (prev[fieldKey] === errorMessage) return prev;
+        const next = { ...prev, [fieldKey]: errorMessage };
+        intDraftErrorsRef.current = next;
+        return next;
+      });
+
+      onDraftErrorChangeRef.current?.(fieldKey, errorMessage);
+    },
+    [],
+  );
+
+  const pruneDraftsByPrefix = useCallback((prefix: string) => {
+    setIntDraftValues((prev) => {
+      let changed = false;
+      const next: Record<string, string> = {};
+      for (const [k, v] of Object.entries(prev)) {
+        if (matchesDraftPrefix(k, prefix)) {
+          changed = true;
+        } else {
+          next[k] = v;
+        }
+      }
+      return changed ? next : prev;
+    });
+
+    const removedErrorKeys: string[] = [];
+    for (const k of Object.keys(intDraftErrorsRef.current)) {
+      if (matchesDraftPrefix(k, prefix)) {
+        removedErrorKeys.push(k);
+      }
+    }
+
+    if (removedErrorKeys.length > 0) {
+      setIntDraftErrors((prev) => {
+        let changed = false;
+        const next: Record<string, string> = {};
+        for (const [k, v] of Object.entries(prev)) {
+          if (matchesDraftPrefix(k, prefix)) {
+            changed = true;
+          } else {
+            next[k] = v;
+          }
+        }
+        if (changed) {
+          intDraftErrorsRef.current = next;
+          return next;
+        }
+        return prev;
+      });
+      for (const k of removedErrorKeys) {
+        onDraftErrorChangeRef.current?.(k, null);
+      }
+    }
+  }, []);
+
+  const intDraftStore = useMemo<LiftedIntDraftStore>(
+    () => ({
+      draftValues: intDraftValues,
+      draftErrors: intDraftErrors,
+      onDraftChange: handleIntDraftChange,
+      onPruneDrafts: pruneDraftsByPrefix,
+    }),
+    [intDraftValues, intDraftErrors, handleIntDraftChange, pruneDraftsByPrefix],
+  );
+
   useEffect(() => {
     setJsonDraft(exportModelToJson(model));
     setJsonErrors([]);
-    setJsonNotice(null);
+    if (preserveNextNoticeRef.current) {
+      preserveNextNoticeRef.current = false;
+    } else {
+      setJsonNotice(null);
+    }
   }, [model]);
 
   useEffect(() => {
     if (prevResetKeyRef.current !== resetKey) {
       prevResetKeyRef.current = resetKey;
-      const nextSchemaIds = buildInitialRowIds(
-        'schema-row',
-        Object.keys(model.schema).length,
+      const nextSchemaKeys = Object.keys(model.schema);
+      const nextSchemaRowMap = buildInitialSchemaRowMap(nextSchemaKeys, nextRowIdRef);
+      const nextRuleIds = buildInitialRowIds('rule-row', model.rules.length, nextRowIdRef);
+      const nextUpdateIdsByRule = buildInitialUpdateRowIdsByRule(
+        model.rules,
+        nextRuleIds,
         nextRowIdRef,
       );
-      const nextRuleIds = buildInitialRowIds('rule-row', model.rules.length, nextRowIdRef);
       const nextInvIds = buildInitialRowIds('inv-row', model.invariants.length, nextRowIdRef);
       const nextAsmIds = buildInitialRowIds('asm-row', model.assumptions.length, nextRowIdRef);
 
-      setSchemaRowIds(nextSchemaIds);
+      fallbackSchemaRowMapRef.current = {};
+      setSchemaVarOrder(nextSchemaKeys);
+      setVarNameToRowId(nextSchemaRowMap);
       setRuleRowIds(nextRuleIds);
+      setUpdateRowIdsByRule(nextUpdateIdsByRule);
       setInvRowIds(nextInvIds);
       setAsmRowIds(nextAsmIds);
 
@@ -213,11 +402,24 @@ export function PolicyEditorPane({
       setExpandedRuleIds(nextExpanded);
       setVarNameDrafts({});
       setVarNameErrors({});
+      setIntDraftValues({});
+      setIntDraftErrors({});
+      intDraftErrorsRef.current = {};
     }
   }, [resetKey, model]);
 
-  const schemaKeys = Object.keys(model.schema);
-  const resolvedSchemaRowIds = alignRowIds(schemaRowIds, schemaKeys.length, 'schema-row');
+  const schemaKeys = resolveOrderedSchemaKeys(schemaVarOrder, model.schema);
+
+  const getSchemaRowId = (varName: string): string => {
+    if (Object.hasOwn(varNameToRowId, varName)) {
+      return varNameToRowId[varName]!;
+    }
+    if (!Object.hasOwn(fallbackSchemaRowMapRef.current, varName)) {
+      fallbackSchemaRowMapRef.current[varName] = allocRowId('schema-row');
+    }
+    return fallbackSchemaRowMapRef.current[varName]!;
+  };
+
   const resolvedRuleRowIds = alignRowIds(ruleRowIds, model.rules.length, 'rule-row');
   const resolvedInvRowIds = alignRowIds(invRowIds, model.invariants.length, 'inv-row');
   const resolvedAsmRowIds = alignRowIds(asmRowIds, model.assumptions.length, 'asm-row');
@@ -270,14 +472,32 @@ export function PolicyEditorPane({
     }
   };
 
+  const countIntDraftErrorsByPrefix = (prefix: string): number => {
+    let count = 0;
+    for (const key of Object.keys(intDraftErrors)) {
+      if (key.startsWith(prefix)) count += 1;
+    }
+    return count;
+  };
+
   const tabErrorCount = (tab: EditorTabId): number => {
     switch (tab) {
       case 'schema':
-        return diagnostics.sections.schema.length + diagnostics.sections.general.length;
+        return (
+          diagnostics.sections.schema.length +
+          diagnostics.sections.general.length +
+          countIntDraftErrorsByPrefix('schema:') +
+          Object.keys(varNameErrors).length
+        );
       case 'rules':
-        return diagnostics.sections.rules.length;
+        return diagnostics.sections.rules.length + countIntDraftErrorsByPrefix('rule:');
       case 'invariants':
-        return diagnostics.sections.invariants.length + diagnostics.sections.goal.length;
+        return (
+          diagnostics.sections.invariants.length +
+          diagnostics.sections.goal.length +
+          countIntDraftErrorsByPrefix('inv:') +
+          countIntDraftErrorsByPrefix('goal.')
+        );
       case 'assumptions':
         return diagnostics.sections.assumptions.length;
       case 'json':
@@ -316,13 +536,22 @@ export function PolicyEditorPane({
       def = { kind: 'int', min: parsedNewVarMin.value, max: parsedNewVarMax.value };
     }
 
-    setSchemaRowIds([...resolvedSchemaRowIds, allocRowId('schema-row')]);
+    const newRowId = allocRowId('schema-row');
+    setVarNameToRowId((prev) => ({ ...prev, [trimmedNewVarName]: newRowId }));
+    setSchemaVarOrder([...schemaKeys, trimmedNewVarName]);
     onChangeModel(addSchemaVariable(model, trimmedNewVarName, def));
     setNewVarName('');
   };
 
-  const handleRemoveSchemaVar = (idx: number, key: string, rowId: string) => {
-    setSchemaRowIds(resolvedSchemaRowIds.filter((_, i) => i !== idx));
+  const handleRemoveSchemaVar = (key: string, rowId: string) => {
+    setSchemaVarOrder(schemaKeys.filter((k) => k !== key));
+    setVarNameToRowId((prev) => {
+      if (!Object.hasOwn(prev, key)) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+    delete fallbackSchemaRowMapRef.current[key];
     setVarNameDrafts((prev) => {
       const next = { ...prev };
       delete next[rowId];
@@ -333,7 +562,8 @@ export function PolicyEditorPane({
       delete next[rowId];
       return next;
     });
-    onDraftErrorChange?.(`schema.${rowId}.name`, null);
+    onDraftErrorChangeRef.current?.(`schema:${rowId}.name`, null);
+    pruneDraftsByPrefix(`schema:${rowId}`);
     onChangeModel(removeSchemaVariable(model, key));
   };
 
@@ -344,19 +574,19 @@ export function PolicyEditorPane({
     if (trimmed.length === 0) {
       const msg = 'Variable name must not be empty.';
       setVarNameErrors((prev) => ({ ...prev, [rowId]: msg }));
-      onDraftErrorChange?.(`schema.${rowId}.name`, msg);
+      onDraftErrorChangeRef.current?.(`schema:${rowId}.name`, msg);
       return;
     }
     if (RESERVED_SCHEMA_NAMES.has(trimmed)) {
       const msg = `Variable name "${trimmed}" is reserved.`;
       setVarNameErrors((prev) => ({ ...prev, [rowId]: msg }));
-      onDraftErrorChange?.(`schema.${rowId}.name`, msg);
+      onDraftErrorChangeRef.current?.(`schema:${rowId}.name`, msg);
       return;
     }
     if (trimmed !== oldKey && Object.hasOwn(model.schema, trimmed)) {
       const msg = `Variable name "${trimmed}" is already declared.`;
       setVarNameErrors((prev) => ({ ...prev, [rowId]: msg }));
-      onDraftErrorChange?.(`schema.${rowId}.name`, msg);
+      onDraftErrorChangeRef.current?.(`schema:${rowId}.name`, msg);
       return;
     }
 
@@ -366,9 +596,22 @@ export function PolicyEditorPane({
       delete next[rowId];
       return next;
     });
-    onDraftErrorChange?.(`schema.${rowId}.name`, null);
+    onDraftErrorChangeRef.current?.(`schema:${rowId}.name`, null);
 
     if (trimmed !== oldKey) {
+      const renamedState = applySchemaVarRenameState(
+        schemaKeys,
+        varNameToRowId,
+        oldKey,
+        trimmed,
+        rowId,
+      );
+      setSchemaVarOrder(renamedState.schemaVarOrder);
+      setVarNameToRowId(renamedState.varNameToRowId);
+      delete fallbackSchemaRowMapRef.current[oldKey];
+      if (quickClauseVar === oldKey) {
+        setQuickClauseVar(trimmed);
+      }
       onChangeModel(updateSchemaVariable(model, oldKey, trimmed, def));
     }
   };
@@ -376,6 +619,7 @@ export function PolicyEditorPane({
   const handleAddRule = () => {
     const newRowId = allocRowId('rule-row');
     setRuleRowIds([...resolvedRuleRowIds, newRowId]);
+    setUpdateRowIdsByRule((prev) => ({ ...prev, [newRowId]: [] }));
     setExpandedRuleIds((prev) => {
       const next = new Set(prev);
       next.add(newRowId);
@@ -397,13 +641,64 @@ export function PolicyEditorPane({
 
   const handleRemoveRule = (idx: number, rowId: string) => {
     setRuleRowIds(resolvedRuleRowIds.filter((_, i) => i !== idx));
+    setUpdateRowIdsByRule((prev) => {
+      if (!Object.hasOwn(prev, rowId)) return prev;
+      const next = { ...prev };
+      delete next[rowId];
+      return next;
+    });
     setExpandedRuleIds((prev) => {
       if (!prev.has(rowId)) return prev;
       const next = new Set(prev);
       next.delete(rowId);
       return next;
     });
+    pruneDraftsByPrefix(`rule:${rowId}`);
     onChangeModel(removeRule(model, idx));
+  };
+
+  const handleAddRuleUpdate = (idx: number, rule: TransitionRule, ruleRowId: string) => {
+    const currentUpdIds = alignRowIds(
+      updateRowIdsByRule[ruleRowId] ?? [],
+      rule.updates.length,
+      `upd-${ruleRowId}`,
+    );
+    const nextUpdRowId = allocRowId('upd-row');
+    setUpdateRowIdsByRule((prev) => ({
+      ...prev,
+      [ruleRowId]: [...currentUpdIds, nextUpdRowId],
+    }));
+
+    const targetVar = firstVariableOfKind(model.schema);
+    const targetDef = model.schema[targetVar];
+    const valExpr =
+      targetDef !== undefined
+        ? {
+            op: 'lit' as const,
+            value: defaultValueForVarDef(targetDef),
+          }
+        : createDefaultValueExpr('lit', model.schema);
+    onChangeModel(updateRule(model, idx, addRuleUpdate(rule, { var: targetVar, value: valExpr })));
+  };
+
+  const handleRemoveRuleUpdate = (
+    idx: number,
+    rule: TransitionRule,
+    ruleRowId: string,
+    updIdx: number,
+    updRowId: string,
+  ) => {
+    const currentUpdIds = alignRowIds(
+      updateRowIdsByRule[ruleRowId] ?? [],
+      rule.updates.length,
+      `upd-${ruleRowId}`,
+    );
+    setUpdateRowIdsByRule((prev) => ({
+      ...prev,
+      [ruleRowId]: currentUpdIds.filter((_, i) => i !== updIdx),
+    }));
+    pruneDraftsByPrefix(`rule:${ruleRowId}.update:${updRowId}`);
+    onChangeModel(updateRule(model, idx, removeRuleUpdate(rule, updIdx)));
   };
 
   const handleAddInvariant = () => {
@@ -417,8 +712,9 @@ export function PolicyEditorPane({
     );
   };
 
-  const handleRemoveInvariant = (idx: number) => {
+  const handleRemoveInvariant = (idx: number, invRowId: string) => {
     setInvRowIds(resolvedInvRowIds.filter((_, i) => i !== idx));
+    pruneDraftsByPrefix(`inv:${invRowId}`);
     onChangeModel(removeInvariant(model, idx));
   };
 
@@ -447,6 +743,7 @@ export function PolicyEditorPane({
       return;
     }
     setJsonErrors([]);
+    preserveNextNoticeRef.current = true;
     setJsonNotice('Model JSON validated and loaded into editor.');
     onImportModel(result.model);
   };
@@ -516,6 +813,7 @@ export function PolicyEditorPane({
       );
     }
     const numVal = typeof current === 'number' ? current : def.min;
+    const initFieldKey = `schema:${rowId}.initial`;
     return (
       <StrictIntegerInput
         id={controlId}
@@ -523,8 +821,10 @@ export function PolicyEditorPane({
         className="ag-input ag-input-num"
         ariaLabel={`Initial value for ${varName}`}
         resetKey={resetKey}
-        fieldKey={`initialState.${varName}`}
-        onValidityChange={onDraftErrorChange}
+        fieldKey={initFieldKey}
+        externalDraft={intDraftValues[initFieldKey]}
+        externalError={intDraftErrors[initFieldKey]}
+        onDraftChange={handleIntDraftChange}
         onCommit={(parsed) => onChangeModel(setInitialStateValue(model, varName, parsed))}
       />
     );
@@ -578,357 +878,368 @@ export function PolicyEditorPane({
         })}
       </div>
 
-      {activeTab === 'schema' && (
-        <div
-          id="panel-schema"
-          role="tabpanel"
-          aria-labelledby="tab-schema"
-          className="ag-tabpanel"
-        >
-          <div className="ag-section">
-            <h3 className="ag-section-title">Model Metadata</h3>
-            <InlineErrorList errors={diagnostics.sections.general} />
-            <div className="ag-row-grid">
-              <div className="ag-field">
-                <label htmlFor="model-id-input">Model ID</label>
-                <input
-                  id="model-id-input"
-                  type="text"
-                  className="ag-input ag-input-mono"
-                  value={model.id}
-                  onChange={(e) => onChangeModel(updateModelMetadata(model, { id: e.target.value }))}
-                />
-              </div>
-              <div className="ag-field">
-                <label htmlFor="model-name-input">Model Name</label>
-                <input
-                  id="model-name-input"
-                  type="text"
-                  className="ag-input"
-                  value={model.name}
-                  onChange={(e) =>
-                    onChangeModel(updateModelMetadata(model, { name: e.target.value }))
-                  }
-                />
-              </div>
+      <div
+        id="panel-schema"
+        role="tabpanel"
+        aria-labelledby="tab-schema"
+        className="ag-tabpanel"
+        hidden={activeTab !== 'schema'}
+      >
+        <div className="ag-section">
+          <h3 className="ag-section-title">Model Metadata</h3>
+          <InlineErrorList errors={diagnostics.sections.general} />
+          <div className="ag-row-grid">
+            <div className="ag-field">
+              <label htmlFor="model-id-input">Model ID</label>
+              <input
+                id="model-id-input"
+                type="text"
+                className="ag-input ag-input-mono"
+                value={model.id}
+                onChange={(e) => onChangeModel(updateModelMetadata(model, { id: e.target.value }))}
+              />
             </div>
-          </div>
-
-          <div className="ag-section">
-            <div className="ag-section-header">
-              <h3 className="ag-section-title">State Schema &amp; Initial State</h3>
-              <span className="ag-mono ag-tabular" style={{ fontSize: 12, color: 'var(--color-ink-muted)' }}>
-                {schemaKeys.length} / 64 variables
-              </span>
-            </div>
-
-            <div className="ag-item-list">
-              {schemaKeys.map((key, idx) => {
-                const rowId = resolvedSchemaRowIds[idx]!;
-                const def = model.schema[key]!;
-                const varErrors = [
-                  ...getErrorsForPathPrefix(diagnostics, `schema.${key}`),
-                  ...getErrorsForPathPrefix(diagnostics, `initialState.${key}`),
-                ];
-                const nameDraft = Object.hasOwn(varNameDrafts, rowId) ? varNameDrafts[rowId]! : key;
-                const nameError = Object.hasOwn(varNameErrors, rowId) ? varNameErrors[rowId]! : null;
-
-                return (
-                  <div key={rowId} className="ag-item-row">
-                    <div className="ag-row-grid">
-                      <div className="ag-field">
-                        <label htmlFor={`schema-var-name-${rowId}`}>Variable</label>
-                        <input
-                          id={`schema-var-name-${rowId}`}
-                          type="text"
-                          className="ag-input ag-input-mono"
-                          aria-label={`Variable name ${key}`}
-                          aria-invalid={nameError !== null ? 'true' : undefined}
-                          value={nameDraft}
-                          onChange={(e) => handleRenameSchemaVar(rowId, key, def, e.target.value)}
-                          onBlur={() => {
-                            if (nameError === null && nameDraft !== key) {
-                              setVarNameDrafts((prev) => {
-                                const next = { ...prev };
-                                delete next[rowId];
-                                return next;
-                              });
-                            }
-                          }}
-                        />
-                        {nameError !== null && (
-                          <span className="ag-field-error" role="alert">
-                            {nameError}
-                          </span>
-                        )}
-                      </div>
-
-                      <div className="ag-field">
-                        <label htmlFor={`schema-var-kind-${rowId}`}>Kind</label>
-                        <select
-                          id={`schema-var-kind-${rowId}`}
-                          className="ag-select ag-input-mono"
-                          aria-label={`Type kind for ${key}`}
-                          value={def.kind}
-                          onChange={(e) => {
-                            const kind = e.target.value as VarDef['kind'];
-                            const nextDef: VarDef =
-                              kind === 'boolean'
-                                ? { kind: 'boolean' }
-                                : kind === 'enum'
-                                  ? { kind: 'enum', values: ['idle', 'active'] }
-                                  : { kind: 'int', min: 0, max: 3 };
-                            onChangeModel(
-                              updateSchemaVariable(
-                                model,
-                                key,
-                                key,
-                                nextDef,
-                                defaultValueForVarDef(nextDef),
-                              ),
-                            );
-                          }}
-                        >
-                          <option value="boolean">boolean</option>
-                          <option value="enum">enum</option>
-                          <option value="int">int</option>
-                        </select>
-                      </div>
-
-                      {def.kind === 'enum' && (
-                        <div className="ag-field">
-                          <label htmlFor={`schema-var-enum-${rowId}`}>
-                            Enum values (comma-separated)
-                          </label>
-                          <input
-                            id={`schema-var-enum-${rowId}`}
-                            type="text"
-                            className="ag-input ag-input-mono"
-                            aria-label={`Enum values for ${key}`}
-                            value={def.values.join(', ')}
-                            onChange={(e) => {
-                              const values = e.target.value
-                                .split(',')
-                                .map((s) => s.trim())
-                                .filter((s) => s.length > 0);
-                              onChangeModel(
-                                updateSchemaVariable(model, key, key, {
-                                  kind: 'enum',
-                                  values,
-                                }),
-                              );
-                            }}
-                          />
-                        </div>
-                      )}
-
-                      {def.kind === 'int' && (
-                        <>
-                          <div className="ag-field">
-                            <label htmlFor={`schema-var-min-${rowId}`}>Min</label>
-                            <StrictIntegerInput
-                              id={`schema-var-min-${rowId}`}
-                              value={def.min}
-                              className="ag-input ag-input-num"
-                              ariaLabel={`Minimum for ${key}`}
-                              resetKey={resetKey}
-                              fieldKey={`schema.${key}.min`}
-                              onValidityChange={onDraftErrorChange}
-                              onCommit={(min) =>
-                                onChangeModel(
-                                  updateSchemaVariable(model, key, key, {
-                                    kind: 'int',
-                                    min,
-                                    max: def.max,
-                                  }),
-                                )
-                              }
-                            />
-                          </div>
-                          <div className="ag-field">
-                            <label htmlFor={`schema-var-max-${rowId}`}>Max</label>
-                            <StrictIntegerInput
-                              id={`schema-var-max-${rowId}`}
-                              value={def.max}
-                              className="ag-input ag-input-num"
-                              ariaLabel={`Maximum for ${key}`}
-                              resetKey={resetKey}
-                              fieldKey={`schema.${key}.max`}
-                              onValidityChange={onDraftErrorChange}
-                              onCommit={(max) =>
-                                onChangeModel(
-                                  updateSchemaVariable(model, key, key, {
-                                    kind: 'int',
-                                    min: def.min,
-                                    max,
-                                  }),
-                                )
-                              }
-                            />
-                          </div>
-                        </>
-                      )}
-
-                      <div className="ag-field">
-                        <label htmlFor={`schema-var-init-${rowId}`}>Initial Value</label>
-                        {renderInitialValueEditor(key, def, rowId)}
-                      </div>
-
-                      <div className="ag-inline-actions">
-                        <button
-                          type="button"
-                          className="ag-btn ag-btn-sm ag-btn-danger"
-                          disabled={schemaKeys.length <= 1}
-                          onClick={() => handleRemoveSchemaVar(idx, key, rowId)}
-                        >
-                          Remove
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="ag-mono" style={{ fontSize: 11.5, color: 'var(--color-ink-muted)' }}>
-                      Domain: {formatVarDef(def)} | Initial:{' '}
-                      {model.initialState[key] !== undefined
-                        ? formatStateValue(model.initialState[key]!)
-                        : '<missing>'}
-                    </div>
-                    <InlineErrorList errors={varErrors} />
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          <div className="ag-section">
-            <h3 className="ag-section-title">Add State Variable</h3>
-            <div className="ag-row-grid">
-              <div className="ag-field">
-                <label htmlFor="new-var-name">Variable Name</label>
-                <input
-                  id="new-var-name"
-                  type="text"
-                  className="ag-input ag-input-mono"
-                  placeholder="e.g. reviewTokenValid"
-                  aria-invalid={newVarNameError !== null ? 'true' : undefined}
-                  value={newVarName}
-                  onChange={(e) => setNewVarName(e.target.value)}
-                />
-                {newVarNameError !== null && (
-                  <span className="ag-field-error" role="alert">
-                    {newVarNameError}
-                  </span>
-                )}
-              </div>
-              <div className="ag-field">
-                <label htmlFor="new-var-kind">Type</label>
-                <select
-                  id="new-var-kind"
-                  className="ag-select ag-input-mono"
-                  value={newVarKind}
-                  onChange={(e) => setNewVarKind(e.target.value as VarDef['kind'])}
-                >
-                  <option value="boolean">boolean</option>
-                  <option value="enum">enum</option>
-                  <option value="int">int</option>
-                </select>
-              </div>
-              {newVarKind === 'enum' && (
-                <div className="ag-field">
-                  <label htmlFor="new-var-enum">Enum Values</label>
-                  <input
-                    id="new-var-enum"
-                    type="text"
-                    className="ag-input ag-input-mono"
-                    value={newVarEnumValues}
-                    onChange={(e) => setNewVarEnumValues(e.target.value)}
-                  />
-                </div>
-              )}
-              {newVarKind === 'int' && (
-                <>
-                  <div className="ag-field">
-                    <label htmlFor="new-var-min">Min</label>
-                    <input
-                      id="new-var-min"
-                      type="text"
-                      inputMode="numeric"
-                      className="ag-input ag-input-num"
-                      aria-invalid={!parsedNewVarMin.ok ? 'true' : undefined}
-                      value={newVarMin}
-                      onChange={(e) => setNewVarMin(e.target.value)}
-                    />
-                    {!parsedNewVarMin.ok && (
-                      <span className="ag-field-error" role="alert">
-                        {parsedNewVarMin.message}
-                      </span>
-                    )}
-                  </div>
-                  <div className="ag-field">
-                    <label htmlFor="new-var-max">Max</label>
-                    <input
-                      id="new-var-max"
-                      type="text"
-                      inputMode="numeric"
-                      className="ag-input ag-input-num"
-                      aria-invalid={!parsedNewVarMax.ok || newVarRangeError !== null ? 'true' : undefined}
-                      value={newVarMax}
-                      onChange={(e) => setNewVarMax(e.target.value)}
-                    />
-                    {!parsedNewVarMax.ok && (
-                      <span className="ag-field-error" role="alert">
-                        {parsedNewVarMax.message}
-                      </span>
-                    )}
-                    {newVarRangeError !== null && (
-                      <span className="ag-field-error" role="alert">
-                        {newVarRangeError}
-                      </span>
-                    )}
-                  </div>
-                </>
-              )}
-              <div>
-                <button
-                  type="button"
-                  className="ag-btn ag-btn-primary ag-btn-sm"
-                  disabled={
-                    trimmedNewVarName.length === 0 ||
-                    newVarNameError !== null ||
-                    newVarIntInvalid
-                  }
-                  onClick={handleAddSchemaVar}
-                >
-                  + Add Variable
-                </button>
-              </div>
+            <div className="ag-field">
+              <label htmlFor="model-name-input">Model Name</label>
+              <input
+                id="model-name-input"
+                type="text"
+                className="ag-input"
+                value={model.name}
+                onChange={(e) =>
+                  onChangeModel(updateModelMetadata(model, { name: e.target.value }))
+                }
+              />
             </div>
           </div>
         </div>
-      )}
 
-      {activeTab === 'rules' && (
-        <div
-          id="panel-rules"
-          role="tabpanel"
-          aria-labelledby="tab-rules"
-          className="ag-tabpanel"
-        >
-          <div className="ag-section">
-            <div className="ag-section-header">
-              <h3 className="ag-section-title">Transition Rules ({model.rules.length})</h3>
+        <div className="ag-section">
+          <div className="ag-section-header">
+            <h3 className="ag-section-title">State Schema &amp; Initial State</h3>
+            <span className="ag-mono ag-tabular" style={{ fontSize: 12, color: 'var(--color-ink-muted)' }}>
+              {schemaKeys.length} / 64 variables
+            </span>
+          </div>
+
+          <div className="ag-item-list">
+            {schemaKeys.map((key) => {
+              const rowId = getSchemaRowId(key);
+              const def = model.schema[key]!;
+              const varErrors = [
+                ...getErrorsForPathPrefix(diagnostics, `schema.${key}`),
+                ...getErrorsForPathPrefix(diagnostics, `initialState.${key}`),
+              ];
+              const nameDraft = Object.hasOwn(varNameDrafts, rowId) ? varNameDrafts[rowId]! : key;
+              const nameError = Object.hasOwn(varNameErrors, rowId) ? varNameErrors[rowId]! : null;
+              const minFieldKey = `schema:${rowId}.min`;
+              const maxFieldKey = `schema:${rowId}.max`;
+
+              return (
+                <div key={rowId} className="ag-item-row">
+                  <div className="ag-row-grid">
+                    <div className="ag-field">
+                      <label htmlFor={`schema-var-name-${rowId}`}>Variable</label>
+                      <input
+                        id={`schema-var-name-${rowId}`}
+                        type="text"
+                        className="ag-input ag-input-mono"
+                        aria-label={`Variable name ${key}`}
+                        aria-invalid={nameError !== null ? 'true' : undefined}
+                        value={nameDraft}
+                        onChange={(e) => handleRenameSchemaVar(rowId, key, def, e.target.value)}
+                        onBlur={() => {
+                          if (nameError === null && nameDraft !== key) {
+                            setVarNameDrafts((prev) => {
+                              const next = { ...prev };
+                              delete next[rowId];
+                              return next;
+                            });
+                          }
+                        }}
+                      />
+                      {nameError !== null && (
+                        <span className="ag-field-error" role="alert">
+                          {nameError}
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="ag-field">
+                      <label htmlFor={`schema-var-kind-${rowId}`}>Kind</label>
+                      <select
+                        id={`schema-var-kind-${rowId}`}
+                        className="ag-select ag-input-mono"
+                        aria-label={`Type kind for ${key}`}
+                        value={def.kind}
+                        onChange={(e) => {
+                          const kind = e.target.value as VarDef['kind'];
+                          pruneDraftsByPrefix(`schema:${rowId}`);
+                          const nextDef: VarDef =
+                            kind === 'boolean'
+                              ? { kind: 'boolean' }
+                              : kind === 'enum'
+                                ? { kind: 'enum', values: ['idle', 'active'] }
+                                : { kind: 'int', min: 0, max: 3 };
+                          onChangeModel(
+                            updateSchemaVariable(
+                              model,
+                              key,
+                              key,
+                              nextDef,
+                              defaultValueForVarDef(nextDef),
+                            ),
+                          );
+                        }}
+                      >
+                        <option value="boolean">boolean</option>
+                        <option value="enum">enum</option>
+                        <option value="int">int</option>
+                      </select>
+                    </div>
+
+                    {def.kind === 'enum' && (
+                      <div className="ag-field">
+                        <label htmlFor={`schema-var-enum-${rowId}`}>
+                          Enum values (comma-separated)
+                        </label>
+                        <input
+                          id={`schema-var-enum-${rowId}`}
+                          type="text"
+                          className="ag-input ag-input-mono"
+                          aria-label={`Enum values for ${key}`}
+                          value={def.values.join(', ')}
+                          onChange={(e) => {
+                            const values = e.target.value
+                              .split(',')
+                              .map((s) => s.trim())
+                              .filter((s) => s.length > 0);
+                            onChangeModel(
+                              updateSchemaVariable(model, key, key, {
+                                kind: 'enum',
+                                values,
+                              }),
+                            );
+                          }}
+                        />
+                      </div>
+                    )}
+
+                    {def.kind === 'int' && (
+                      <>
+                        <div className="ag-field">
+                          <label htmlFor={`schema-var-min-${rowId}`}>Min</label>
+                          <StrictIntegerInput
+                            id={`schema-var-min-${rowId}`}
+                            value={def.min}
+                            className="ag-input ag-input-num"
+                            ariaLabel={`Minimum for ${key}`}
+                            resetKey={resetKey}
+                            fieldKey={minFieldKey}
+                            externalDraft={intDraftValues[minFieldKey]}
+                            externalError={intDraftErrors[minFieldKey]}
+                            onDraftChange={handleIntDraftChange}
+                            onCommit={(min) =>
+                              onChangeModel(
+                                updateSchemaVariable(model, key, key, {
+                                  kind: 'int',
+                                  min,
+                                  max: def.max,
+                                }),
+                              )
+                            }
+                          />
+                        </div>
+                        <div className="ag-field">
+                          <label htmlFor={`schema-var-max-${rowId}`}>Max</label>
+                          <StrictIntegerInput
+                            id={`schema-var-max-${rowId}`}
+                            value={def.max}
+                            className="ag-input ag-input-num"
+                            ariaLabel={`Maximum for ${key}`}
+                            resetKey={resetKey}
+                            fieldKey={maxFieldKey}
+                            externalDraft={intDraftValues[maxFieldKey]}
+                            externalError={intDraftErrors[maxFieldKey]}
+                            onDraftChange={handleIntDraftChange}
+                            onCommit={(max) =>
+                              onChangeModel(
+                                updateSchemaVariable(model, key, key, {
+                                  kind: 'int',
+                                  min: def.min,
+                                  max,
+                                }),
+                              )
+                            }
+                          />
+                        </div>
+                      </>
+                    )}
+
+                    <div className="ag-field">
+                      <label htmlFor={`schema-var-init-${rowId}`}>Initial Value</label>
+                      {renderInitialValueEditor(key, def, rowId)}
+                    </div>
+
+                    <div className="ag-inline-actions">
+                      <button
+                        type="button"
+                        className="ag-btn ag-btn-sm ag-btn-danger"
+                        disabled={schemaKeys.length <= 1}
+                        onClick={() => handleRemoveSchemaVar(key, rowId)}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="ag-mono" style={{ fontSize: 11.5, color: 'var(--color-ink-muted)' }}>
+                    Domain: {formatVarDef(def)} | Initial:{' '}
+                    {model.initialState[key] !== undefined
+                      ? formatStateValue(model.initialState[key]!)
+                      : '<missing>'}
+                  </div>
+                  <InlineErrorList errors={varErrors} />
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="ag-section">
+          <h3 className="ag-section-title">Add State Variable</h3>
+          <div className="ag-row-grid">
+            <div className="ag-field">
+              <label htmlFor="new-var-name">Variable Name</label>
+              <input
+                id="new-var-name"
+                type="text"
+                className="ag-input ag-input-mono"
+                placeholder="e.g. reviewTokenValid"
+                aria-invalid={newVarNameError !== null ? 'true' : undefined}
+                value={newVarName}
+                onChange={(e) => setNewVarName(e.target.value)}
+              />
+              {newVarNameError !== null && (
+                <span className="ag-field-error" role="alert">
+                  {newVarNameError}
+                </span>
+              )}
+            </div>
+            <div className="ag-field">
+              <label htmlFor="new-var-kind">Type</label>
+              <select
+                id="new-var-kind"
+                className="ag-select ag-input-mono"
+                value={newVarKind}
+                onChange={(e) => setNewVarKind(e.target.value as VarDef['kind'])}
+              >
+                <option value="boolean">boolean</option>
+                <option value="enum">enum</option>
+                <option value="int">int</option>
+              </select>
+            </div>
+            {newVarKind === 'enum' && (
+              <div className="ag-field">
+                <label htmlFor="new-var-enum">Enum Values</label>
+                <input
+                  id="new-var-enum"
+                  type="text"
+                  className="ag-input ag-input-mono"
+                  value={newVarEnumValues}
+                  onChange={(e) => setNewVarEnumValues(e.target.value)}
+                />
+              </div>
+            )}
+            {newVarKind === 'int' && (
+              <>
+                <div className="ag-field">
+                  <label htmlFor="new-var-min">Min</label>
+                  <input
+                    id="new-var-min"
+                    type="text"
+                    inputMode="numeric"
+                    className="ag-input ag-input-num"
+                    aria-invalid={!parsedNewVarMin.ok ? 'true' : undefined}
+                    value={newVarMin}
+                    onChange={(e) => setNewVarMin(e.target.value)}
+                  />
+                  {!parsedNewVarMin.ok && (
+                    <span className="ag-field-error" role="alert">
+                      {parsedNewVarMin.message}
+                    </span>
+                  )}
+                </div>
+                <div className="ag-field">
+                  <label htmlFor="new-var-max">Max</label>
+                  <input
+                    id="new-var-max"
+                    type="text"
+                    inputMode="numeric"
+                    className="ag-input ag-input-num"
+                    aria-invalid={!parsedNewVarMax.ok || newVarRangeError !== null ? 'true' : undefined}
+                    value={newVarMax}
+                    onChange={(e) => setNewVarMax(e.target.value)}
+                  />
+                  {!parsedNewVarMax.ok && (
+                    <span className="ag-field-error" role="alert">
+                      {parsedNewVarMax.message}
+                    </span>
+                  )}
+                  {newVarRangeError !== null && (
+                    <span className="ag-field-error" role="alert">
+                      {newVarRangeError}
+                    </span>
+                  )}
+                </div>
+              </>
+            )}
+            <div>
               <button
                 type="button"
                 className="ag-btn ag-btn-primary ag-btn-sm"
-                onClick={handleAddRule}
+                disabled={
+                  trimmedNewVarName.length === 0 ||
+                  newVarNameError !== null ||
+                  newVarIntInvalid
+                }
+                onClick={handleAddSchemaVar}
               >
-                + Add Rule
+                + Add Variable
               </button>
             </div>
+          </div>
+        </div>
+      </div>
 
-            {selectedQuickVar.length > 0 && (
-              <div className="ag-helper-bar">
-                <strong>Quick guard clause:</strong>
+      <div
+        id="panel-rules"
+        role="tabpanel"
+        aria-labelledby="tab-rules"
+        className="ag-tabpanel"
+        hidden={activeTab !== 'rules'}
+      >
+        <div className="ag-section">
+          <div className="ag-section-header">
+            <h3 className="ag-section-title">Transition Rules ({model.rules.length})</h3>
+            <button
+              type="button"
+              className="ag-btn ag-btn-primary ag-btn-sm"
+              onClick={handleAddRule}
+            >
+              + Add Rule
+            </button>
+          </div>
+
+          {selectedQuickVar.length > 0 && (
+            <div className="ag-helper-bar">
+              <strong>Quick guard clause:</strong>
+              <span className="ag-inline-field">
+                <label htmlFor="quick-clause-polarity" className="ag-inline-label">
+                  Polarity
+                </label>
                 <select
+                  id="quick-clause-polarity"
                   className="ag-select ag-input-mono"
                   aria-label="Quick clause polarity"
                   value={quickClauseNegated ? 'not' : 'var'}
@@ -937,7 +1248,13 @@ export function PolicyEditorPane({
                   <option value="not">! (negated)</option>
                   <option value="var">true (positive)</option>
                 </select>
+              </span>
+              <span className="ag-inline-field">
+                <label htmlFor="quick-clause-var" className="ag-inline-label">
+                  Variable
+                </label>
                 <select
+                  id="quick-clause-var"
                   className="ag-select ag-input-mono"
                   aria-label="Quick clause boolean variable"
                   value={selectedQuickVar}
@@ -949,602 +1266,605 @@ export function PolicyEditorPane({
                     </option>
                   ))}
                 </select>
-                <span style={{ color: 'var(--color-ink-muted)' }}>
-                  Use “+ Append Clause” on any rule below.
-                </span>
-              </div>
-            )}
+              </span>
+              <span style={{ color: 'var(--color-ink-muted)' }}>
+                Use “+ Append Clause” on any rule below.
+              </span>
+            </div>
+          )}
 
-            <div className="ag-item-list">
-              {model.rules.map((rule: TransitionRule, idx: number) => {
-                const rowId = resolvedRuleRowIds[idx]!;
-                const isExpanded = expandedRuleIds.has(rowId);
-                const summary = formatRuleSummary(rule);
-                const ruleErrors = getErrorsForPathPrefix(diagnostics, `rules[${idx}]`);
-                const showPrincipledShortcut =
-                  rule.id === 'publish_release_notes' &&
-                  Object.hasOwn(model.schema, 'modifiedSinceApproval') &&
-                  !guardContainsNegatedVar(rule.guard, 'modifiedSinceApproval');
+          <div className="ag-item-list">
+            {model.rules.map((rule: TransitionRule, idx: number) => {
+              const rowId = resolvedRuleRowIds[idx]!;
+              const isExpanded = expandedRuleIds.has(rowId);
+              const summary = formatRuleSummary(rule);
+              const ruleErrors = getErrorsForPathPrefix(diagnostics, `rules[${idx}]`);
+              const resolvedUpdRowIds = alignRowIds(
+                updateRowIdsByRule[rowId] ?? [],
+                rule.updates.length,
+                `upd-${rowId}`,
+              );
+              const showPrincipledShortcut =
+                rule.id === 'publish_release_notes' &&
+                Object.hasOwn(model.schema, 'modifiedSinceApproval') &&
+                !guardContainsNegatedVar(rule.guard, 'modifiedSinceApproval');
 
-                return (
-                  <div key={rowId} className="ag-item-row">
-                    <div className="ag-section-header">
-                      <div>
-                        <span className="ag-mono" style={{ fontWeight: 600 }}>
-                          {summary.id}
-                        </span>{' '}
-                        <span style={{ color: 'var(--color-ink-secondary)', fontSize: 13 }}>
-                          : {summary.label}
-                        </span>
-                      </div>
-                      <div className="ag-inline-actions">
-                        {showPrincipledShortcut && (
-                          <button
-                            type="button"
-                            className="ag-btn ag-btn-sm ag-btn-active"
-                            onClick={() =>
+              return (
+                <div key={rowId} className="ag-item-row">
+                  <div className="ag-section-header">
+                    <div>
+                      <span className="ag-mono" style={{ fontWeight: 600 }}>
+                        {summary.id}
+                      </span>{' '}
+                      <span style={{ color: 'var(--color-ink-secondary)', fontSize: 13 }}>
+                        : {summary.label}
+                      </span>
+                    </div>
+                    <div className="ag-inline-actions">
+                      {showPrincipledShortcut && (
+                        <button
+                          type="button"
+                          className="ag-btn ag-btn-sm ag-btn-active"
+                          onClick={() =>
+                            onChangeModel(
+                              appendRuleGuardClause(model, idx, {
+                                op: 'not',
+                                arg: { op: 'var', name: 'modifiedSinceApproval' },
+                              }),
+                            )
+                          }
+                        >
+                          + Add !modifiedSinceApproval
+                        </button>
+                      )}
+                      {selectedQuickVar.length > 0 && (
+                        <button
+                          type="button"
+                          className="ag-btn ag-btn-sm"
+                          onClick={() => {
+                            const clause: BoolExpr = quickClauseNegated
+                              ? { op: 'not', arg: { op: 'var', name: selectedQuickVar } }
+                              : { op: 'var', name: selectedQuickVar };
+                            onChangeModel(appendRuleGuardClause(model, idx, clause));
+                          }}
+                        >
+                          + Append {quickClauseNegated ? `!${selectedQuickVar}` : selectedQuickVar}
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="ag-btn ag-btn-sm"
+                        disabled={idx === 0}
+                        aria-label={`Move rule ${rule.id} up`}
+                        onClick={() => handleMoveRule(idx, idx - 1)}
+                      >
+                        Up
+                      </button>
+                      <button
+                        type="button"
+                        className="ag-btn ag-btn-sm"
+                        disabled={idx === model.rules.length - 1}
+                        aria-label={`Move rule ${rule.id} down`}
+                        onClick={() => handleMoveRule(idx, idx + 1)}
+                      >
+                        Down
+                      </button>
+                      <button
+                        type="button"
+                        className="ag-btn ag-btn-sm ag-btn-danger"
+                        aria-label={`Remove rule ${rule.id}`}
+                        onClick={() => handleRemoveRule(idx, rowId)}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="ag-code-strip">
+                    <div>
+                      <span className="ag-code-muted">when </span>
+                      {summary.guardText}
+                    </div>
+                    <div>
+                      <span className="ag-code-muted">then </span>
+                      {summary.updatesText.length > 0 ? summary.updatesText.join('; ') : 'no-op'}
+                    </div>
+                  </div>
+
+                  <InlineErrorList errors={ruleErrors} />
+
+                  <div>
+                    <button
+                      type="button"
+                      className="ag-disclosure-btn"
+                      aria-expanded={isExpanded}
+                      aria-controls={`rule-details-${rowId}`}
+                      onClick={() => toggleRuleExpanded(rowId)}
+                    >
+                      <span aria-hidden="true">{isExpanded ? 'v' : '>'}</span>
+                      <span>Edit rule definition, guard AST, and atomic updates</span>
+                    </button>
+
+                    <div
+                      id={`rule-details-${rowId}`}
+                      className="ag-disclosure-body"
+                      hidden={!isExpanded}
+                    >
+                      <div className="ag-row-grid">
+                        <div className="ag-field">
+                          <label htmlFor={`rule-id-${rowId}`}>Rule ID</label>
+                          <input
+                            id={`rule-id-${rowId}`}
+                            type="text"
+                            className="ag-input ag-input-mono"
+                            value={rule.id}
+                            onChange={(e) =>
                               onChangeModel(
-                                appendRuleGuardClause(model, idx, {
-                                  op: 'not',
-                                  arg: { op: 'var', name: 'modifiedSinceApproval' },
-                                }),
+                                updateRule(model, idx, { ...rule, id: e.target.value }),
                               )
                             }
-                          >
-                            + Add !modifiedSinceApproval
-                          </button>
-                        )}
-                        {selectedQuickVar.length > 0 && (
+                          />
+                        </div>
+                        <div className="ag-field">
+                          <label htmlFor={`rule-label-${rowId}`}>Label</label>
+                          <input
+                            id={`rule-label-${rowId}`}
+                            type="text"
+                            className="ag-input"
+                            value={rule.label}
+                            onChange={(e) =>
+                              onChangeModel(
+                                updateRule(model, idx, { ...rule, label: e.target.value }),
+                              )
+                            }
+                          />
+                        </div>
+                      </div>
+
+                      <div className="ag-field">
+                        <span className="ag-field-label">Guard Expression</span>
+                        <BoolExprEditor
+                          value={rule.guard}
+                          schema={model.schema}
+                          schemaKeysOrder={schemaKeys}
+                          ariaLabelPrefix={`Rule ${rule.id} guard`}
+                          resetKey={resetKey}
+                          fieldPath={`rule:${rowId}.guard`}
+                          intDraftStore={intDraftStore}
+                          onChange={(nextGuard) =>
+                            onChangeModel(
+                              updateRule(model, idx, { ...rule, guard: nextGuard }),
+                            )
+                          }
+                        />
+                      </div>
+
+                      <div className="ag-field">
+                        <div className="ag-section-header">
+                          <span className="ag-field-label">
+                            Atomic Updates ({rule.updates.length})
+                          </span>
                           <button
                             type="button"
                             className="ag-btn ag-btn-sm"
-                            onClick={() => {
-                              const clause: BoolExpr = quickClauseNegated
-                                ? { op: 'not', arg: { op: 'var', name: selectedQuickVar } }
-                                : { op: 'var', name: selectedQuickVar };
-                              onChangeModel(appendRuleGuardClause(model, idx, clause));
-                            }}
+                            onClick={() => handleAddRuleUpdate(idx, rule, rowId)}
                           >
-                            + Append {quickClauseNegated ? `!${selectedQuickVar}` : selectedQuickVar}
+                            + Add Update
                           </button>
-                        )}
-                        <button
-                          type="button"
-                          className="ag-btn ag-btn-sm"
-                          disabled={idx === 0}
-                          aria-label={`Move rule ${rule.id} up`}
-                          onClick={() => handleMoveRule(idx, idx - 1)}
-                        >
-                          Up
-                        </button>
-                        <button
-                          type="button"
-                          className="ag-btn ag-btn-sm"
-                          disabled={idx === model.rules.length - 1}
-                          aria-label={`Move rule ${rule.id} down`}
-                          onClick={() => handleMoveRule(idx, idx + 1)}
-                        >
-                          Down
-                        </button>
-                        <button
-                          type="button"
-                          className="ag-btn ag-btn-sm ag-btn-danger"
-                          aria-label={`Remove rule ${rule.id}`}
-                          onClick={() => handleRemoveRule(idx, rowId)}
-                        >
-                          Remove
-                        </button>
-                      </div>
-                    </div>
+                        </div>
 
-                    <div className="ag-code-strip">
-                      <div>
-                        <span className="ag-code-muted">when </span>
-                        {summary.guardText}
-                      </div>
-                      <div>
-                        <span className="ag-code-muted">then </span>
-                        {summary.updatesText.length > 0 ? summary.updatesText.join('; ') : 'no-op'}
-                      </div>
-                    </div>
-
-                    <InlineErrorList errors={ruleErrors} />
-
-                    <div>
-                      <button
-                        type="button"
-                        className="ag-disclosure-btn"
-                        aria-expanded={isExpanded}
-                        aria-controls={`rule-details-${rowId}`}
-                        onClick={() => toggleRuleExpanded(rowId)}
-                      >
-                        <span aria-hidden="true">{isExpanded ? 'v' : '>'}</span>
-                        <span>Edit rule definition, guard AST, and atomic updates</span>
-                      </button>
-
-                      <div
-                        id={`rule-details-${rowId}`}
-                        className="ag-disclosure-body"
-                        hidden={!isExpanded}
-                      >
-                        {isExpanded && (
-                          <>
-                            <div className="ag-row-grid">
-                              <div className="ag-field">
-                                <label htmlFor={`rule-id-${rowId}`}>Rule ID</label>
-                                <input
-                                  id={`rule-id-${rowId}`}
-                                  type="text"
-                                  className="ag-input ag-input-mono"
-                                  value={rule.id}
+                        {rule.updates.map((upd, updIdx) => {
+                          const updRowId = resolvedUpdRowIds[updIdx]!;
+                          const updVarSelectId = `rule-upd-var-${rowId}-${updRowId}`;
+                          return (
+                            <div
+                              key={updRowId}
+                              className="ag-expr-row"
+                              style={{ alignItems: 'flex-start', paddingTop: 4 }}
+                            >
+                              <span className="ag-inline-field">
+                                <label htmlFor={updVarSelectId} className="ag-inline-label">
+                                  Target variable
+                                </label>
+                                <select
+                                  id={updVarSelectId}
+                                  className="ag-select ag-input-mono"
+                                  aria-label={`Update ${updIdx + 1} target variable for ${rule.id}`}
+                                  value={upd.var}
                                   onChange={(e) =>
-                                    onChangeModel(
-                                      updateRule(model, idx, { ...rule, id: e.target.value }),
-                                    )
-                                  }
-                                />
-                              </div>
-                              <div className="ag-field">
-                                <label htmlFor={`rule-label-${rowId}`}>Label</label>
-                                <input
-                                  id={`rule-label-${rowId}`}
-                                  type="text"
-                                  className="ag-input"
-                                  value={rule.label}
-                                  onChange={(e) =>
-                                    onChangeModel(
-                                      updateRule(model, idx, { ...rule, label: e.target.value }),
-                                    )
-                                  }
-                                />
-                              </div>
-                            </div>
-
-                            <div className="ag-field">
-                              <span className="ag-field-label">Guard Expression</span>
-                              <BoolExprEditor
-                                value={rule.guard}
-                                schema={model.schema}
-                                ariaLabelPrefix={`Rule ${rule.id} guard`}
-                                resetKey={resetKey}
-                                fieldPath={`rules[${idx}].guard`}
-                                onDraftErrorChange={onDraftErrorChange}
-                                onChange={(nextGuard) =>
-                                  onChangeModel(
-                                    updateRule(model, idx, { ...rule, guard: nextGuard }),
-                                  )
-                                }
-                              />
-                            </div>
-
-                            <div className="ag-field">
-                              <div className="ag-section-header">
-                                <span className="ag-field-label">
-                                  Atomic Updates ({rule.updates.length})
-                                </span>
-                                <button
-                                  type="button"
-                                  className="ag-btn ag-btn-sm"
-                                  onClick={() => {
-                                    const targetVar = firstVariableOfKind(model.schema);
-                                    const targetDef = model.schema[targetVar];
-                                    const valExpr =
-                                      targetDef !== undefined
-                                        ? {
-                                            op: 'lit' as const,
-                                            value: defaultValueForVarDef(targetDef),
-                                          }
-                                        : createDefaultValueExpr('lit', model.schema);
                                     onChangeModel(
                                       updateRule(
                                         model,
                                         idx,
-                                        addRuleUpdate(rule, { var: targetVar, value: valExpr }),
+                                        updateRuleUpdate(rule, updIdx, {
+                                          ...upd,
+                                          var: e.target.value,
+                                        }),
                                       ),
-                                    );
-                                  }}
+                                    )
+                                  }
                                 >
-                                  + Add Update
-                                </button>
+                                  {!schemaKeys.includes(upd.var) && (
+                                    <option value={upd.var}>{upd.var} (undeclared)</option>
+                                  )}
+                                  {schemaKeys.map((k) => (
+                                    <option key={k} value={k}>
+                                      {k}
+                                    </option>
+                                  ))}
+                                </select>
+                              </span>
+                              <span className="ag-mono" style={{ paddingTop: 5 }}>
+                                :=
+                              </span>
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <ValueExprEditor
+                                  value={upd.value}
+                                  schema={model.schema}
+                                  schemaKeysOrder={schemaKeys}
+                                  ariaLabelPrefix={`Update ${updIdx + 1} value for ${rule.id}`}
+                                  resetKey={resetKey}
+                                  fieldPath={`rule:${rowId}.update:${updRowId}.value`}
+                                  intDraftStore={intDraftStore}
+                                  onChange={(nextVal) =>
+                                    onChangeModel(
+                                      updateRule(
+                                        model,
+                                        idx,
+                                        updateRuleUpdate(rule, updIdx, {
+                                          ...upd,
+                                          value: nextVal,
+                                        }),
+                                      ),
+                                    )
+                                  }
+                                />
                               </div>
-
-                              {rule.updates.map((upd, updIdx) => (
-                                <div
-                                  key={`upd-${rowId}-${updIdx}`}
-                                  className="ag-expr-row"
-                                  style={{ alignItems: 'flex-start', paddingTop: 4 }}
-                                >
-                                  <select
-                                    className="ag-select ag-input-mono"
-                                    aria-label={`Update ${updIdx + 1} target variable for ${rule.id}`}
-                                    value={upd.var}
-                                    onChange={(e) =>
-                                      onChangeModel(
-                                        updateRule(
-                                          model,
-                                          idx,
-                                          updateRuleUpdate(rule, updIdx, {
-                                            ...upd,
-                                            var: e.target.value,
-                                          }),
-                                        ),
-                                      )
-                                    }
-                                  >
-                                    {!schemaKeys.includes(upd.var) && (
-                                      <option value={upd.var}>{upd.var} (undeclared)</option>
-                                    )}
-                                    {schemaKeys.map((k) => (
-                                      <option key={k} value={k}>
-                                        {k}
-                                      </option>
-                                    ))}
-                                  </select>
-                                  <span className="ag-mono" style={{ paddingTop: 5 }}>
-                                    :=
-                                  </span>
-                                  <div style={{ flex: 1, minWidth: 0 }}>
-                                    <ValueExprEditor
-                                      value={upd.value}
-                                      schema={model.schema}
-                                      ariaLabelPrefix={`Update ${updIdx + 1} value for ${rule.id}`}
-                                      resetKey={resetKey}
-                                      fieldPath={`rules[${idx}].updates[${updIdx}].value`}
-                                      onDraftErrorChange={onDraftErrorChange}
-                                      onChange={(nextVal) =>
-                                        onChangeModel(
-                                          updateRule(
-                                            model,
-                                            idx,
-                                            updateRuleUpdate(rule, updIdx, {
-                                              ...upd,
-                                              value: nextVal,
-                                            }),
-                                          ),
-                                        )
-                                      }
-                                    />
-                                  </div>
-                                  <button
-                                    type="button"
-                                    className="ag-btn ag-btn-sm ag-btn-danger"
-                                    onClick={() =>
-                                      onChangeModel(
-                                        updateRule(model, idx, removeRuleUpdate(rule, updIdx)),
-                                      )
-                                    }
-                                  >
-                                    Remove
-                                  </button>
-                                </div>
-                              ))}
+                              <button
+                                type="button"
+                                className="ag-btn ag-btn-sm ag-btn-danger"
+                                onClick={() =>
+                                  handleRemoveRuleUpdate(idx, rule, rowId, updIdx, updRowId)
+                                }
+                              >
+                                Remove
+                              </button>
                             </div>
-                          </>
-                        )}
+                          );
+                        })}
                       </div>
                     </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {activeTab === 'invariants' && (
-        <div
-          id="panel-invariants"
-          role="tabpanel"
-          aria-labelledby="tab-invariants"
-          className="ag-tabpanel"
-        >
-          <div className="ag-section">
-            <div className="ag-section-header">
-              <h3 className="ag-section-title">Safety Invariants ({model.invariants.length})</h3>
-              <button
-                type="button"
-                className="ag-btn ag-btn-primary ag-btn-sm"
-                onClick={handleAddInvariant}
-              >
-                + Add Invariant
-              </button>
-            </div>
-
-            <div className="ag-item-list">
-              {model.invariants.map((inv, idx) => {
-                const rowId = resolvedInvRowIds[idx]!;
-                const invErrors = getErrorsForPathPrefix(diagnostics, `invariants[${idx}]`);
-                return (
-                  <div key={rowId} className="ag-item-row">
-                    <div className="ag-row-grid">
-                      <div className="ag-field">
-                        <label htmlFor={`inv-id-${rowId}`}>Invariant ID</label>
-                        <input
-                          id={`inv-id-${rowId}`}
-                          type="text"
-                          className="ag-input ag-input-mono"
-                          value={inv.id}
-                          onChange={(e) =>
-                            onChangeModel(updateInvariant(model, idx, { ...inv, id: e.target.value }))
-                          }
-                        />
-                      </div>
-                      <div className="ag-field">
-                        <label htmlFor={`inv-label-${rowId}`}>Description</label>
-                        <input
-                          id={`inv-label-${rowId}`}
-                          type="text"
-                          className="ag-input"
-                          value={inv.label}
-                          onChange={(e) =>
-                            onChangeModel(
-                              updateInvariant(model, idx, { ...inv, label: e.target.value }),
-                            )
-                          }
-                        />
-                      </div>
-                      <div>
-                        <button
-                          type="button"
-                          className="ag-btn ag-btn-sm ag-btn-danger"
-                          disabled={model.invariants.length <= 1}
-                          onClick={() => handleRemoveInvariant(idx)}
-                        >
-                          Remove
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="ag-code-strip">
-                      <span className="ag-code-muted">holds </span>
-                      {formatBoolExpr(inv.holds)}
-                    </div>
-
-                    <BoolExprEditor
-                      value={inv.holds}
-                      schema={model.schema}
-                      ariaLabelPrefix={`Invariant ${inv.id} expression`}
-                      resetKey={resetKey}
-                      fieldPath={`invariants[${idx}].holds`}
-                      onDraftErrorChange={onDraftErrorChange}
-                      onChange={(holds) => onChangeModel(updateInvariant(model, idx, { ...inv, holds }))}
-                    />
-                    <InlineErrorList errors={invErrors} />
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          <div className="ag-section">
-            <div className="ag-section-header">
-              <h3 className="ag-section-title">Declared Reachability Goal (Vacuous-Fix Check)</h3>
-              <label
-                htmlFor="goal-enabled-checkbox"
-                style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13 }}
-              >
-                <input
-                  id="goal-enabled-checkbox"
-                  type="checkbox"
-                  checked={model.goal !== undefined}
-                  onChange={(e) => onChangeModel(setGoalEnabled(model, e.target.checked))}
-                />
-                Enable declared goal
-              </label>
-            </div>
-
-            {model.goal !== undefined ? (
-              <div className="ag-item-row" style={{ borderTop: '1px solid var(--color-rule)' }}>
-                <div className="ag-row-grid">
-                  <div className="ag-field">
-                    <label htmlFor="goal-id-input">Goal ID</label>
-                    <input
-                      id="goal-id-input"
-                      type="text"
-                      className="ag-input ag-input-mono"
-                      value={model.goal.id}
-                      onChange={(e) =>
-                        onChangeModel(updateGoal(model, { ...model.goal!, id: e.target.value }))
-                      }
-                    />
-                  </div>
-                  <div className="ag-field">
-                    <label htmlFor="goal-label-input">Goal Label</label>
-                    <input
-                      id="goal-label-input"
-                      type="text"
-                      className="ag-input"
-                      value={model.goal.label}
-                      onChange={(e) =>
-                        onChangeModel(updateGoal(model, { ...model.goal!, label: e.target.value }))
-                      }
-                    />
                   </div>
                 </div>
-
-                <div className="ag-code-strip">
-                  <span className="ag-code-muted">reached </span>
-                  {formatBoolExpr(model.goal.reached)}
-                </div>
-
-                <BoolExprEditor
-                  value={model.goal.reached}
-                  schema={model.schema}
-                  ariaLabelPrefix="Goal reached predicate"
-                  resetKey={resetKey}
-                  fieldPath="goal.reached"
-                  onDraftErrorChange={onDraftErrorChange}
-                  onChange={(reached) => onChangeModel(updateGoal(model, { ...model.goal!, reached }))}
-                />
-                <InlineErrorList errors={diagnostics.sections.goal} />
-              </div>
-            ) : (
-              <p className="ag-pane-subtitle">
-                No reachability goal declared. Enabling a goal detects vacuous policies that satisfy invariants solely by disabling useful transitions.
-              </p>
-            )}
+              );
+            })}
           </div>
         </div>
-      )}
+      </div>
 
-      {activeTab === 'assumptions' && (
-        <div
-          id="panel-assumptions"
-          role="tabpanel"
-          aria-labelledby="tab-assumptions"
-          className="ag-tabpanel"
-        >
-          <div className="ag-section">
-            <div className="ag-section-header">
-              <h3 className="ag-section-title">Explicit Modeling Assumptions ({model.assumptions.length})</h3>
-              <button
-                type="button"
-                className="ag-btn ag-btn-primary ag-btn-sm"
-                onClick={handleAddAssumption}
-              >
-                + Add Assumption
-              </button>
-            </div>
+      <div
+        id="panel-invariants"
+        role="tabpanel"
+        aria-labelledby="tab-invariants"
+        className="ag-tabpanel"
+        hidden={activeTab !== 'invariants'}
+      >
+        <div className="ag-section">
+          <div className="ag-section-header">
+            <h3 className="ag-section-title">Safety Invariants ({model.invariants.length})</h3>
+            <button
+              type="button"
+              className="ag-btn ag-btn-primary ag-btn-sm"
+              onClick={handleAddInvariant}
+            >
+              + Add Invariant
+            </button>
+          </div>
 
-            <div className="ag-item-list">
-              {model.assumptions.map((asm, idx) => {
-                const rowId = resolvedAsmRowIds[idx]!;
-                const asmErrors = getErrorsForPathPrefix(diagnostics, `assumptions[${idx}]`);
-                return (
-                  <div key={rowId} className="ag-item-row">
-                    <div className="ag-row-grid">
-                      <div className="ag-field">
-                        <label htmlFor={`asm-id-${rowId}`}>Assumption ID</label>
-                        <input
-                          id={`asm-id-${rowId}`}
-                          type="text"
-                          className="ag-input ag-input-mono"
-                          value={asm.id}
-                          onChange={(e) =>
-                            onChangeModel(
-                              updateAssumption(model, idx, { ...asm, id: e.target.value }),
-                            )
-                          }
-                        />
-                      </div>
-                      <div className="ag-field">
-                        <label htmlFor={`asm-category-${rowId}`}>Category</label>
-                        <input
-                          id={`asm-category-${rowId}`}
-                          type="text"
-                          className="ag-input ag-input-mono"
-                          value={asm.category}
-                          onChange={(e) =>
-                            onChangeModel(
-                              updateAssumption(model, idx, { ...asm, category: e.target.value }),
-                            )
-                          }
-                        />
-                      </div>
-                      <div>
-                        <button
-                          type="button"
-                          className="ag-btn ag-btn-sm ag-btn-danger"
-                          disabled={model.assumptions.length <= 1}
-                          onClick={() => handleRemoveAssumption(idx)}
-                        >
-                          Remove
-                        </button>
-                      </div>
-                    </div>
-
+          <div className="ag-item-list">
+            {model.invariants.map((inv, idx) => {
+              const rowId = resolvedInvRowIds[idx]!;
+              const invErrors = getErrorsForPathPrefix(diagnostics, `invariants[${idx}]`);
+              return (
+                <div key={rowId} className="ag-item-row">
+                  <div className="ag-row-grid">
                     <div className="ag-field">
-                      <label htmlFor={`asm-statement-${rowId}`}>Captured Statement</label>
-                      <textarea
-                        id={`asm-statement-${rowId}`}
-                        rows={2}
-                        className="ag-textarea"
-                        value={asm.statement}
+                      <label htmlFor={`inv-id-${rowId}`}>Invariant ID</label>
+                      <input
+                        id={`inv-id-${rowId}`}
+                        type="text"
+                        className="ag-input ag-input-mono"
+                        value={inv.id}
                         onChange={(e) =>
-                          onChangeModel(
-                            updateAssumption(model, idx, { ...asm, statement: e.target.value }),
-                          )
+                          onChangeModel(updateInvariant(model, idx, { ...inv, id: e.target.value }))
                         }
                       />
                     </div>
                     <div className="ag-field">
-                      <label htmlFor={`asm-not-modeled-${rowId}`}>Explicitly Not Modeled</label>
-                      <textarea
-                        id={`asm-not-modeled-${rowId}`}
-                        rows={2}
-                        className="ag-textarea"
-                        value={asm.notModeled}
+                      <label htmlFor={`inv-label-${rowId}`}>Description</label>
+                      <input
+                        id={`inv-label-${rowId}`}
+                        type="text"
+                        className="ag-input"
+                        value={inv.label}
                         onChange={(e) =>
                           onChangeModel(
-                            updateAssumption(model, idx, { ...asm, notModeled: e.target.value }),
+                            updateInvariant(model, idx, { ...inv, label: e.target.value }),
                           )
                         }
                       />
                     </div>
-                    <InlineErrorList errors={asmErrors} />
+                    <div>
+                      <button
+                        type="button"
+                        className="ag-btn ag-btn-sm ag-btn-danger"
+                        disabled={model.invariants.length <= 1}
+                        onClick={() => handleRemoveInvariant(idx, rowId)}
+                      >
+                        Remove
+                      </button>
+                    </div>
                   </div>
-                );
-              })}
-            </div>
+
+                  <div className="ag-code-strip">
+                    <span className="ag-code-muted">holds </span>
+                    {formatBoolExpr(inv.holds)}
+                  </div>
+
+                  <BoolExprEditor
+                    value={inv.holds}
+                    schema={model.schema}
+                    schemaKeysOrder={schemaKeys}
+                    ariaLabelPrefix={`Invariant ${inv.id} expression`}
+                    resetKey={resetKey}
+                    fieldPath={`inv:${rowId}.holds`}
+                    intDraftStore={intDraftStore}
+                    onChange={(holds) => onChangeModel(updateInvariant(model, idx, { ...inv, holds }))}
+                  />
+                  <InlineErrorList errors={invErrors} />
+                </div>
+              );
+            })}
           </div>
         </div>
-      )}
 
-      {activeTab === 'json' && (
-        <div id="panel-json" role="tabpanel" aria-labelledby="tab-json" className="ag-tabpanel">
-          <div className="ag-section">
-            <div className="ag-section-header">
-              <h3 className="ag-section-title">Portable Model JSON Import &amp; Export</h3>
-              <div className="ag-inline-actions">
-                <button type="button" className="ag-btn ag-btn-sm" onClick={handleCopyJson}>
-                  Copy JSON
-                </button>
-                <button type="button" className="ag-btn ag-btn-sm" onClick={handleDownloadJson}>
-                  Download JSON
-                </button>
-                <button
-                  type="button"
-                  className="ag-btn ag-btn-primary ag-btn-sm"
-                  onClick={handleApplyJsonImport}
-                >
-                  Import JSON
-                </button>
-              </div>
-            </div>
-
-            {jsonNotice !== null && (
-              <p className="ag-scope-note" role="status">
-                {jsonNotice}
-              </p>
-            )}
-
-            {jsonErrors.length > 0 && (
-              <div className="ag-alert" role="alert">
-                <strong>JSON Import Validation Failed ({jsonErrors.length})</strong>
-                <ul>
-                  {jsonErrors.map((err, idx) => (
-                    <li key={`${err.code}-${err.path}-${idx}`}>
-                      <code>{err.path}</code>: {err.message} (<code>{err.code}</code>)
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-
-            <div className="ag-field">
-              <label htmlFor="model-json-textarea">TransitionSystemModel JSON</label>
-              <textarea
-                id="model-json-textarea"
-                rows={20}
-                className="ag-textarea ag-textarea-mono"
-                spellCheck={false}
-                value={jsonDraft}
-                onChange={(e) => setJsonDraft(e.target.value)}
+        <div className="ag-section">
+          <div className="ag-section-header">
+            <h3 className="ag-section-title">Declared Reachability Goal (Vacuous-Fix Check)</h3>
+            <label
+              htmlFor="goal-enabled-checkbox"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13 }}
+            >
+              <input
+                id="goal-enabled-checkbox"
+                type="checkbox"
+                checked={model.goal !== undefined}
+                onChange={(e) => {
+                  if (!e.target.checked) {
+                    pruneDraftsByPrefix('goal.reached');
+                  }
+                  onChangeModel(setGoalEnabled(model, e.target.checked));
+                }}
               />
+              Enable declared goal
+            </label>
+          </div>
+
+          {model.goal !== undefined ? (
+            <div className="ag-item-row" style={{ borderTop: '1px solid var(--color-rule)' }}>
+              <div className="ag-row-grid">
+                <div className="ag-field">
+                  <label htmlFor="goal-id-input">Goal ID</label>
+                  <input
+                    id="goal-id-input"
+                    type="text"
+                    className="ag-input ag-input-mono"
+                    value={model.goal.id}
+                    onChange={(e) =>
+                      onChangeModel(updateGoal(model, { ...model.goal!, id: e.target.value }))
+                    }
+                  />
+                </div>
+                <div className="ag-field">
+                  <label htmlFor="goal-label-input">Goal Label</label>
+                  <input
+                    id="goal-label-input"
+                    type="text"
+                    className="ag-input"
+                    value={model.goal.label}
+                    onChange={(e) =>
+                      onChangeModel(updateGoal(model, { ...model.goal!, label: e.target.value }))
+                    }
+                  />
+                </div>
+              </div>
+
+              <div className="ag-code-strip">
+                <span className="ag-code-muted">reached </span>
+                {formatBoolExpr(model.goal.reached)}
+              </div>
+
+              <BoolExprEditor
+                value={model.goal.reached}
+                schema={model.schema}
+                schemaKeysOrder={schemaKeys}
+                ariaLabelPrefix="Goal reached predicate"
+                resetKey={resetKey}
+                fieldPath="goal.reached"
+                intDraftStore={intDraftStore}
+                onChange={(reached) => onChangeModel(updateGoal(model, { ...model.goal!, reached }))}
+              />
+              <InlineErrorList errors={diagnostics.sections.goal} />
             </div>
+          ) : (
+            <p className="ag-pane-subtitle">
+              No reachability goal declared. Enabling a goal detects vacuous policies that satisfy invariants solely by disabling useful transitions.
+            </p>
+          )}
+        </div>
+      </div>
+
+      <div
+        id="panel-assumptions"
+        role="tabpanel"
+        aria-labelledby="tab-assumptions"
+        className="ag-tabpanel"
+        hidden={activeTab !== 'assumptions'}
+      >
+        <div className="ag-section">
+          <div className="ag-section-header">
+            <h3 className="ag-section-title">Explicit Modeling Assumptions ({model.assumptions.length})</h3>
+            <button
+              type="button"
+              className="ag-btn ag-btn-primary ag-btn-sm"
+              onClick={handleAddAssumption}
+            >
+              + Add Assumption
+            </button>
+          </div>
+
+          <div className="ag-item-list">
+            {model.assumptions.map((asm, idx) => {
+              const rowId = resolvedAsmRowIds[idx]!;
+              const asmErrors = getErrorsForPathPrefix(diagnostics, `assumptions[${idx}]`);
+              return (
+                <div key={rowId} className="ag-item-row">
+                  <div className="ag-row-grid">
+                    <div className="ag-field">
+                      <label htmlFor={`asm-id-${rowId}`}>Assumption ID</label>
+                      <input
+                        id={`asm-id-${rowId}`}
+                        type="text"
+                        className="ag-input ag-input-mono"
+                        value={asm.id}
+                        onChange={(e) =>
+                          onChangeModel(
+                            updateAssumption(model, idx, { ...asm, id: e.target.value }),
+                          )
+                        }
+                      />
+                    </div>
+                    <div className="ag-field">
+                      <label htmlFor={`asm-category-${rowId}`}>Category</label>
+                      <input
+                        id={`asm-category-${rowId}`}
+                        type="text"
+                        className="ag-input ag-input-mono"
+                        value={asm.category}
+                        onChange={(e) =>
+                          onChangeModel(
+                            updateAssumption(model, idx, { ...asm, category: e.target.value }),
+                          )
+                        }
+                      />
+                    </div>
+                    <div>
+                      <button
+                        type="button"
+                        className="ag-btn ag-btn-sm ag-btn-danger"
+                        disabled={model.assumptions.length <= 1}
+                        onClick={() => handleRemoveAssumption(idx)}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="ag-field">
+                    <label htmlFor={`asm-statement-${rowId}`}>Captured Statement</label>
+                    <textarea
+                      id={`asm-statement-${rowId}`}
+                      rows={2}
+                      className="ag-textarea"
+                      value={asm.statement}
+                      onChange={(e) =>
+                        onChangeModel(
+                          updateAssumption(model, idx, { ...asm, statement: e.target.value }),
+                        )
+                      }
+                    />
+                  </div>
+                  <div className="ag-field">
+                    <label htmlFor={`asm-not-modeled-${rowId}`}>Explicitly Not Modeled</label>
+                    <textarea
+                      id={`asm-not-modeled-${rowId}`}
+                      rows={2}
+                      className="ag-textarea"
+                      value={asm.notModeled}
+                      onChange={(e) =>
+                        onChangeModel(
+                          updateAssumption(model, idx, { ...asm, notModeled: e.target.value }),
+                        )
+                      }
+                    />
+                  </div>
+                  <InlineErrorList errors={asmErrors} />
+                </div>
+              );
+            })}
           </div>
         </div>
-      )}
+      </div>
+
+      <div
+        id="panel-json"
+        role="tabpanel"
+        aria-labelledby="tab-json"
+        className="ag-tabpanel"
+        hidden={activeTab !== 'json'}
+      >
+        <div className="ag-section">
+          <div className="ag-section-header">
+            <h3 className="ag-section-title">Portable Model JSON Import &amp; Export</h3>
+            <div className="ag-inline-actions">
+              <button type="button" className="ag-btn ag-btn-sm" onClick={handleCopyJson}>
+                Copy JSON
+              </button>
+              <button type="button" className="ag-btn ag-btn-sm" onClick={handleDownloadJson}>
+                Download JSON
+              </button>
+              <button
+                type="button"
+                className="ag-btn ag-btn-primary ag-btn-sm"
+                onClick={handleApplyJsonImport}
+              >
+                Import JSON
+              </button>
+            </div>
+          </div>
+
+          {jsonNotice !== null && (
+            <p className="ag-scope-note" role="status">
+              {jsonNotice}
+            </p>
+          )}
+
+          {jsonErrors.length > 0 && (
+            <div className="ag-alert" role="alert">
+              <strong>JSON Import Validation Failed ({jsonErrors.length})</strong>
+              <ul>
+                {jsonErrors.map((err, idx) => (
+                  <li key={`${err.code}-${err.path}-${idx}`}>
+                    <code>{err.path}</code>: {err.message} (<code>{err.code}</code>)
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          <div className="ag-field">
+            <label htmlFor="model-json-textarea">TransitionSystemModel JSON</label>
+            <textarea
+              id="model-json-textarea"
+              rows={20}
+              className="ag-textarea ag-textarea-mono"
+              spellCheck={false}
+              value={jsonDraft}
+              onChange={(e) => setJsonDraft(e.target.value)}
+            />
+          </div>
+        </div>
+      </div>
     </section>
   );
 }

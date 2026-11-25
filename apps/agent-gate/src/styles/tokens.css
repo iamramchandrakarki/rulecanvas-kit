@@ -10,6 +10,7 @@
   /* Hairlines & borders */
   --color-rule: oklch(88.5% 0.014 250);
   --color-rule-strong: oklch(78% 0.02 250);
+  --color-control-border: oklch(59% 0.025 252);
 
   /* Ink */
   --color-ink: oklch(20.5% 0.02 256);

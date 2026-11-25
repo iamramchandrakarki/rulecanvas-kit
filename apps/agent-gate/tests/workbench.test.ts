@@ -21,7 +21,19 @@ import {
 import { describe, expect, it } from 'vitest';
 import { App } from '../src/App.js';
 import { ComparisonPanel } from '../src/components/ComparisonPanel.js';
-import { PolicyEditorPane } from '../src/components/PolicyEditorPane.js';
+import {
+  BoolExprEditor,
+  defaultInItemValue,
+  updateInListItem,
+  type LiftedIntDraftStore,
+} from '../src/components/ExprEditor.js';
+import {
+  PolicyEditorPane,
+  applySchemaVarRenameState,
+  matchesDraftPrefix,
+  resolveOrderedSchemaKeys,
+} from '../src/components/PolicyEditorPane.js';
+import { StrictIntegerInput } from '../src/components/StrictIntegerInput.js';
 import {
   VerificationWorkbenchPane,
   type VerifiedSnapshot,
@@ -867,5 +879,505 @@ describe('AgentGate workbench domain modules and UI', () => {
     expect(indexHtml).toContain('data:image/svg+xml');
     expect(indexHtml).not.toContain('—');
     expect(indexHtml).not.toContain('·');
+  });
+
+  it('binds displayed assumptions strictly to verified snapshot and separates pending edited or draft assumptions (Finding 1)', () => {
+    const broken = loadPresetModel('broken');
+    const verdict = verifyModel(broken, DEFAULT_VERIFY_OPTIONS);
+    const replayRes = createVerdictReplaySession(broken, verdict, { startAt: 'terminal' });
+    expect(replayRes.ok).toBe(true);
+    if (!replayRes.ok) return;
+
+    const snapshot: VerifiedSnapshot = {
+      model: broken,
+      modelLabel: 'Broken Policy',
+      options: DEFAULT_VERIFY_OPTIONS,
+      result: verdict,
+      executionMode: 'main-thread',
+    };
+
+    const editedModel = updateAssumption(broken, 0, {
+      ...broken.assumptions[0]!,
+      id: 'asm_edited_unverified_scope',
+      statement: 'Edited unverified assumption statement.',
+    });
+
+    const staleWithEditedAssumptionsHtml = renderToStaticMarkup(
+      createElement(VerificationWorkbenchPane, {
+        model: editedModel,
+        isRunning: false,
+        runningExecutionMode: 'main-thread',
+        isStale: true,
+        workerError: null,
+        cancelledNotice: null,
+        optionErrors: [],
+        editorDraftErrors: [],
+        modelErrors: [],
+        verifiedSnapshot: snapshot,
+        replaySession: replayRes.session,
+        replayError: null,
+        onCancelRun: () => {},
+        onVerifyNow: () => {},
+        onResetReplay: () => {},
+        onStepBack: () => {},
+        onStepForward: () => {},
+        onJumpToStep: () => {},
+        onApplyManualStep: () => {},
+        onRestoreVerdictTrace: () => {},
+      }),
+    );
+
+    // Primary section strictly renders verified snapshot assumptions with snapshot label
+    expect(staleWithEditedAssumptionsHtml).toContain('Scope of verified snapshot: Broken Policy');
+    expect(staleWithEditedAssumptionsHtml).toContain('asm_synthetic_capability_abstraction');
+    // Separate clearly labeled secondary block renders pending edited assumptions
+    expect(staleWithEditedAssumptionsHtml).toContain('Pending Edited Assumptions (Unverified)');
+    expect(staleWithEditedAssumptionsHtml).toContain('asm_edited_unverified_scope');
+    expect(staleWithEditedAssumptionsHtml).toContain('Edited unverified assumption statement.');
+
+    // When stale because of non-assumption edits, do NOT duplicate assumptions into pending block
+    const staleSameAssumptionsHtml = renderToStaticMarkup(
+      createElement(VerificationWorkbenchPane, {
+        model: broken,
+        isRunning: false,
+        runningExecutionMode: 'main-thread',
+        isStale: true,
+        workerError: null,
+        cancelledNotice: null,
+        optionErrors: [],
+        editorDraftErrors: [],
+        modelErrors: [],
+        verifiedSnapshot: snapshot,
+        replaySession: replayRes.session,
+        replayError: null,
+        onCancelRun: () => {},
+        onVerifyNow: () => {},
+        onResetReplay: () => {},
+        onStepBack: () => {},
+        onStepForward: () => {},
+        onJumpToStep: () => {},
+        onApplyManualStep: () => {},
+        onRestoreVerdictTrace: () => {},
+      }),
+    );
+    expect(staleSameAssumptionsHtml).toContain('Scope of verified snapshot: Broken Policy');
+    expect(staleSameAssumptionsHtml).not.toContain('Pending Edited Assumptions (Unverified)');
+
+    // When verifiedSnapshot is null or INVALID, render Draft Model Assumptions (Unverified)
+    const nullSnapHtml = renderToStaticMarkup(
+      createElement(VerificationWorkbenchPane, {
+        model: editedModel,
+        isRunning: false,
+        runningExecutionMode: 'main-thread',
+        isStale: false,
+        workerError: null,
+        cancelledNotice: null,
+        optionErrors: [],
+        editorDraftErrors: [],
+        modelErrors: [],
+        verifiedSnapshot: null,
+        replaySession: null,
+        replayError: null,
+        onCancelRun: () => {},
+        onVerifyNow: () => {},
+        onResetReplay: () => {},
+        onStepBack: () => {},
+        onStepForward: () => {},
+        onJumpToStep: () => {},
+        onApplyManualStep: () => {},
+        onRestoreVerdictTrace: () => {},
+      }),
+    );
+    expect(nullSnapHtml).toContain('Draft Model Assumptions (Unverified)');
+    expect(nullSnapHtml).toContain('asm_edited_unverified_scope');
+
+    const invalidSnapHtml = renderToStaticMarkup(
+      createElement(VerificationWorkbenchPane, {
+        model: editedModel,
+        isRunning: false,
+        runningExecutionMode: 'main-thread',
+        isStale: false,
+        workerError: null,
+        cancelledNotice: null,
+        optionErrors: [],
+        editorDraftErrors: [],
+        modelErrors: [],
+        verifiedSnapshot: {
+          ...snapshot,
+          result: {
+            status: 'INVALID',
+            errors: [{ code: 'EMPTY_ID', path: 'id', message: 'id required' }],
+          },
+        },
+        replaySession: null,
+        replayError: null,
+        onCancelRun: () => {},
+        onVerifyNow: () => {},
+        onResetReplay: () => {},
+        onStepBack: () => {},
+        onStepForward: () => {},
+        onJumpToStep: () => {},
+        onApplyManualStep: () => {},
+        onRestoreVerdictTrace: () => {},
+      }),
+    );
+    expect(invalidSnapHtml).toContain('Draft Model Assumptions (Unverified)');
+  });
+
+  it('preserves lifted raw integer drafts and error state by stable logical identity across moves, collapses, and tab switches (Finding 2)', () => {
+    const fieldKey = 'rule:rule-row-2.update:upd-row-5.value.right.value';
+    const errorMsg =
+      'Invalid integer "2.9": enter a whole base-10 integer without decimals or extra characters.';
+    const liftedStore: LiftedIntDraftStore = {
+      draftValues: { [fieldKey]: '2.9' },
+      draftErrors: { [fieldKey]: errorMsg },
+      onDraftChange: () => {},
+      onPruneDrafts: () => {},
+    };
+
+    // Controlled StrictIntegerInput renders raw invalid draft, aria-invalid, and alert directly from lifted store
+    const strictHtml = renderToStaticMarkup(
+      createElement(StrictIntegerInput, {
+        id: 'test-strict-int',
+        value: 1,
+        fieldKey,
+        externalDraft: liftedStore.draftValues[fieldKey],
+        externalError: liftedStore.draftErrors[fieldKey],
+        onDraftChange: liftedStore.onDraftChange,
+        onCommit: () => {},
+      }),
+    );
+    expect(strictHtml).toContain('value="2.9"');
+    expect(strictHtml).toContain('aria-invalid="true"');
+    expect(strictHtml).toContain('role="alert"');
+    expect(strictHtml).toContain('Invalid integer &quot;2.9&quot;');
+
+    // Prefix matching prunes only removed subtrees and never collides with sibling logical IDs
+    expect(matchesDraftPrefix(fieldKey, 'rule:rule-row-2')).toBe(true);
+    expect(matchesDraftPrefix(fieldKey, 'rule:rule-row-2.update:upd-row-5')).toBe(true);
+    expect(matchesDraftPrefix(fieldKey, 'rule:rule-row-2.update:upd-row-6')).toBe(false);
+    expect(matchesDraftPrefix(fieldKey, 'rule:rule-row-20')).toBe(false);
+
+    // Collapsed rule bodies and inactive tabs remain mounted in DOM with hidden attribute
+    const broken = loadPresetModel('broken');
+    const editorHtml = renderToStaticMarkup(
+      createElement(PolicyEditorPane, {
+        model: broken,
+        diagnostics: indexModelDiagnostics([]),
+        onChangeModel: () => {},
+        onImportModel: () => {},
+      }),
+    );
+    // Non-expanded rules still have their rule-id inputs mounted inside hidden disclosure bodies
+    expect(editorHtml).toContain('value="draft_public_notes"');
+    expect(editorHtml).toContain('class="ag-disclosure-body" hidden=""');
+    expect(editorHtml).toContain('id="panel-schema" role="tabpanel"');
+    expect(editorHtml).toContain('id="panel-json" role="tabpanel"');
+  });
+
+  it('preserves visual variable order and logical row identity on numeric-key rename while atomically rewriting all references (Finding 3)', () => {
+    const broken = loadPresetModel('broken');
+    const initialOrder = Object.keys(broken.schema);
+    const secretIndex = initialOrder.indexOf('secretInContext');
+    expect(secretIndex).toBeGreaterThan(0);
+
+    const initialRowMap: Record<string, string> = {};
+    initialOrder.forEach((k, idx) => {
+      initialRowMap[k] = `schema-row-${idx + 1}`;
+    });
+    const secretRowId = initialRowMap['secretInContext']!;
+
+    // Rename secretInContext -> "1" (numeric key that JS Object.keys hoists to index 0)
+    const renamedModel = updateSchemaVariable(
+      broken,
+      'secretInContext',
+      '1',
+      broken.schema['secretInContext']!,
+    );
+
+    // JS Object.keys moves "1" to index 0, but resolveOrderedSchemaKeys keeps "1" at its original visual slot
+    expect(Object.keys(renamedModel.schema)[0]).toBe('1');
+    const renamedState = applySchemaVarRenameState(
+      initialOrder,
+      initialRowMap,
+      'secretInContext',
+      '1',
+      secretRowId,
+    );
+    const visualKeys = resolveOrderedSchemaKeys(renamedState.schemaVarOrder, renamedModel.schema);
+    expect(visualKeys[secretIndex]).toBe('1');
+    expect(renamedState.varNameToRowId['1']).toBe(secretRowId);
+    expect(renamedState.varNameToRowId['secretInContext']).toBeUndefined();
+
+    // Atomic rewrite eliminates all UNKNOWN_VAR diagnostics across rules, invariants, and goal
+    expect(validateModel(renamedModel)).toEqual([]);
+    const renamedResult = verifyModel(renamedModel, DEFAULT_VERIFY_OPTIONS);
+    expect(renamedResult.status).toBe('VIOLATED');
+    // Original model remains immutably intact
+    expect(Object.hasOwn(broken.schema, 'secretInContext')).toBe(true);
+    expect(validateModel(broken)).toEqual([]);
+  });
+
+  it('preserves strict value types for in-expression set items without coercing string "true" to boolean (Finding 4)', () => {
+    const schema = {
+      mode: { kind: 'enum' as const, values: ['true', 'beta', 'gamma'] },
+      count: { kind: 'int' as const, min: 0, max: 5 },
+      flag: { kind: 'boolean' as const },
+    };
+    const initialValues = ['true', 'beta'] as const;
+    const editedValues = updateInListItem(initialValues, 1, 'gamma');
+
+    expect(editedValues).toEqual(['true', 'gamma']);
+    expect(typeof editedValues[0]).toBe('string');
+    expect(typeof editedValues[1]).toBe('string');
+
+    // Typed defaults when clicking + Add value
+    expect(defaultInItemValue({ op: 'var', name: 'mode' }, schema)).toBe('true');
+    expect(typeof defaultInItemValue({ op: 'var', name: 'mode' }, schema)).toBe('string');
+    expect(defaultInItemValue({ op: 'var', name: 'count' }, schema)).toBe(0);
+    expect(defaultInItemValue({ op: 'var', name: 'flag' }, schema)).toBe(false);
+
+    // Rendered in-expression UI exposes separate Type + Value controls per item and + Add value button
+    const inExprHtml = renderToStaticMarkup(
+      createElement(BoolExprEditor, {
+        value: {
+          op: 'in',
+          expr: { op: 'var', name: 'mode' },
+          values: editedValues,
+        },
+        schema,
+        fieldPath: 'inv:inv-row-1.holds',
+        onChange: () => {},
+      }),
+    );
+    expect(inExprHtml).toContain('+ Add value');
+    expect(inExprHtml).toContain('value="true"');
+    expect(inExprHtml).toContain('value="gamma"');
+    expect(inExprHtml).not.toContain('Comma-separated set values');
+
+    // Full model validation reports zero TYPE_MISMATCH errors
+    const modelWithIn: TransitionSystemModel = {
+      ...loadPresetModel('principled-fix'),
+      schema: {
+        ...loadPresetModel('principled-fix').schema,
+        mode: { kind: 'enum', values: ['true', 'beta', 'gamma'] },
+      },
+      initialState: {
+        ...loadPresetModel('principled-fix').initialState,
+        mode: 'true',
+      },
+      invariants: [
+        ...loadPresetModel('principled-fix').invariants,
+        {
+          id: 'inv_mode_in_set',
+          label: 'Mode remains in string set containing "true"',
+          holds: {
+            op: 'in',
+            expr: { op: 'var', name: 'mode' },
+            values: editedValues,
+          },
+        },
+      ],
+    };
+    expect(validateModel(modelWithIn)).toEqual([]);
+  });
+
+  it('rejects non-integer and unsafe integer raw JSON number tokens before rounding loss (Finding 5)', () => {
+    const broken = loadPresetModel('broken');
+    const validJson = exportModelToJson(broken);
+
+    // 1.00000000000000001 rounds to 1 in IEEE-754 JSON.parse, must be rejected losslessly
+    const precisionLossJson = validJson.replace('"max": 3', '"max": 1.00000000000000001');
+    const precisionRes = importModelFromJson(precisionLossJson);
+    expect(precisionRes.ok).toBe(false);
+    if (!precisionRes.ok) {
+      expect(precisionRes.errors.some((e) => e.code === 'NON_INTEGER_JSON_NUMBER')).toBe(true);
+    }
+
+    // 1.0 and 1e2 must also be rejected
+    const decimalZeroRes = importModelFromJson(validJson.replace('"min": 0', '"min": 0.0'));
+    expect(decimalZeroRes.ok).toBe(false);
+    if (!decimalZeroRes.ok) {
+      expect(decimalZeroRes.errors.some((e) => e.code === 'NON_INTEGER_JSON_NUMBER')).toBe(true);
+    }
+
+    const scientificRes = importModelFromJson(validJson.replace('"max": 3', '"max": 1e2'));
+    expect(scientificRes.ok).toBe(false);
+    if (!scientificRes.ok) {
+      expect(scientificRes.errors.some((e) => e.code === 'NON_INTEGER_JSON_NUMBER')).toBe(true);
+    }
+
+    // Unsafe integer exceeding MAX_SAFE_INTEGER must be rejected
+    const unsafeIntRes = importModelFromJson(
+      validJson.replace('"max": 3', '"max": 9007199254740993'),
+    );
+    expect(unsafeIntRes.ok).toBe(false);
+    if (!unsafeIntRes.ok) {
+      expect(unsafeIntRes.errors.some((e) => e.code === 'UNSAFE_INTEGER_JSON_NUMBER')).toBe(true);
+    }
+
+    // Numbers inside string literals (including escaped quotes) must NOT trigger false positives
+    const withDecimalText = updateAssumption(broken, 0, {
+      ...broken.assumptions[0]!,
+      statement: 'Version 1.0 with "1e2" and 9007199254740993 inside string text.',
+    });
+    const stringNumberRes = importModelFromJson(exportModelToJson(withDecimalText));
+    expect(stringNumberRes.ok).toBe(true);
+  });
+
+  it('enforces strict primitive checks in exportModelToJson with zero getter invocations (Finding 6)', () => {
+    const broken = loadPresetModel('broken');
+
+    let getterInvocations = 0;
+    const objWithGetter = {};
+    Object.defineProperty(objWithGetter, 'secret', {
+      enumerable: true,
+      get() {
+        getterInvocations += 1;
+        return 'leaked';
+      },
+    });
+    Object.defineProperty(objWithGetter, 'toJSON', {
+      enumerable: true,
+      get() {
+        getterInvocations += 1;
+        return () => 'leaked';
+      },
+    });
+
+    const malformedNameModel = {
+      ...broken,
+      name: objWithGetter,
+    } as unknown as TransitionSystemModel;
+
+    expect(() => exportModelToJson(malformedNameModel)).toThrow(TypeError);
+    expect(getterInvocations).toBe(0);
+
+    // Accessor directly on a canonical property must also throw TypeError with 0 invocations
+    const accessorModel = { ...broken } as unknown as Record<string, unknown>;
+    Object.defineProperty(accessorModel, 'id', {
+      enumerable: true,
+      get() {
+        getterInvocations += 1;
+        return 'sneaky';
+      },
+    });
+    expect(() => exportModelToJson(accessorModel as unknown as TransitionSystemModel)).toThrow(
+      TypeError,
+    );
+    expect(getterInvocations).toBe(0);
+  });
+
+  it('pairs every rendered form control bidirectionally with a visible label and renders all 5 tabpanels with WCAG control borders (Findings 7 & 8)', () => {
+    const richModel: TransitionSystemModel = {
+      ...loadPresetModel('broken'),
+      invariants: [
+        ...loadPresetModel('broken').invariants,
+        {
+          id: 'inv_rich_coverage',
+          label: 'Covers in, add, sub, lit string/int/bool',
+          holds: {
+            op: 'and',
+            args: [
+              {
+                op: 'in',
+                expr: { op: 'var', name: 'stage' },
+                values: ['idle', 1, true],
+              },
+              {
+                op: 'lte',
+                left: {
+                  op: 'add',
+                  left: { op: 'var', name: 'revision' },
+                  right: { op: 'lit', value: 1 },
+                },
+                right: {
+                  op: 'sub',
+                  left: { op: 'lit', value: 3 },
+                  right: { op: 'lit', value: 0 },
+                },
+              },
+              {
+                op: 'eq',
+                left: { op: 'lit', value: 'clean' },
+                right: { op: 'lit', value: false },
+              },
+            ],
+          },
+        },
+      ],
+    };
+
+    const appHtml = renderToStaticMarkup(
+      createElement(App, { initialVariant: 'broken', initialShowComparison: true }),
+    );
+    const richEditorHtml = renderToStaticMarkup(
+      createElement(PolicyEditorPane, {
+        model: richModel,
+        diagnostics: indexModelDiagnostics([]),
+        onChangeModel: () => {},
+        onImportModel: () => {},
+      }),
+    );
+
+    const assertBidirectionalLabelsAndTabs = (html: string) => {
+      const labelTargets = new Set<string>();
+      for (const match of html.matchAll(/<label\b([^>]*)>/g)) {
+        const attrs = match[1] ?? '';
+        const forMatch = attrs.match(/\bfor="([^"]+)"/);
+        expect(forMatch).not.toBeNull();
+        labelTargets.add(forMatch![1]!);
+      }
+
+      const controlIds = new Set<string>();
+      for (const match of html.matchAll(/<(input|select|textarea)\b([^>]*)>/g)) {
+        const attrs = match[2] ?? '';
+        const idMatch = attrs.match(/\bid="([^"]+)"/);
+        expect(idMatch).not.toBeNull();
+        const id = idMatch![1]!;
+        expect(id.length).toBeGreaterThan(0);
+        // Every control ID is unique and paired with a visible <label for="...">
+        expect(controlIds.has(id)).toBe(false);
+        controlIds.add(id);
+        expect(labelTargets.has(id)).toBe(true);
+      }
+
+      // Every <label for="..."> targets an actual rendered control
+      for (const targetId of labelTargets) {
+        expect(controlIds.has(targetId)).toBe(true);
+      }
+
+      // Every role="tab" aria-controls matches an existing role="tabpanel" id in DOM
+      const panelIds = new Set<string>();
+      for (const match of html.matchAll(/<div\b([^>]*\brole="tabpanel"[^>]*)>/g)) {
+        const attrs = match[1] ?? '';
+        const idMatch = attrs.match(/\bid="([^"]+)"/);
+        expect(idMatch).not.toBeNull();
+        panelIds.add(idMatch![1]!);
+      }
+      expect(panelIds.size).toBe(5);
+
+      const tabMatches = [...html.matchAll(/<button\b([^>]*\brole="tab"[^>]*)>/g)];
+      expect(tabMatches).toHaveLength(5);
+      for (const match of tabMatches) {
+        const attrs = match[1] ?? '';
+        const controlsMatch = attrs.match(/\baria-controls="([^"]+)"/);
+        expect(controlsMatch).not.toBeNull();
+        expect(panelIds.has(controlsMatch![1]!)).toBe(true);
+      }
+    };
+
+    assertBidirectionalLabelsAndTabs(appHtml);
+    assertBidirectionalLabelsAndTabs(richEditorHtml);
+
+    // Finding 8: WCAG 2.2 >= 3:1 unfocused control border token
+    const tokensCss = readFileSync(new URL('../src/styles/tokens.css', import.meta.url), 'utf8');
+    const workbenchCss = readFileSync(
+      new URL('../src/styles/workbench.css', import.meta.url),
+      'utf8',
+    );
+    expect(tokensCss).toContain('--color-control-border: oklch(59% 0.025 252);');
+    expect(workbenchCss).toContain('border: 1px solid var(--color-control-border);');
+    expect(workbenchCss).toContain('.ag-tabpanel[hidden]');
   });
 });

@@ -54,6 +54,26 @@ function describeExecutionMode(mode: VerifyExecutionMode): string {
     : 'Main thread (Web Workers unavailable)';
 }
 
+function areAssumptionsEqual(
+  left: readonly ModelAssumption[],
+  right: readonly ModelAssumption[],
+): boolean {
+  if (left.length !== right.length) return false;
+  for (let i = 0; i < left.length; i += 1) {
+    const a = left[i]!;
+    const b = right[i]!;
+    if (
+      a.id !== b.id ||
+      a.category !== b.category ||
+      a.statement !== b.statement ||
+      a.notModeled !== b.notModeled
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 export function VerificationWorkbenchPane({
   model,
   isRunning,
@@ -113,10 +133,15 @@ export function VerificationWorkbenchPane({
         )
       : null;
 
-  const disclosedAssumptions: readonly ModelAssumption[] =
-    verifiedSnapshot !== null && !isStale && verifiedSnapshot.result.status !== 'INVALID'
-      ? verifiedSnapshot.result.assumptions
-      : model.assumptions;
+  const hasVerifiedAssumptions =
+    verifiedSnapshot !== null && verifiedSnapshot.result.status !== 'INVALID';
+  const verifiedAssumptions: readonly ModelAssumption[] = hasVerifiedAssumptions
+    ? verifiedSnapshot.result.assumptions
+    : [];
+  const hasPendingEditedAssumptions =
+    hasVerifiedAssumptions &&
+    isStale &&
+    !areAssumptionsEqual(model.assumptions, verifiedAssumptions);
 
   return (
     <section
@@ -642,26 +667,101 @@ export function VerificationWorkbenchPane({
 
         {/* Explicit Modeling Assumptions & Scope Disclosure */}
         <div className="ag-section">
-          <h3 className="ag-section-title">
-            Modeling Assumptions &amp; Scope Disclosure ({disclosedAssumptions.length})
-          </h3>
-          <p className="ag-scope-note">
-            Verification verdicts hold strictly within the declared discrete finite-state model and its explicit assumptions below. AgentGate is a design-time finite-state verification workbench, not a live runtime enforcement proxy or external production security audit.
-          </p>
-          <div className="ag-assumptions-list">
-            {disclosedAssumptions.map((asm) => (
-              <div key={asm.id} className="ag-assumption-item">
-                <div className="ag-section-header">
-                  <strong className="ag-mono">{asm.id}</strong>
-                  <span className="ag-badge">{asm.category}</span>
-                </div>
-                <p>{asm.statement}</p>
-                <p className="ag-assumption-not-modeled">
-                  <strong>Not modeled:</strong> {asm.notModeled}
-                </p>
+          {hasVerifiedAssumptions ? (
+            <>
+              <div className="ag-section-header">
+                <h3 className="ag-section-title">
+                  Modeling Assumptions &amp; Scope Disclosure ({verifiedAssumptions.length})
+                </h3>
+                <span className="ag-badge">
+                  Scope of verified snapshot: {verifiedSnapshot.modelLabel}
+                </span>
               </div>
-            ))}
-          </div>
+              <p className="ag-scope-note">
+                Scope of verified snapshot: <strong>{verifiedSnapshot.modelLabel}</strong>.
+                Verification verdicts hold strictly within the declared discrete finite-state model
+                and its explicit assumptions below. AgentGate is a design-time finite-state
+                verification workbench, not a live runtime enforcement proxy or external production
+                security audit.
+              </p>
+              <div className="ag-assumptions-list">
+                {verifiedAssumptions.map((asm, idx) => (
+                  <div key={`${asm.id}-${idx}`} className="ag-assumption-item">
+                    <div className="ag-section-header">
+                      <strong className="ag-mono">{asm.id}</strong>
+                      <span className="ag-badge">{asm.category}</span>
+                    </div>
+                    <p>{asm.statement}</p>
+                    <p className="ag-assumption-not-modeled">
+                      <strong>Not modeled:</strong> {asm.notModeled}
+                    </p>
+                  </div>
+                ))}
+              </div>
+
+              {hasPendingEditedAssumptions && (
+                <div className="ag-pending-assumptions" role="region" aria-label="Pending edited assumptions">
+                  <div className="ag-section-header">
+                    <h4 className="ag-section-title">
+                      Pending Edited Assumptions (Unverified) ({model.assumptions.length})
+                    </h4>
+                    <span className="ag-badge" data-tone="warning">
+                      UNVERIFIED DRAFT
+                    </span>
+                  </div>
+                  <p className="ag-pane-subtitle">
+                    These edited assumptions belong to the current unverified policy draft and do
+                    not apply to the verified snapshot above until you re-verify.
+                  </p>
+                  <div className="ag-assumptions-list">
+                    {model.assumptions.map((asm, idx) => (
+                      <div key={`pending-${asm.id}-${idx}`} className="ag-assumption-item">
+                        <div className="ag-section-header">
+                          <strong className="ag-mono">{asm.id}</strong>
+                          <span className="ag-badge">{asm.category}</span>
+                        </div>
+                        <p>{asm.statement}</p>
+                        <p className="ag-assumption-not-modeled">
+                          <strong>Not modeled:</strong> {asm.notModeled}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
+          ) : (
+            <>
+              <div className="ag-section-header">
+                <h3 className="ag-section-title">
+                  Draft Model Assumptions (Unverified) ({model.assumptions.length})
+                </h3>
+                <span className="ag-badge" data-tone="warning">
+                  UNVERIFIED DRAFT
+                </span>
+              </div>
+              <p className="ag-scope-note">
+                Modeling Assumptions &amp; Scope Disclosure: no valid verified snapshot is active.
+                The assumptions below belong to the current unverified draft model. AgentGate is a
+                design-time finite-state verification workbench, not a live runtime enforcement
+                proxy or external production security audit.
+              </p>
+              <div className="ag-assumptions-list">
+                {model.assumptions.map((asm, idx) => (
+                  <div key={`draft-${asm.id}-${idx}`} className="ag-assumption-item">
+                    <div className="ag-section-header">
+                      <strong className="ag-mono">{asm.id}</strong>
+                      <span className="ag-badge">{asm.category}</span>
+                    </div>
+                    <p>{asm.statement}</p>
+                    <p className="ag-assumption-not-modeled">
+                      <strong>Not modeled:</strong> {asm.notModeled}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
         </div>
       </div>
     </section>

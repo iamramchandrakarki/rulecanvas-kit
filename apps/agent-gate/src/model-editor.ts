@@ -165,6 +165,62 @@ export function addSchemaVariable(
   };
 }
 
+function renameVarInValueExpr(expr: ValueExpr, oldName: string, newName: string): ValueExpr {
+  switch (expr.op) {
+    case 'lit':
+      return expr;
+    case 'var':
+      return expr.name === oldName ? { op: 'var', name: newName } : expr;
+    case 'add':
+    case 'sub': {
+      const left = renameVarInValueExpr(expr.left, oldName, newName);
+      const right = renameVarInValueExpr(expr.right, oldName, newName);
+      if (left === expr.left && right === expr.right) return expr;
+      return { op: expr.op, left, right };
+    }
+  }
+}
+
+function renameVarInBoolExpr(expr: BoolExpr, oldName: string, newName: string): BoolExpr {
+  switch (expr.op) {
+    case 'lit':
+      return expr;
+    case 'var':
+      return expr.name === oldName ? { op: 'var', name: newName } : expr;
+    case 'not': {
+      const arg = renameVarInBoolExpr(expr.arg, oldName, newName);
+      if (arg === expr.arg) return expr;
+      return { op: 'not', arg };
+    }
+    case 'and':
+    case 'or': {
+      let changed = false;
+      const args = expr.args.map((child) => {
+        const next = renameVarInBoolExpr(child, oldName, newName);
+        if (next !== child) changed = true;
+        return next;
+      });
+      return changed ? { op: expr.op, args } : expr;
+    }
+    case 'eq':
+    case 'neq':
+    case 'lt':
+    case 'lte':
+    case 'gt':
+    case 'gte': {
+      const left = renameVarInValueExpr(expr.left, oldName, newName);
+      const right = renameVarInValueExpr(expr.right, oldName, newName);
+      if (left === expr.left && right === expr.right) return expr;
+      return { op: expr.op, left, right };
+    }
+    case 'in': {
+      const target = renameVarInValueExpr(expr.expr, oldName, newName);
+      if (target === expr.expr) return expr;
+      return { op: 'in', expr: target, values: expr.values };
+    }
+  }
+}
+
 export function updateSchemaVariable(
   model: TransitionSystemModel,
   oldName: string,
@@ -204,10 +260,61 @@ export function updateSchemaVariable(
     nextInitial[newName] = resolvedValue;
   }
 
+  if (newName === oldName) {
+    return {
+      ...model,
+      schema: nextSchema,
+      initialState: nextInitial,
+    };
+  }
+
+  const nextRules = model.rules.map((rule) => {
+    const nextGuard = renameVarInBoolExpr(rule.guard, oldName, newName);
+    let updatesChanged = false;
+    const nextUpdates = rule.updates.map((upd) => {
+      const nextVar = upd.var === oldName ? newName : upd.var;
+      const nextValue = renameVarInValueExpr(upd.value, oldName, newName);
+      if (nextVar === upd.var && nextValue === upd.value) {
+        return upd;
+      }
+      updatesChanged = true;
+      return { var: nextVar, value: nextValue };
+    });
+    if (nextGuard === rule.guard && !updatesChanged) {
+      return rule;
+    }
+    return {
+      ...rule,
+      guard: nextGuard,
+      updates: updatesChanged ? nextUpdates : rule.updates,
+    };
+  });
+
+  const nextInvariants = model.invariants.map((inv) => {
+    const nextHolds = renameVarInBoolExpr(inv.holds, oldName, newName);
+    return nextHolds === inv.holds ? inv : { ...inv, holds: nextHolds };
+  });
+
+  if (model.goal !== undefined) {
+    const nextReached = renameVarInBoolExpr(model.goal.reached, oldName, newName);
+    const nextGoal =
+      nextReached === model.goal.reached ? model.goal : { ...model.goal, reached: nextReached };
+    return {
+      ...model,
+      schema: nextSchema,
+      initialState: nextInitial,
+      rules: nextRules,
+      invariants: nextInvariants,
+      goal: nextGoal,
+    };
+  }
+
   return {
     ...model,
     schema: nextSchema,
     initialState: nextInitial,
+    rules: nextRules,
+    invariants: nextInvariants,
   };
 }
 
@@ -1442,17 +1549,79 @@ function buildDetachedModelSnapshot(
   return detachedRoot;
 }
 
-function readSafeOwnData(obj: unknown, key: string): { readonly ok: boolean; readonly value: unknown } {
-  if (typeof obj !== 'object' || obj === null) return { ok: false, value: undefined };
-  const desc = Object.getOwnPropertyDescriptor(obj, key);
-  if (desc === undefined || isAccessorDescriptor(desc)) {
-    return { ok: false, value: undefined };
-  }
-  return { ok: true, value: desc.value };
+interface ExportBudget {
+  visited: number;
 }
 
-function readSafeArrayElements(raw: unknown): unknown[] {
-  if (!Array.isArray(raw)) return [];
+const MIN_SAFE_BIGINT = BigInt(Number.MIN_SAFE_INTEGER);
+const MAX_SAFE_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
+
+function consumeExportBudget(budget: ExportBudget, depth: number, path: string): void {
+  budget.visited += 1;
+  if (depth > MAX_IMPORT_DEPTH || budget.visited > MAX_IMPORT_NODES) {
+    throw new TypeError(
+      `Cannot export model: traversal exceeded maximum depth or node budget at "${path}".`,
+    );
+  }
+}
+
+function isPlainObjectLike(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const proto: unknown = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+function requireExportPlainObject(
+  value: unknown,
+  path: string,
+  budget: ExportBudget,
+  depth: number,
+): Record<string, unknown> {
+  consumeExportBudget(budget, depth, path);
+  if (!isPlainObjectLike(value)) {
+    throw new TypeError(`Cannot export model: expected plain object at "${path}".`);
+  }
+  return value;
+}
+
+function readRequiredOwnData(obj: Record<string, unknown>, key: string, path: string): unknown {
+  const desc = Object.getOwnPropertyDescriptor(obj, key);
+  if (desc === undefined) {
+    throw new TypeError(`Cannot export model: missing required own property at "${path}".`);
+  }
+  if (isAccessorDescriptor(desc)) {
+    throw new TypeError(`Cannot export model: accessor property is not allowed at "${path}".`);
+  }
+  return desc.value;
+}
+
+function readOptionalOwnData(
+  obj: Record<string, unknown>,
+  key: string,
+  path: string,
+): { readonly present: boolean; readonly value: unknown } {
+  const desc = Object.getOwnPropertyDescriptor(obj, key);
+  if (desc === undefined) {
+    return { present: false, value: undefined };
+  }
+  if (isAccessorDescriptor(desc)) {
+    throw new TypeError(`Cannot export model: accessor property is not allowed at "${path}".`);
+  }
+  return { present: true, value: desc.value };
+}
+
+function readExportArrayElements(
+  raw: unknown,
+  path: string,
+  budget: ExportBudget,
+  depth: number,
+): unknown[] {
+  consumeExportBudget(budget, depth, path);
+  if (!Array.isArray(raw) || Object.getPrototypeOf(raw) !== Array.prototype) {
+    throw new TypeError(`Cannot export model: expected plain array at "${path}".`);
+  }
   const lenDesc = Object.getOwnPropertyDescriptor(raw, 'length');
   if (
     lenDesc === undefined ||
@@ -1461,58 +1630,150 @@ function readSafeArrayElements(raw: unknown): unknown[] {
     !Number.isSafeInteger(lenDesc.value) ||
     lenDesc.value < 0
   ) {
-    return [];
+    throw new TypeError(`Cannot export model: invalid array length descriptor at "${path}".`);
   }
   const out: unknown[] = [];
   for (let i = 0; i < lenDesc.value; i += 1) {
+    consumeExportBudget(budget, depth + 1, `${path}[${i}]`);
     const desc = Object.getOwnPropertyDescriptor(raw, i);
-    if (desc !== undefined && !isAccessorDescriptor(desc)) {
-      out.push(desc.value);
+    if (desc === undefined) {
+      throw new TypeError(`Cannot export model: sparse array element at "${path}[${i}]".`);
     }
+    if (isAccessorDescriptor(desc)) {
+      throw new TypeError(
+        `Cannot export model: accessor element is not allowed at "${path}[${i}]".`,
+      );
+    }
+    out.push(desc.value);
   }
   return out;
 }
 
-function cloneValueExprForExport(raw: unknown, depth: number): unknown {
-  if (depth > MAX_IMPORT_DEPTH || typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-    return undefined;
+function requireSafeString(val: unknown, path: string): string {
+  if (typeof val !== 'string') {
+    throw new TypeError(
+      `Cannot export model: expected string primitive at "${path}", received ${typeof val}.`,
+    );
   }
-  const op = readSafeOwnData(raw, 'op').value;
+  return val;
+}
+
+function requireSafeBoolean(val: unknown, path: string): boolean {
+  if (typeof val !== 'boolean') {
+    throw new TypeError(
+      `Cannot export model: expected boolean primitive at "${path}", received ${typeof val}.`,
+    );
+  }
+  return val;
+}
+
+function requireSafeInt(val: unknown, path: string): number {
+  if (typeof val !== 'number' || !Number.isSafeInteger(val)) {
+    throw new TypeError(`Cannot export model: expected safe integer at "${path}".`);
+  }
+  return Object.is(val, -0) ? 0 : val;
+}
+
+function requireSafeStateValue(val: unknown, path: string): StateValue {
+  if (typeof val === 'string' || typeof val === 'boolean') {
+    return val;
+  }
+  if (typeof val === 'number' && Number.isSafeInteger(val)) {
+    return Object.is(val, -0) ? 0 : val;
+  }
+  throw new TypeError(
+    `Cannot export model: expected string, boolean, or safe integer at "${path}".`,
+  );
+}
+
+function cloneValueExprForExport(
+  raw: unknown,
+  path: string,
+  depth: number,
+  budget: ExportBudget,
+): ValueExpr {
+  const obj = requireExportPlainObject(raw, path, budget, depth);
+  const op = requireSafeString(readRequiredOwnData(obj, 'op', `${path}.op`), `${path}.op`);
   if (op === 'lit') {
-    return { op: 'lit', value: detachPrimitive(readSafeOwnData(raw, 'value').value) };
+    return {
+      op: 'lit',
+      value: requireSafeStateValue(
+        readRequiredOwnData(obj, 'value', `${path}.value`),
+        `${path}.value`,
+      ),
+    };
   }
   if (op === 'var') {
-    return { op: 'var', name: detachPrimitive(readSafeOwnData(raw, 'name').value) };
+    return {
+      op: 'var',
+      name: requireSafeString(readRequiredOwnData(obj, 'name', `${path}.name`), `${path}.name`),
+    };
   }
   if (op === 'add' || op === 'sub') {
     return {
       op,
-      left: cloneValueExprForExport(readSafeOwnData(raw, 'left').value, depth + 1),
-      right: cloneValueExprForExport(readSafeOwnData(raw, 'right').value, depth + 1),
+      left: cloneValueExprForExport(
+        readRequiredOwnData(obj, 'left', `${path}.left`),
+        `${path}.left`,
+        depth + 1,
+        budget,
+      ),
+      right: cloneValueExprForExport(
+        readRequiredOwnData(obj, 'right', `${path}.right`),
+        `${path}.right`,
+        depth + 1,
+        budget,
+      ),
     };
   }
-  return { op: detachPrimitive(op) };
+  throw new TypeError(`Cannot export model: unsupported value expression op "${op}" at "${path}".`);
 }
 
-function cloneBoolExprForExport(raw: unknown, depth: number): unknown {
-  if (depth > MAX_IMPORT_DEPTH || typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-    return undefined;
-  }
-  const op = readSafeOwnData(raw, 'op').value;
+function cloneBoolExprForExport(
+  raw: unknown,
+  path: string,
+  depth: number,
+  budget: ExportBudget,
+): BoolExpr {
+  const obj = requireExportPlainObject(raw, path, budget, depth);
+  const op = requireSafeString(readRequiredOwnData(obj, 'op', `${path}.op`), `${path}.op`);
   if (op === 'lit') {
-    return { op: 'lit', value: detachPrimitive(readSafeOwnData(raw, 'value').value) };
+    return {
+      op: 'lit',
+      value: requireSafeBoolean(
+        readRequiredOwnData(obj, 'value', `${path}.value`),
+        `${path}.value`,
+      ),
+    };
   }
   if (op === 'var') {
-    return { op: 'var', name: detachPrimitive(readSafeOwnData(raw, 'name').value) };
+    return {
+      op: 'var',
+      name: requireSafeString(readRequiredOwnData(obj, 'name', `${path}.name`), `${path}.name`),
+    };
   }
   if (op === 'not') {
-    return { op: 'not', arg: cloneBoolExprForExport(readSafeOwnData(raw, 'arg').value, depth + 1) };
+    return {
+      op: 'not',
+      arg: cloneBoolExprForExport(
+        readRequiredOwnData(obj, 'arg', `${path}.arg`),
+        `${path}.arg`,
+        depth + 1,
+        budget,
+      ),
+    };
   }
   if (op === 'and' || op === 'or') {
+    const rawArgs = readExportArrayElements(
+      readRequiredOwnData(obj, 'args', `${path}.args`),
+      `${path}.args`,
+      budget,
+      depth + 1,
+    );
     return {
       op,
-      args: readSafeArrayElements(readSafeOwnData(raw, 'args').value).map((arg) =>
-        cloneBoolExprForExport(arg, depth + 1),
+      args: rawArgs.map((arg, idx) =>
+        cloneBoolExprForExport(arg, `${path}.args[${idx}]`, depth + 2, budget),
       ),
     };
   }
@@ -1526,109 +1787,230 @@ function cloneBoolExprForExport(raw: unknown, depth: number): unknown {
   ) {
     return {
       op,
-      left: cloneValueExprForExport(readSafeOwnData(raw, 'left').value, depth + 1),
-      right: cloneValueExprForExport(readSafeOwnData(raw, 'right').value, depth + 1),
-    };
-  }
-  if (op === 'in') {
-    return {
-      op: 'in',
-      expr: cloneValueExprForExport(readSafeOwnData(raw, 'expr').value, depth + 1),
-      values: readSafeArrayElements(readSafeOwnData(raw, 'values').value).map((v) =>
-        detachPrimitive(v),
+      left: cloneValueExprForExport(
+        readRequiredOwnData(obj, 'left', `${path}.left`),
+        `${path}.left`,
+        depth + 1,
+        budget,
+      ),
+      right: cloneValueExprForExport(
+        readRequiredOwnData(obj, 'right', `${path}.right`),
+        `${path}.right`,
+        depth + 1,
+        budget,
       ),
     };
   }
-  return { op: detachPrimitive(op) };
+  if (op === 'in') {
+    const rawVals = readExportArrayElements(
+      readRequiredOwnData(obj, 'values', `${path}.values`),
+      `${path}.values`,
+      budget,
+      depth + 1,
+    );
+    return {
+      op: 'in',
+      expr: cloneValueExprForExport(
+        readRequiredOwnData(obj, 'expr', `${path}.expr`),
+        `${path}.expr`,
+        depth + 1,
+        budget,
+      ),
+      values: rawVals.map((v, idx) => requireSafeStateValue(v, `${path}.values[${idx}]`)),
+    };
+  }
+  throw new TypeError(
+    `Cannot export model: unsupported boolean expression op "${op}" at "${path}".`,
+  );
 }
 
 function cloneCanonicalModelForExport(model: TransitionSystemModel): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  defineSafeDataProp(out, 'id', detachPrimitive(readSafeOwnData(model, 'id').value));
-  defineSafeDataProp(out, 'name', detachPrimitive(readSafeOwnData(model, 'name').value));
+  const budget: ExportBudget = { visited: 0 };
+  const root = requireExportPlainObject(model, '$', budget, 0);
 
-  const rawSchema = readSafeOwnData(model, 'schema').value;
+  const out: Record<string, unknown> = {};
+  defineSafeDataProp(out, 'id', requireSafeString(readRequiredOwnData(root, 'id', 'id'), 'id'));
+  defineSafeDataProp(
+    out,
+    'name',
+    requireSafeString(readRequiredOwnData(root, 'name', 'name'), 'name'),
+  );
+
+  const rawSchema = requireExportPlainObject(
+    readRequiredOwnData(root, 'schema', 'schema'),
+    'schema',
+    budget,
+    1,
+  );
   const detachedSchema: Record<string, unknown> = {};
   const schemaVarNames: string[] = [];
-  if (typeof rawSchema === 'object' && rawSchema !== null && !Array.isArray(rawSchema)) {
-    for (const key of Reflect.ownKeys(rawSchema)) {
-      if (typeof key !== 'string' || RESERVED_KEYS.has(key)) continue;
-      const desc = Object.getOwnPropertyDescriptor(rawSchema, key);
-      if (desc === undefined || isAccessorDescriptor(desc) || !desc.enumerable) continue;
-      const def = desc.value;
-      const kind = readSafeOwnData(def, 'kind').value;
-      if (kind === 'boolean') {
-        defineSafeDataProp(detachedSchema, key, { kind: 'boolean' });
-        schemaVarNames.push(key);
-      } else if (kind === 'enum') {
-        defineSafeDataProp(detachedSchema, key, {
-          kind: 'enum',
-          values: readSafeArrayElements(readSafeOwnData(def, 'values').value).map((v) =>
-            detachPrimitive(v),
-          ),
-        });
-        schemaVarNames.push(key);
-      } else if (kind === 'int') {
-        defineSafeDataProp(detachedSchema, key, {
-          kind: 'int',
-          min: detachPrimitive(readSafeOwnData(def, 'min').value),
-          max: detachPrimitive(readSafeOwnData(def, 'max').value),
-        });
-        schemaVarNames.push(key);
-      }
+  for (const key of Reflect.ownKeys(rawSchema)) {
+    if (typeof key !== 'string' || RESERVED_KEYS.has(key)) continue;
+    const desc = Object.getOwnPropertyDescriptor(rawSchema, key);
+    if (desc === undefined || !desc.enumerable) continue;
+    if (isAccessorDescriptor(desc)) {
+      throw new TypeError(
+        `Cannot export model: accessor property is not allowed at "schema.${key}".`,
+      );
+    }
+    const varPath = `schema.${key}`;
+    const defObj = requireExportPlainObject(desc.value, varPath, budget, 2);
+    const kind = requireSafeString(
+      readRequiredOwnData(defObj, 'kind', `${varPath}.kind`),
+      `${varPath}.kind`,
+    );
+    if (kind === 'boolean') {
+      defineSafeDataProp(detachedSchema, key, { kind: 'boolean' });
+      schemaVarNames.push(key);
+    } else if (kind === 'enum') {
+      const enumVals = readExportArrayElements(
+        readRequiredOwnData(defObj, 'values', `${varPath}.values`),
+        `${varPath}.values`,
+        budget,
+        3,
+      ).map((v, idx) => requireSafeString(v, `${varPath}.values[${idx}]`));
+      defineSafeDataProp(detachedSchema, key, { kind: 'enum', values: enumVals });
+      schemaVarNames.push(key);
+    } else if (kind === 'int') {
+      defineSafeDataProp(detachedSchema, key, {
+        kind: 'int',
+        min: requireSafeInt(readRequiredOwnData(defObj, 'min', `${varPath}.min`), `${varPath}.min`),
+        max: requireSafeInt(readRequiredOwnData(defObj, 'max', `${varPath}.max`), `${varPath}.max`),
+      });
+      schemaVarNames.push(key);
+    } else {
+      throw new TypeError(`Cannot export model: unsupported variable kind "${kind}" at "${varPath}".`);
     }
   }
   defineSafeDataProp(out, 'schema', detachedSchema);
 
-  const rawInit = readSafeOwnData(model, 'initialState').value;
+  const rawInit = requireExportPlainObject(
+    readRequiredOwnData(root, 'initialState', 'initialState'),
+    'initialState',
+    budget,
+    1,
+  );
   const detachedInit: Record<string, unknown> = {};
-  if (typeof rawInit === 'object' && rawInit !== null && !Array.isArray(rawInit)) {
-    for (const key of schemaVarNames) {
-      const prop = readSafeOwnData(rawInit, key);
-      if (prop.ok) {
-        defineSafeDataProp(detachedInit, key, detachPrimitive(prop.value));
-      }
+  for (const key of schemaVarNames) {
+    const prop = readOptionalOwnData(rawInit, key, `initialState.${key}`);
+    if (prop.present) {
+      defineSafeDataProp(detachedInit, key, requireSafeStateValue(prop.value, `initialState.${key}`));
     }
   }
   defineSafeDataProp(out, 'initialState', detachedInit);
 
-  const detachedRules = readSafeArrayElements(readSafeOwnData(model, 'rules').value).map((rule) => ({
-    id: detachPrimitive(readSafeOwnData(rule, 'id').value),
-    label: detachPrimitive(readSafeOwnData(rule, 'label').value),
-    guard: cloneBoolExprForExport(readSafeOwnData(rule, 'guard').value, 0),
-    updates: readSafeArrayElements(readSafeOwnData(rule, 'updates').value).map((upd) => ({
-      var: detachPrimitive(readSafeOwnData(upd, 'var').value),
-      value: cloneValueExprForExport(readSafeOwnData(upd, 'value').value, 0),
-    })),
-  }));
+  const rawRules = readExportArrayElements(
+    readRequiredOwnData(root, 'rules', 'rules'),
+    'rules',
+    budget,
+    1,
+  );
+  const detachedRules = rawRules.map((rawRule, idx) => {
+    const rulePath = `rules[${idx}]`;
+    const ruleObj = requireExportPlainObject(rawRule, rulePath, budget, 2);
+    const rawUpdates = readExportArrayElements(
+      readRequiredOwnData(ruleObj, 'updates', `${rulePath}.updates`),
+      `${rulePath}.updates`,
+      budget,
+      3,
+    );
+    return {
+      id: requireSafeString(readRequiredOwnData(ruleObj, 'id', `${rulePath}.id`), `${rulePath}.id`),
+      label: requireSafeString(
+        readRequiredOwnData(ruleObj, 'label', `${rulePath}.label`),
+        `${rulePath}.label`,
+      ),
+      guard: cloneBoolExprForExport(
+        readRequiredOwnData(ruleObj, 'guard', `${rulePath}.guard`),
+        `${rulePath}.guard`,
+        3,
+        budget,
+      ),
+      updates: rawUpdates.map((rawUpd, updIdx) => {
+        const updPath = `${rulePath}.updates[${updIdx}]`;
+        const updObj = requireExportPlainObject(rawUpd, updPath, budget, 4);
+        return {
+          var: requireSafeString(
+            readRequiredOwnData(updObj, 'var', `${updPath}.var`),
+            `${updPath}.var`,
+          ),
+          value: cloneValueExprForExport(
+            readRequiredOwnData(updObj, 'value', `${updPath}.value`),
+            `${updPath}.value`,
+            5,
+            budget,
+          ),
+        };
+      }),
+    };
+  });
   defineSafeDataProp(out, 'rules', detachedRules);
 
-  const detachedInvariants = readSafeArrayElements(readSafeOwnData(model, 'invariants').value).map(
-    (inv) => ({
-      id: detachPrimitive(readSafeOwnData(inv, 'id').value),
-      label: detachPrimitive(readSafeOwnData(inv, 'label').value),
-      holds: cloneBoolExprForExport(readSafeOwnData(inv, 'holds').value, 0),
-    }),
+  const rawInvariants = readExportArrayElements(
+    readRequiredOwnData(root, 'invariants', 'invariants'),
+    'invariants',
+    budget,
+    1,
   );
+  const detachedInvariants = rawInvariants.map((rawInv, idx) => {
+    const invPath = `invariants[${idx}]`;
+    const invObj = requireExportPlainObject(rawInv, invPath, budget, 2);
+    return {
+      id: requireSafeString(readRequiredOwnData(invObj, 'id', `${invPath}.id`), `${invPath}.id`),
+      label: requireSafeString(
+        readRequiredOwnData(invObj, 'label', `${invPath}.label`),
+        `${invPath}.label`,
+      ),
+      holds: cloneBoolExprForExport(
+        readRequiredOwnData(invObj, 'holds', `${invPath}.holds`),
+        `${invPath}.holds`,
+        3,
+        budget,
+      ),
+    };
+  });
   defineSafeDataProp(out, 'invariants', detachedInvariants);
 
-  const goalProp = readSafeOwnData(model, 'goal');
-  if (goalProp.ok && goalProp.value !== undefined) {
+  const goalProp = readOptionalOwnData(root, 'goal', 'goal');
+  if (goalProp.present && goalProp.value !== undefined) {
+    const goalObj = requireExportPlainObject(goalProp.value, 'goal', budget, 1);
     defineSafeDataProp(out, 'goal', {
-      id: detachPrimitive(readSafeOwnData(goalProp.value, 'id').value),
-      label: detachPrimitive(readSafeOwnData(goalProp.value, 'label').value),
-      reached: cloneBoolExprForExport(readSafeOwnData(goalProp.value, 'reached').value, 0),
+      id: requireSafeString(readRequiredOwnData(goalObj, 'id', 'goal.id'), 'goal.id'),
+      label: requireSafeString(readRequiredOwnData(goalObj, 'label', 'goal.label'), 'goal.label'),
+      reached: cloneBoolExprForExport(
+        readRequiredOwnData(goalObj, 'reached', 'goal.reached'),
+        'goal.reached',
+        2,
+        budget,
+      ),
     });
   }
 
-  const detachedAssumptions = readSafeArrayElements(
-    readSafeOwnData(model, 'assumptions').value,
-  ).map((asm) => ({
-    id: detachPrimitive(readSafeOwnData(asm, 'id').value),
-    category: detachPrimitive(readSafeOwnData(asm, 'category').value),
-    statement: detachPrimitive(readSafeOwnData(asm, 'statement').value),
-    notModeled: detachPrimitive(readSafeOwnData(asm, 'notModeled').value),
-  }));
+  const rawAssumptions = readExportArrayElements(
+    readRequiredOwnData(root, 'assumptions', 'assumptions'),
+    'assumptions',
+    budget,
+    1,
+  );
+  const detachedAssumptions = rawAssumptions.map((rawAsm, idx) => {
+    const asmPath = `assumptions[${idx}]`;
+    const asmObj = requireExportPlainObject(rawAsm, asmPath, budget, 2);
+    return {
+      id: requireSafeString(readRequiredOwnData(asmObj, 'id', `${asmPath}.id`), `${asmPath}.id`),
+      category: requireSafeString(
+        readRequiredOwnData(asmObj, 'category', `${asmPath}.category`),
+        `${asmPath}.category`,
+      ),
+      statement: requireSafeString(
+        readRequiredOwnData(asmObj, 'statement', `${asmPath}.statement`),
+        `${asmPath}.statement`,
+      ),
+      notModeled: requireSafeString(
+        readRequiredOwnData(asmObj, 'notModeled', `${asmPath}.notModeled`),
+        `${asmPath}.notModeled`,
+      ),
+    };
+  });
   defineSafeDataProp(out, 'assumptions', detachedAssumptions);
 
   return out;
@@ -1637,6 +2019,84 @@ function cloneCanonicalModelForExport(model: TransitionSystemModel): Record<stri
 export function exportModelToJson(model: TransitionSystemModel): string {
   const canonical = cloneCanonicalModelForExport(model);
   return JSON.stringify(canonical, null, 2);
+}
+
+function validateRawJsonNumbers(rawText: string): ValidationError[] {
+  const errors: ValidationError[] = [];
+  let inString = false;
+  let i = 0;
+
+  while (i < rawText.length) {
+    const ch = rawText[i]!;
+    if (inString) {
+      if (ch === '\\') {
+        i += 2;
+        continue;
+      }
+      if (ch === '"') {
+        inString = false;
+      }
+      i += 1;
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = true;
+      i += 1;
+      continue;
+    }
+
+    if (ch === '-' || (ch >= '0' && ch <= '9')) {
+      const start = i;
+      if (rawText[i] === '-') {
+        i += 1;
+      }
+      while (i < rawText.length && rawText[i]! >= '0' && rawText[i]! <= '9') {
+        i += 1;
+      }
+      if (i < rawText.length && rawText[i] === '.') {
+        i += 1;
+        while (i < rawText.length && rawText[i]! >= '0' && rawText[i]! <= '9') {
+          i += 1;
+        }
+      }
+      if (i < rawText.length && (rawText[i] === 'e' || rawText[i] === 'E')) {
+        i += 1;
+        if (i < rawText.length && (rawText[i] === '+' || rawText[i] === '-')) {
+          i += 1;
+        }
+        while (i < rawText.length && rawText[i]! >= '0' && rawText[i]! <= '9') {
+          i += 1;
+        }
+      }
+
+      const token = rawText.slice(start, i);
+      if (token.includes('.') || token.includes('e') || token.includes('E')) {
+        errors.push({
+          code: 'NON_INTEGER_JSON_NUMBER',
+          path: '$',
+          message: `Invalid non-integer JSON number token "${token}".`,
+        });
+      } else {
+        const big = BigInt(token);
+        if (big < MIN_SAFE_BIGINT || big > MAX_SAFE_BIGINT) {
+          errors.push({
+            code: 'UNSAFE_INTEGER_JSON_NUMBER',
+            path: '$',
+            message: `Integer JSON number token "${token}" exceeds safe integer bounds.`,
+          });
+        }
+      }
+      if (errors.length >= 64) {
+        break;
+      }
+      continue;
+    }
+
+    i += 1;
+  }
+
+  return errors;
 }
 
 export function validateImportedModelValue(candidate: unknown): JsonImportResult {
@@ -1724,6 +2184,11 @@ export function importModelFromJson(rawText: unknown): JsonImportResult {
           },
         ],
       };
+    }
+
+    const numberErrors = validateRawJsonNumbers(rawText);
+    if (numberErrors.length > 0) {
+      return { ok: false, errors: numberErrors };
     }
 
     return validateImportedModelValue(parsed);

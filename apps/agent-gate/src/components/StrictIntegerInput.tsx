@@ -9,6 +9,11 @@ export interface StrictIntegerInputProps {
   readonly ariaLabel?: string | undefined;
   readonly resetKey?: string | number | undefined;
   readonly fieldKey?: string | undefined;
+  readonly externalDraft?: string | undefined;
+  readonly externalError?: string | undefined;
+  readonly onDraftChange?:
+    | ((fieldKey: string, rawDraft: string, errorMessage: string | null) => void)
+    | undefined;
   readonly onValidityChange?: ((fieldKey: string, errorMessage: string | null) => void) | undefined;
   readonly showInlineError?: boolean | undefined;
 }
@@ -21,54 +26,79 @@ export function StrictIntegerInput({
   ariaLabel,
   resetKey,
   fieldKey,
+  externalDraft,
+  externalError,
+  onDraftChange,
   onValidityChange,
   showInlineError = true,
 }: StrictIntegerInputProps) {
   const autoErrorId = useId();
-  const [draft, setDraft] = useState<string>(() => String(value));
-  const [error, setError] = useState<string | null>(null);
+  const isControlled = fieldKey !== undefined && onDraftChange !== undefined;
+
+  const [localDraft, setLocalDraft] = useState<string>(() => String(value));
+  const [localError, setLocalError] = useState<string | null>(null);
 
   const prevValueRef = useRef<number>(value);
   const prevResetKeyRef = useRef<string | number | undefined>(resetKey);
   const onValidityChangeRef = useRef(onValidityChange);
   onValidityChangeRef.current = onValidityChange;
+  const onDraftChangeRef = useRef(onDraftChange);
+  onDraftChangeRef.current = onDraftChange;
 
   useEffect(() => {
-    if (prevResetKeyRef.current !== resetKey || prevValueRef.current !== value) {
-      prevResetKeyRef.current = resetKey;
-      prevValueRef.current = value;
-      setDraft(String(value));
-      setError(null);
-      if (fieldKey !== undefined) {
-        onValidityChangeRef.current?.(fieldKey, null);
-      }
+    const resetChanged = prevResetKeyRef.current !== resetKey;
+    const valueChanged = prevValueRef.current !== value;
+    if (!resetChanged && !valueChanged) {
+      return;
     }
-  }, [value, resetKey, fieldKey]);
 
-  useEffect(() => {
-    return () => {
+    prevResetKeyRef.current = resetKey;
+    prevValueRef.current = value;
+
+    if (!isControlled) {
+      setLocalDraft(String(value));
+      setLocalError(null);
       if (fieldKey !== undefined) {
         onValidityChangeRef.current?.(fieldKey, null);
       }
-    };
-  }, [fieldKey]);
+    } else if (!resetChanged && valueChanged && externalDraft !== undefined && externalError === undefined) {
+      // External model change while there is no active invalid draft: sync displayed value.
+      onDraftChangeRef.current?.(fieldKey, String(value), null);
+    }
+  }, [value, resetKey, fieldKey, isControlled, externalDraft, externalError]);
+
+  const displayedDraft = isControlled
+    ? externalDraft !== undefined
+      ? externalDraft
+      : String(value)
+    : localDraft;
+  const displayedError = isControlled ? (externalError ?? null) : localError;
 
   const handleChange = (raw: string) => {
-    setDraft(raw);
     const parsed = parseStrictIntegerDraft(raw);
     if (!parsed.ok) {
-      setError(parsed.message);
-      if (fieldKey !== undefined) {
-        onValidityChangeRef.current?.(fieldKey, parsed.message);
+      if (isControlled) {
+        onDraftChange(fieldKey, raw, parsed.message);
+      } else {
+        setLocalDraft(raw);
+        setLocalError(parsed.message);
+        if (fieldKey !== undefined) {
+          onValidityChangeRef.current?.(fieldKey, parsed.message);
+        }
       }
       return;
     }
 
-    setError(null);
-    if (fieldKey !== undefined) {
-      onValidityChangeRef.current?.(fieldKey, null);
-    }
     prevValueRef.current = parsed.value;
+    if (isControlled) {
+      onDraftChange(fieldKey, raw, null);
+    } else {
+      setLocalDraft(raw);
+      setLocalError(null);
+      if (fieldKey !== undefined) {
+        onValidityChangeRef.current?.(fieldKey, null);
+      }
+    }
     if (parsed.value !== value) {
       onCommit(parsed.value);
     }
@@ -84,14 +114,14 @@ export function StrictIntegerInput({
         inputMode="numeric"
         className={className}
         aria-label={ariaLabel}
-        aria-invalid={error !== null ? 'true' : undefined}
-        aria-describedby={error !== null && showInlineError ? errorId : undefined}
-        value={draft}
+        aria-invalid={displayedError !== null ? 'true' : undefined}
+        aria-describedby={displayedError !== null && showInlineError ? errorId : undefined}
+        value={displayedDraft}
         onChange={(e) => handleChange(e.target.value)}
       />
-      {error !== null && showInlineError && (
+      {displayedError !== null && showInlineError && (
         <span id={errorId} className="ag-field-error" role="alert">
-          {error}
+          {displayedError}
         </span>
       )}
     </span>
