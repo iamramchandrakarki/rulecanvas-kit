@@ -1,0 +1,78 @@
+/* Hallmark · shape: control workbench · genre: modern-minimal · theme: Rim (dealt 2/3, seed bsl-3-bio-containment-airlock-safety-8693·f7bd9427·2026-11-25·r0) · job: simulate · draw: bsl-3-bio-containment-airlock-safety-8693·f7bd9427·2026-11-25·r0
+ * hero: schematic · nav: toolbar · footer: notice · imagery: technical diagram · signature: 12px schematic corner ticks
+ * axes: dark/grotesk-sans/warm · posture: committed · contrast: pass · fold: pass · v2.0.0 */
+
+:root {
+  color-scheme: dark;
+
+  /* Rim surfaces */
+  --color-paper: oklch(9% 0.008 75);
+  --color-paper-2: oklch(12.5% 0.009 75);
+  --color-paper-3: oklch(6.5% 0.007 75);
+
+  /* Ink */
+  --color-ink: oklch(94% 0.010 80);
+  --color-ink-2: oklch(84% 0.011 80);
+  --color-muted: oklch(70% 0.012 80);
+
+  /* Rules & high-contrast control borders */
+  --color-rule: oklch(26% 0.010 78);
+  --color-rule-2: oklch(19% 0.009 78);
+  --color-control-border: oklch(49% 0.014 78);
+
+  /* Signals */
+  --color-accent: oklch(72% 0.17 45);
+  --color-accent-hover: oklch(67% 0.17 45);
+  --color-accent-ink: oklch(10% 0.02 45);
+  --color-accent-soft: oklch(20% 0.05 45);
+
+  --color-accent-2: oklch(74% 0.12 250);
+  --color-accent-2-soft: oklch(18% 0.04 250);
+
+  --color-success: oklch(76% 0.14 150);
+  --color-success-bg: oklch(17% 0.04 150);
+  --color-success-border: oklch(46% 0.11 150);
+
+  --color-warning: oklch(78% 0.15 70);
+  --color-warning-bg: oklch(18% 0.045 70);
+  --color-warning-border: oklch(50% 0.11 70);
+
+  --color-error: oklch(70% 0.17 25);
+  --color-error-bg: oklch(17% 0.055 25);
+  --color-error-border: oklch(48% 0.13 25);
+
+  --color-focus: oklch(78% 0.15 45);
+
+  /* Typography */
+  --font-display: 'Switzer', ui-sans-serif, -apple-system, 'Segoe UI', sans-serif;
+  --font-body: var(--font-display);
+  --font-outlier: 'Geist Mono', ui-monospace, 'SFMono-Regular', Menlo, Monaco, Consolas, monospace;
+  --display-weight: 500;
+  --tracking-display: -0.03em;
+
+  /* Scale & spacing */
+  --text-xs: 0.78rem;
+  --text-sm: 0.875rem;
+  --text-md: 0.95rem;
+  --text-lg: 1.15rem;
+  --text-title: clamp(1.1rem, 0.45vw + 0.95rem, 1.35rem);
+
+  --space-3xs: 2px;
+  --space-2xs: 4px;
+  --space-xs: 8px;
+  --space-sm: 12px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 40px;
+
+  /* Square instrument geometry */
+  --radius-card: 0px;
+  --radius-pill: 0px;
+  --rule-hair: 1px;
+  --shadow-card: none;
+
+  /* Motion */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-micro: 120ms;
+  --dur-short: 220ms;
+}
