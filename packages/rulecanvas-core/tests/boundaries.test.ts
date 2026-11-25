@@ -989,10 +989,12 @@ describe('architecture and honesty boundaries', () => {
           name?: string;
           dependencies?: Record<string, string>;
           peerDependencies?: Record<string, string>;
+          optionalDependencies?: Record<string, string>;
         };
         const name = pkg.name ?? dirName;
         const deps = Object.keys(pkg.dependencies ?? {});
         const peers = Object.keys(pkg.peerDependencies ?? {});
+        const optionalDeps = Object.keys(pkg.optionalDependencies ?? {});
         const allowedRuntime = allowedRuntimeDeps[name];
         const allowedPeers = allowedPeerDeps[name];
 
@@ -1000,6 +1002,11 @@ describe('architecture and honesty boundaries', () => {
           for (const dep of deps) {
             if (!allowedRuntime.has(dep)) {
               violations.push(`${name}: disallowed runtime dependency "${dep}"`);
+            }
+          }
+          for (const dep of optionalDeps) {
+            if (!allowedRuntime.has(dep)) {
+              violations.push(`${name}: disallowed optional dependency "${dep}"`);
             }
           }
         }
@@ -1011,10 +1018,13 @@ describe('architecture and honesty boundaries', () => {
           }
         }
 
-        const internalDeps = [...deps, ...peers].filter((d) => d.startsWith('@rulecanvas/'));
+        const internalDeps = [...deps, ...peers, ...optionalDeps].filter((d) =>
+          d.startsWith('@rulecanvas/'),
+        );
+        const declaredInternalSet = new Set(internalDeps);
         graph.set(name, internalDeps);
 
-        // Source-level checks across src/**/*.{ts,tsx}: no cross-app imports, no relative escapes, no disallowed @rulecanvas/* deep subpaths
+        // Source-level checks across src/**/*.{ts,tsx}: per-importer DAG allowlist, no cross-app imports, no relative escapes, no disallowed @rulecanvas/* deep subpaths
         const srcDir = path.join(wsDir, 'src');
         if (!existsSync(srcDir)) continue;
         const srcFiles = walkFiles(srcDir, (p) => p.endsWith('.ts') || p.endsWith('.tsx'));
@@ -1045,16 +1055,40 @@ describe('architecture and honesty boundaries', () => {
               typeof (rec['source'] as { value?: unknown }).value === 'string'
             ) {
               specs.push((rec['source'] as { value: string }).value);
+            } else if (rec['type'] === 'TSImportType') {
+              const arg = (rec['argument'] ?? rec['source']) as
+                | { literal?: { value?: unknown }; value?: unknown }
+                | undefined;
+              const litVal = arg?.literal?.value ?? arg?.value;
+              if (typeof litVal === 'string') {
+                specs.push(litVal);
+              }
             }
             for (const val of Object.values(rec)) collect(val);
           };
           collect(parsed.program);
 
           const relFile = path.relative(REPO_ROOT, filePath);
+          if (
+            group === 'packages' &&
+            (name === '@rulecanvas/workbench' || name === '@rulecanvas/workbench-react')
+          ) {
+            const domainLeakRe = /\b(agent-?gate|interlock-?sim|bsl3|airlock|approval.?laundering)\b/i;
+            if (domainLeakRe.test(relFile) || domainLeakRe.test(content)) {
+              violations.push(`${relFile}: domain-specific identifier leaked into shared library`);
+            }
+          }
           for (const spec of specs) {
             if (spec.startsWith('@rulecanvas/')) {
               if (!allowedPackageSubpaths.has(spec)) {
                 violations.push(`${relFile}: disallowed @rulecanvas subpath "${spec}"`);
+              }
+              const parts = spec.split('/');
+              const pkgName = `${parts[0]}/${parts[1]}`;
+              if (!declaredInternalSet.has(pkgName)) {
+                violations.push(
+                  `${relFile}: imports "${spec}" whose package "${pkgName}" is not declared in ${name}'s allowed dependencies`,
+                );
               }
               if (group === 'apps' && (spec.includes('agent-gate') || spec.includes('interlock-sim'))) {
                 violations.push(`${relFile}: cross-app bare import "${spec}"`);

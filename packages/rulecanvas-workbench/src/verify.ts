@@ -5,14 +5,18 @@ import {
   type VerifyOptions,
   type VerifyResult,
 } from '@rulecanvas/core';
-import { captureVerificationRequest, sanitizeAndFreezeVerifyResult } from './capture.js';
+import {
+  captureVerificationRequest,
+  deepFreeze,
+  sanitizeAndFreezeVerifyResult,
+} from './capture.js';
 import {
   VERIFY_PROTOCOL_VERSION,
   type VerifyWorkerRequestMessage,
   type VerifyWorkerResponseMessage,
 } from './verify-worker.js';
 
-export { VERIFY_PROTOCOL_VERSION };
+export { VERIFY_PROTOCOL_VERSION, captureVerificationRequest, deepFreeze, sanitizeAndFreezeVerifyResult };
 export type { VerifyWorkerRequestMessage, VerifyWorkerResponseMessage };
 
 export type VerifyExecutionMode = 'worker' | 'main-thread';
@@ -66,10 +70,26 @@ export type VerifySettlement =
       readonly errors?: readonly ValidationError[] | undefined;
     };
 
-const CLIENT_BRAND = Symbol('rulecanvas.verify-client');
+const FACTORY_CLIENTS = new WeakSet<VerifyClient>();
+
+function readOwnDataProperty(
+  target: object,
+  key: string,
+): { readonly present: true; readonly value: unknown } | { readonly present: false } {
+  const desc = Object.getOwnPropertyDescriptor(target, key);
+  if (desc === undefined) return { present: false };
+  if (
+    Object.hasOwn(desc, 'get') ||
+    Object.hasOwn(desc, 'set') ||
+    desc.get !== undefined ||
+    desc.set !== undefined
+  ) {
+    throw new TypeError(`Worker envelope property "${key}" must not be an accessor.`);
+  }
+  return { present: true, value: desc.value };
+}
 
 export interface VerifyClient {
-  readonly [CLIENT_BRAND]: true;
   verify(
     model: unknown,
     options: VerifyOptions,
@@ -81,12 +101,7 @@ export interface VerifyClient {
 }
 
 export function isFactoryVerifyClient(value: unknown): value is VerifyClient {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    Object.prototype.hasOwnProperty.call(value, CLIENT_BRAND) &&
-    (value as Record<symbol, unknown>)[CLIENT_BRAND] === true
-  );
+  return typeof value === 'object' && value !== null && FACTORY_CLIENTS.has(value as VerifyClient);
 }
 
 export function isWebWorkerSupported(): boolean {
@@ -147,11 +162,30 @@ export function createLegacyWorkerAdapter(
       if (typeof raw !== 'object' || raw === null) {
         return;
       }
-      const rec = raw as Record<string, unknown>;
-      if (rec['requestId'] !== tuple.requestId) {
+      let reqIdField: { readonly present: boolean; readonly value?: unknown };
+      let msgTypeField: { readonly present: boolean; readonly value?: unknown };
+      let resultField: { readonly present: boolean; readonly value?: unknown };
+      let messageField: { readonly present: boolean; readonly value?: unknown };
+      try {
+        reqIdField = readOwnDataProperty(raw, 'requestId');
+        msgTypeField = readOwnDataProperty(raw, 'type');
+        resultField = readOwnDataProperty(raw, 'result');
+        messageField = readOwnDataProperty(raw, 'message');
+      } catch {
+        adapter.onmessage?.({
+          data: {
+            protocolVersion: VERIFY_PROTOCOL_VERSION,
+            generation: tuple.generation,
+            requestId: tuple.requestId,
+            type: '__invalid_accessor__',
+          },
+        });
         return;
       }
-      const msgType = rec['type'];
+      if (!reqIdField.present || reqIdField.value !== tuple.requestId) {
+        return;
+      }
+      const msgType = msgTypeField.present ? msgTypeField.value : undefined;
       if (msgType === 'result') {
         adapter.onmessage?.({
           data: {
@@ -159,7 +193,7 @@ export function createLegacyWorkerAdapter(
             generation: tuple.generation,
             requestId: tuple.requestId,
             type: 'result',
-            result: rec['result'],
+            result: resultField.present ? resultField.value : undefined,
           },
         });
       } else if (msgType === 'error') {
@@ -169,7 +203,10 @@ export function createLegacyWorkerAdapter(
             generation: tuple.generation,
             requestId: tuple.requestId,
             type: 'error',
-            message: typeof rec['message'] === 'string' ? rec['message'] : 'Verification worker error.',
+            message:
+              messageField.present && typeof messageField.value === 'string'
+                ? messageField.value
+                : 'Verification worker error.',
           },
         });
       } else {
@@ -305,13 +342,41 @@ export function createVerifyClient(config: {
 
         const data = event?.data;
         if (typeof data !== 'object' || data === null) return;
-        const rec = data as Record<string, unknown>;
 
-        // Must have usable correlation data matching the active request
-        if (rec['requestId'] !== active.requestId || rec['generation'] !== gen) {
+        let reqIdField: { readonly present: boolean; readonly value?: unknown };
+        let genField: { readonly present: boolean; readonly value?: unknown };
+        let protoField: { readonly present: boolean; readonly value?: unknown };
+        let typeField: { readonly present: boolean; readonly value?: unknown };
+        let msgField: { readonly present: boolean; readonly value?: unknown };
+        let resField: { readonly present: boolean; readonly value?: unknown };
+        try {
+          reqIdField = readOwnDataProperty(data, 'requestId');
+          genField = readOwnDataProperty(data, 'generation');
+          protoField = readOwnDataProperty(data, 'protocolVersion');
+          typeField = readOwnDataProperty(data, 'type');
+          msgField = readOwnDataProperty(data, 'message');
+          resField = readOwnDataProperty(data, 'result');
+        } catch {
+          discardWorker();
+          settlePending(active, {
+            kind: 'error',
+            code: 'INTEGRITY_ERROR',
+            message: 'Verification worker envelope contained an accessor property.',
+            requestId: active.requestId,
+          });
           return;
         }
-        if (rec['protocolVersion'] !== VERIFY_PROTOCOL_VERSION) {
+
+        // Must have usable correlation data matching the active request
+        if (
+          !reqIdField.present ||
+          !genField.present ||
+          reqIdField.value !== active.requestId ||
+          genField.value !== gen
+        ) {
+          return;
+        }
+        if (!protoField.present || protoField.value !== VERIFY_PROTOCOL_VERSION) {
           discardWorker();
           settlePending(active, {
             kind: 'error',
@@ -322,9 +387,9 @@ export function createVerifyClient(config: {
           return;
         }
 
-        const msgType = rec['type'];
+        const msgType = typeField.present ? typeField.value : undefined;
         if (msgType === 'error') {
-          if (typeof rec['message'] !== 'string') {
+          if (!msgField.present || typeof msgField.value !== 'string') {
             discardWorker();
             settlePending(active, {
               kind: 'error',
@@ -338,7 +403,7 @@ export function createVerifyClient(config: {
           settlePending(active, {
             kind: 'error',
             code: 'WORKER_ERROR',
-            message: rec['message'],
+            message: msgField.value,
             requestId: active.requestId,
           });
           return;
@@ -346,7 +411,7 @@ export function createVerifyClient(config: {
 
         if (msgType === 'result') {
           const checked = sanitizeAndFreezeVerifyResult(
-            rec['result'],
+            resField.present ? resField.value : undefined,
             active.capturedModel,
             active.capturedOptions,
           );
@@ -440,8 +505,6 @@ export function createVerifyClient(config: {
   };
 
   const client: VerifyClient = {
-    [CLIENT_BRAND]: true,
-
     verify(model, options, runOptions) {
       nextRequestId += 1;
       const requestId = nextRequestId;
@@ -561,5 +624,6 @@ export function createVerifyClient(config: {
     },
   };
 
+  FACTORY_CLIENTS.add(client);
   return client;
 }

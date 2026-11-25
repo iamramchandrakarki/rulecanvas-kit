@@ -787,6 +787,15 @@ function inspectStrictArray(
     return null;
   }
   const length = lenDesc.value;
+  if (ctx.visited + length > ctx.limits.maxVisits) {
+    ctx.exceeded = true;
+    pushError(ctx, {
+      code: 'IMPORT_COMPLEXITY_EXCEEDED',
+      path,
+      message: `Portable model exceeds maximum visit budget (${ctx.limits.maxVisits}).`,
+    });
+    return null;
+  }
   let ok = true;
 
   for (const key of Reflect.ownKeys(value)) {
@@ -1492,18 +1501,6 @@ export function createModelJsonCodec(overrides?: Partial<ModelJsonLimits>): Mode
           ],
         };
       }
-      if (text.trim().length === 0) {
-        return {
-          ok: false,
-          errors: [
-            {
-              code: 'JSON_PARSE_ERROR',
-              path: '$',
-              message: 'JSON input is empty.',
-            },
-          ],
-        };
-      }
       if (text.length > limits.maxChars) {
         return {
           ok: false,
@@ -1512,6 +1509,18 @@ export function createModelJsonCodec(overrides?: Partial<ModelJsonLimits>): Mode
               code: 'JSON_TOO_LARGE',
               path: '$',
               message: `JSON input exceeds maximum size of ${limits.maxChars} characters.`,
+            },
+          ],
+        };
+      }
+      if (text.trim().length === 0) {
+        return {
+          ok: false,
+          errors: [
+            {
+              code: 'JSON_PARSE_ERROR',
+              path: '$',
+              message: 'JSON input is empty.',
             },
           ],
         };
@@ -1586,21 +1595,30 @@ export function createModelJsonCodec(overrides?: Partial<ModelJsonLimits>): Mode
         };
       }
       const pretty = JSON.stringify(validated.model, null, 2);
-      if (pretty.length <= limits.maxChars) {
-        return { ok: true, text: pretty };
+      const candidate =
+        pretty.length <= limits.maxChars ? pretty : JSON.stringify(validated.model);
+      if (candidate.length > limits.maxChars) {
+        return {
+          ok: false,
+          error: {
+            code: 'JSON_EXPORT_ERROR',
+            path: '$',
+            message: `Serialized JSON exceeds maximum size of ${limits.maxChars} characters.`,
+          },
+        };
       }
-      const compact = JSON.stringify(validated.model);
-      if (compact.length <= limits.maxChars) {
-        return { ok: true, text: compact };
+      const rawScan = scanRawJson(candidate, limits);
+      if (!rawScan.ok) {
+        return {
+          ok: false,
+          error: {
+            code: 'JSON_EXPORT_ERROR',
+            path: '$',
+            message: rawScan.message,
+          },
+        };
       }
-      return {
-        ok: false,
-        error: {
-          code: 'JSON_EXPORT_ERROR',
-          path: '$',
-          message: `Cannot export model: serialized JSON (${compact.length} chars) exceeds maximum portable size of ${limits.maxChars} characters.`,
-        },
-      };
+      return { ok: true, text: candidate };
     } catch (err) {
       return {
         ok: false,

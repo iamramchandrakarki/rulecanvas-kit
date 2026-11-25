@@ -7,7 +7,10 @@ import {
 } from '@rulecanvas/core';
 import { createVerdictReplaySession, type ReplaySession } from '@rulecanvas/ui';
 import {
+  captureVerificationRequest,
+  deepFreeze,
   isFactoryVerifyClient,
+  sanitizeAndFreezeVerifyResult,
   type VerifyClient,
   type VerifyExecutionMode,
 } from '@rulecanvas/workbench/verify';
@@ -36,6 +39,7 @@ export interface UseVerificationSnapshotOptions {
 
 export interface VerificationSnapshotController {
   readonly isRunning: boolean;
+  readonly isPending: () => boolean;
   readonly runningExecutionMode: VerifyExecutionMode;
   readonly snapshot: CommittedVerificationSnapshot | null;
   readonly replaySession: ReplaySession | null;
@@ -55,7 +59,7 @@ function buildReplayForResult(
   if (result.status === 'INVALID') {
     return { ok: true, session: null };
   }
-  const init = createVerdictReplaySession(model, result);
+  const init = createVerdictReplaySession(model, result, { startAt: 'terminal' });
   if (!init.ok) {
     return {
       ok: false,
@@ -73,13 +77,24 @@ function computeInitialState(initialRequest: VerificationRunRequest | undefined)
   if (initialRequest === undefined) {
     return { snapshot: null, replaySession: null, transportError: null };
   }
-  const capturedModel = structuredClone(initialRequest.model) as TransitionSystemModel;
-  const capturedOptions: VerifyOptions = {
-    maxStates: initialRequest.options.maxStates,
-    maxDepth: initialRequest.options.maxDepth,
-  };
-  const result = verifyModel(capturedModel, capturedOptions);
-  const replay = buildReplayForResult(capturedModel, result);
+  const captured = captureVerificationRequest(initialRequest.model, initialRequest.options);
+  if (!captured.ok) {
+    return {
+      snapshot: null,
+      replaySession: null,
+      transportError: captured.message,
+    };
+  }
+  const rawResult = verifyModel(captured.model, captured.options);
+  const checked = sanitizeAndFreezeVerifyResult(rawResult, captured.model, captured.options);
+  if (!checked.ok) {
+    return {
+      snapshot: null,
+      replaySession: null,
+      transportError: checked.message,
+    };
+  }
+  const replay = buildReplayForResult(captured.model, checked.result);
   if (!replay.ok) {
     return {
       snapshot: null,
@@ -88,14 +103,14 @@ function computeInitialState(initialRequest: VerificationRunRequest | undefined)
     };
   }
   return {
-    snapshot: {
-      model: capturedModel,
-      modelLabel: initialRequest.label,
-      options: capturedOptions,
-      revision: initialRequest.revision,
-      result,
-      executionMode: 'main-thread',
-    },
+    snapshot: deepFreeze({
+      model: captured.model,
+      modelLabel: String(initialRequest.label),
+      options: captured.options,
+      revision: Number(initialRequest.revision),
+      result: checked.result,
+      executionMode: 'main-thread' as const,
+    }),
     replaySession: replay.session,
     transportError: null,
   };
@@ -110,13 +125,20 @@ export function useVerificationSnapshot({
     initialStateRef.current = computeInitialState(initialRequest);
   }
 
-  const [snapshot, setSnapshot] = useState<CommittedVerificationSnapshot | null>(
-    () => initialStateRef.current!.snapshot,
-  );
-  const [replaySession, setReplaySession] = useState<ReplaySession | null>(
-    () => initialStateRef.current!.replaySession,
-  );
-  const [isRunning, setIsRunning] = useState<boolean>(false);
+  const [{ snapshot, replaySession }, setCommitted] = useState(() => ({
+    snapshot: initialStateRef.current!.snapshot,
+    replaySession: initialStateRef.current!.replaySession,
+  }));
+  const setReplaySession = useCallback((next: ReplaySession | null) => {
+    setCommitted((previous) => ({ ...previous, replaySession: next }));
+  }, []);
+  const [isRunning, setIsRunning] = useState(false);
+  const pendingRef = useRef(false);
+  const isPending = useCallback(() => pendingRef.current, []);
+  const setPending = useCallback((pending: boolean) => {
+    pendingRef.current = pending;
+    setIsRunning(pending);
+  }, []);
   const [runningExecutionMode, setRunningExecutionMode] =
     useState<VerifyExecutionMode>('main-thread');
   const [transportError, setTransportError] = useState<string | null>(
@@ -125,15 +147,15 @@ export function useVerificationSnapshot({
   const [cancelledNotice, setCancelledNotice] = useState<string | null>(null);
 
   const clientRef = useRef<VerifyClient | null>(null);
-  const createClientRef = useRef(createClient);
-  createClientRef.current = createClient;
 
   const activeGenRef = useRef<number>(0);
   const mountedRef = useRef<boolean>(false);
 
   useEffect(() => {
     mountedRef.current = true;
-    const client = createClientRef.current();
+    setPending(false);
+    activeGenRef.current += 1;
+    const client = createClient();
     if (!isFactoryVerifyClient(client)) {
       throw new TypeError(
         'useVerificationSnapshot requires a VerifyClient created by createVerifyClient().',
@@ -144,71 +166,80 @@ export function useVerificationSnapshot({
 
     return () => {
       mountedRef.current = false;
+      pendingRef.current = false;
       activeGenRef.current += 1;
       client.dispose();
       if (clientRef.current === client) {
         clientRef.current = null;
       }
     };
-  }, []);
+  }, [createClient, setPending]);
 
   const invalidatePending = useCallback(() => {
     activeGenRef.current += 1;
     clientRef.current?.cancel();
-    setIsRunning(false);
-  }, []);
+    setPending(false);
+  }, [setPending]);
 
   const cancel = useCallback(() => {
     activeGenRef.current += 1;
     clientRef.current?.cancel();
-    setIsRunning(false);
+    setPending(false);
     setCancelledNotice('Verification cancelled. Previous verified snapshot (if any) remains shown.');
-  }, []);
+  }, [setPending]);
 
   const clear = useCallback(() => {
     activeGenRef.current += 1;
     clientRef.current?.cancel();
-    setIsRunning(false);
-    setSnapshot(null);
-    setReplaySession(null);
+    setPending(false);
+    setCommitted({ snapshot: null, replaySession: null });
     setTransportError(null);
     setCancelledNotice(null);
-  }, []);
+  }, [setPending]);
 
   const run = useCallback((request: VerificationRunRequest) => {
     activeGenRef.current += 1;
     const gen = activeGenRef.current;
+    const capturedLabel = String(request.label);
+    const capturedRevision = Number(request.revision);
 
     const client = clientRef.current;
     setCancelledNotice(null);
     setTransportError(null);
 
     if (client === null) {
-      const capturedModel = structuredClone(request.model) as TransitionSystemModel;
-      const capturedOptions: VerifyOptions = {
-        maxStates: request.options.maxStates,
-        maxDepth: request.options.maxDepth,
-      };
-      const result = verifyModel(capturedModel, capturedOptions);
-      const replay = buildReplayForResult(capturedModel, result);
-      setIsRunning(false);
+      const captured = captureVerificationRequest(request.model, request.options);
+      setPending(false);
+      if (!captured.ok) {
+        setTransportError(captured.message);
+        return;
+      }
+      const rawResult = verifyModel(captured.model, captured.options);
+      const checked = sanitizeAndFreezeVerifyResult(rawResult, captured.model, captured.options);
+      if (!checked.ok) {
+        setTransportError(checked.message);
+        return;
+      }
+      const replay = buildReplayForResult(captured.model, checked.result);
       if (!replay.ok) {
         setTransportError(replay.message);
         return;
       }
-      setSnapshot({
-        model: capturedModel,
-        modelLabel: request.label,
-        options: capturedOptions,
-        revision: request.revision,
-        result,
-        executionMode: 'main-thread',
+      setCommitted({
+        snapshot: deepFreeze({
+            model: captured.model,
+            modelLabel: capturedLabel,
+            options: captured.options,
+            revision: capturedRevision,
+            result: checked.result,
+            executionMode: 'main-thread' as const,
+        }),
+        replaySession: replay.session,
       });
-      setReplaySession(replay.session);
       return;
     }
 
-    setIsRunning(true);
+    setPending(true);
     setRunningExecutionMode(client.getExecutionMode());
 
     void client
@@ -221,25 +252,13 @@ export function useVerificationSnapshot({
         if (!mountedRef.current || activeGenRef.current !== gen || clientRef.current !== client) {
           return;
         }
-        setIsRunning(false);
+        setPending(false);
 
         if (settlement.kind === 'cancelled') {
           return;
         }
 
         if (settlement.kind === 'error') {
-          if (settlement.code === 'CAPTURE_ERROR' && settlement.errors !== undefined) {
-            setSnapshot({
-              model: request.model,
-              modelLabel: request.label,
-              options: request.options,
-              revision: request.revision,
-              result: { status: 'INVALID', errors: settlement.errors },
-              executionMode: 'main-thread',
-            });
-            setReplaySession(null);
-            return;
-          }
           setTransportError(settlement.message);
           return;
         }
@@ -251,20 +270,23 @@ export function useVerificationSnapshot({
         }
 
         setRunningExecutionMode(settlement.executionMode);
-        setSnapshot({
-          model: settlement.capturedModel,
-          modelLabel: request.label,
-          options: settlement.capturedOptions,
-          revision: request.revision,
-          result: settlement.result,
-          executionMode: settlement.executionMode,
+        setCommitted({
+          snapshot: deepFreeze({
+              model: settlement.capturedModel,
+              modelLabel: capturedLabel,
+              options: settlement.capturedOptions,
+              revision: capturedRevision,
+              result: settlement.result,
+              executionMode: settlement.executionMode,
+          }),
+          replaySession: replay.session,
         });
-        setReplaySession(replay.session);
       });
-  }, []);
+  }, [setPending]);
 
   return {
     isRunning,
+    isPending,
     runningExecutionMode,
     snapshot,
     replaySession,

@@ -9,9 +9,11 @@ import {
   type VerifyResult,
 } from '@rulecanvas/core';
 
-const MAX_CAPTURE_DEPTH = 64;
-const MAX_CAPTURE_NODES = 100_000;
+const MAX_CAPTURE_DEPTH = 128;
+const MAX_MODEL_CAPTURE_NODES = 100_000;
+const MAX_RESULT_CAPTURE_NODES = 2_500_000;
 const RESERVED_KEYS: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype']);
+const POSITIVE_DECIMAL_RE = /^[1-9][0-9]*$/;
 
 export type CapturedRequestResult =
   | {
@@ -32,6 +34,7 @@ export type ValidatedResultOutcome =
 
 interface CaptureBudget {
   visited: number;
+  readonly maxNodes: number;
 }
 
 function isAccessorDescriptor(desc: PropertyDescriptor): boolean {
@@ -106,7 +109,7 @@ function detachOwnedValue(
   allowNonEnumerableArrayElements: boolean,
 ): unknown {
   budget.visited += 1;
-  if (depth > MAX_CAPTURE_DEPTH || budget.visited > MAX_CAPTURE_NODES) {
+  if (depth > MAX_CAPTURE_DEPTH || budget.visited > budget.maxNodes) {
     throw new RangeError(`Value exceeded capture depth or node budget at "${path}".`);
   }
 
@@ -224,7 +227,7 @@ export function captureVerificationRequest(
   options: unknown,
 ): CapturedRequestResult {
   try {
-    const optBudget: CaptureBudget = { visited: 0 };
+    const optBudget: CaptureBudget = { visited: 0, maxNodes: MAX_MODEL_CAPTURE_NODES };
     const detachedOpts = detachOwnedValue(
       options,
       'options',
@@ -262,7 +265,7 @@ export function captureVerificationRequest(
       maxDepth: normalizeNumber(maxDepth),
     });
 
-    const modelBudget: CaptureBudget = { visited: 0 };
+    const modelBudget: CaptureBudget = { visited: 0, maxNodes: MAX_MODEL_CAPTURE_NODES };
     const detachedModel = detachOwnedValue(
       model,
       '$',
@@ -387,8 +390,14 @@ function validateOwnedStats(
   deadlockStatesFound: number;
 } {
   if (!isPlainRecord(rawStats)) return false;
-  if (typeof rawStats['theoreticalStates'] !== 'string') return false;
+  if (
+    typeof rawStats['theoreticalStates'] !== 'string' ||
+    !POSITIVE_DECIMAL_RE.test(rawStats['theoreticalStates'])
+  ) {
+    return false;
+  }
   if (!isSafeIntInRange(rawStats['statesExplored'], 1, options.maxStates)) return false;
+  const statesExplored = rawStats['statesExplored'] as number;
   if (!isSafeIntInRange(rawStats['maxDepthReached'], 0, options.maxDepth)) return false;
   if (
     typeof rawStats['transitionsEvaluated'] !== 'number' ||
@@ -400,7 +409,8 @@ function validateOwnedStats(
   if (
     typeof rawStats['deadlockStatesFound'] !== 'number' ||
     !Number.isSafeInteger(rawStats['deadlockStatesFound']) ||
-    rawStats['deadlockStatesFound'] < 0
+    rawStats['deadlockStatesFound'] < 0 ||
+    rawStats['deadlockStatesFound'] > statesExplored
   ) {
     return false;
   }
@@ -428,7 +438,7 @@ export function sanitizeAndFreezeVerifyResult(
   capturedOptions: VerifyOptions,
 ): ValidatedResultOutcome {
   try {
-    const budget: CaptureBudget = { visited: 0 };
+    const budget: CaptureBudget = { visited: 0, maxNodes: MAX_RESULT_CAPTURE_NODES };
     const owned = detachOwnedValue(raw, 'result', 0, budget, new Set<object>(), false);
     if (!isPlainRecord(owned)) {
       return { ok: false, message: 'Verification result must be a plain object.' };
@@ -457,6 +467,15 @@ export function sanitizeAndFreezeVerifyResult(
           return { ok: false, message: 'INVALID verification result has a malformed trace.' };
         }
       }
+      if (
+        owned['assumptions'] !== undefined &&
+        !validateOwnedAssumptions(owned['assumptions'], capturedModel.assumptions)
+      ) {
+        return {
+          ok: false,
+          message: 'INVALID verification result assumptions do not match the captured model snapshot.',
+        };
+      }
       return { ok: true, result: deepFreeze(owned as unknown as VerifyResult) };
     }
 
@@ -473,6 +492,9 @@ export function sanitizeAndFreezeVerifyResult(
     }
 
     if (status === 'VERIFIED') {
+      if (owned['trace'] !== undefined) {
+        return { ok: false, message: 'VERIFIED result must not include a counterexample trace.' };
+      }
       if (owned['goalReachable'] !== undefined && typeof owned['goalReachable'] !== 'boolean') {
         return { ok: false, message: 'VERIFIED result has non-boolean goalReachable.' };
       }
@@ -507,6 +529,9 @@ export function sanitizeAndFreezeVerifyResult(
     }
 
     // status === 'INCONCLUSIVE'
+    if (owned['trace'] !== undefined) {
+      return { ok: false, message: 'INCONCLUSIVE result must not include a counterexample trace.' };
+    }
     const reason = owned['reason'];
     if (reason !== 'MAX_STATES' && reason !== 'MAX_DEPTH') {
       return { ok: false, message: 'INCONCLUSIVE result has an unrecognized truncation reason.' };

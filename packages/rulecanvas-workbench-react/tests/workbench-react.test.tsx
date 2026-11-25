@@ -32,6 +32,8 @@ function createFakeHistoryHost(
   readonly entries: FakeEntry[];
   readonly getCursor: () => number;
   readonly navigateToIndex: (index: number) => void;
+  readonly flushTraversals: () => void;
+  readonly triggerBeforeUnload: () => { defaultPrevented: boolean; returnValue: string | undefined };
   readonly assignedUrls: string[];
 } {
   let keySeq = 1;
@@ -53,6 +55,8 @@ function createFakeHistoryHost(
     if (url === null || url === undefined) return entries[cursor]!.url;
     return new URL(String(url), entries[cursor]!.url).href;
   };
+
+  const pendingTraversals: Array<() => void> = [];
 
   const host: HistoryHostLike = {
     location: {
@@ -103,9 +107,16 @@ function createFakeHistoryHost(
               if (targetIdx === cursor) {
                 return { finished: Promise.resolve() };
               }
-              cursor = targetIdx;
-              emitPopstate();
-              return { finished: Promise.resolve() };
+              let resolveFinished!: () => void;
+              const finished = new Promise<void>((resolve) => {
+                resolveFinished = resolve;
+              });
+              pendingTraversals.push(() => {
+                cursor = targetIdx;
+                emitPopstate();
+                resolveFinished();
+              });
+              return { finished };
             },
           },
         }
@@ -126,6 +137,25 @@ function createFakeHistoryHost(
       cursor = index;
       emitPopstate();
     },
+    flushTraversals() {
+      while (pendingTraversals.length > 0) {
+        const fn = pendingTraversals.shift()!;
+        fn();
+      }
+    },
+    triggerBeforeUnload() {
+      const event = {
+        defaultPrevented: false,
+        returnValue: undefined as string | undefined,
+        preventDefault() {
+          this.defaultPrevented = true;
+        },
+      };
+      for (const listener of listeners['beforeunload'] ?? []) {
+        listener(event);
+      }
+      return event;
+    },
     assignedUrls,
   };
 }
@@ -134,6 +164,8 @@ describe('@rulecanvas/workbench-react components, navigation, and race-safe hist
   it('validates same-origin navigation hrefs and renders accessible primitives without raw HTML', () => {
     expect(isSafeSameOriginNavigationHref('../interlock-sim/', '/')).toBe(true);
     expect(isSafeSameOriginNavigationHref('/app/interlock-sim/', '/app/')).toBe(true);
+    expect(isSafeSameOriginNavigationHref('/suite/interlock-sim/', '/suite')).toBe(true);
+    expect(isSafeSameOriginNavigationHref('/suite-other/interlock-sim/', '/suite')).toBe(false);
     expect(isSafeSameOriginNavigationHref('/other/', '/app/')).toBe(false);
     expect(isSafeSameOriginNavigationHref('https://evil.example/')).toBe(false);
     expect(isSafeSameOriginNavigationHref('//evil.example/')).toBe(false);
@@ -220,7 +252,7 @@ describe('@rulecanvas/workbench-react components, navigation, and race-safe hist
     );
   });
 
-  it('prevents A->B->C overshoot under rapid Back/Forward with Navigation API traverseTo', () => {
+  it('prevents A->B->C overshoot under async in-flight Navigation API traverseTo and restores URL on overlapping prompts', async () => {
     const fake = createFakeHistoryHost('https://example.org/app/?preset=a', true);
     let dirty = false;
     let committed: TestPreset = 'a';
@@ -245,20 +277,39 @@ describe('@rulecanvas/workbench-react components, navigation, and race-safe hist
     fake.navigateToIndex(1); // back to B cleanly
     expect(committed).toBe('b');
 
-    // Dirty editor at B, user presses Back to A
+    // Dirty editor at B, user presses Back to A, then clicks Decline -> starts async traverseTo(B)
     dirty = true;
     fake.navigateToIndex(0);
     expect(box.prompt?.kind).toBe('popstate');
-    expect(committed).toBe('b');
-
-    // Queued Forward returns to B BEFORE user clicks decline
-    fake.navigateToIndex(1);
     ctrl.declinePrompt();
 
-    // Must remain at B (index 1), NEVER overshoot to C (index 2), and dirty editor survives
-    expect(fake.getCursor()).toBe(1);
+    // While traverseTo(B) is still IN-FLIGHT, a queued Forward to C arrives!
+    fake.navigateToIndex(2);
+    // Restoration guard must detect superseding entry C and apply fresh-session replaceState back to B
+    expect(new URL(fake.host.location.href).searchParams.get('preset')).toBe('b');
     expect(committed).toBe('b');
     expect(box.prompt).toBeNull();
+    fake.flushTraversals();
+
+    // Overlapping prompt case: dirty at B, Back to A, then user selects C while history prompt is open, then declines
+    fake.navigateToIndex(0);
+    expect(box.prompt?.kind).toBe('popstate');
+    ctrl.selectPreset('c');
+    expect(box.prompt?.kind).toBe('preset');
+    ctrl.declinePrompt();
+    fake.flushTraversals();
+    expect(new URL(fake.host.location.href).searchParams.get('preset')).toBe('b');
+    expect(committed).toBe('b');
+
+    // Approved link navigation that returns without unloading must NOT permanently disable beforeunload
+    ctrl.requestLinkNavigation('../interlock-sim/', 'InterlockSim');
+    expect(box.prompt?.kind).toBe('link');
+    ctrl.acceptPrompt();
+    expect(fake.assignedUrls).toContain('../interlock-sim/');
+    await Promise.resolve();
+    const unloadEvent = fake.triggerBeforeUnload();
+    expect(unloadEvent.defaultPrevented).toBe(true);
+
     ctrl.dispose();
   });
 

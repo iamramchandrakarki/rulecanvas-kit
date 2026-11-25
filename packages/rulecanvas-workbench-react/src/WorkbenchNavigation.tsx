@@ -31,13 +31,23 @@ export function isSafeSameOriginNavigationHref(href: string, allowedPrefix?: str
   if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(trimmed)) return false;
 
   try {
-    const base = new URL('https://rulecanvas.local/app/');
+    const baseHref =
+      typeof window !== 'undefined' && typeof window.location?.href === 'string'
+        ? window.location.href
+        : 'https://rulecanvas.local/app/';
+    const base = new URL(baseHref);
     const resolved = new URL(trimmed, base);
     if (resolved.origin !== base.origin) return false;
     if (allowedPrefix !== undefined && allowedPrefix.length > 0) {
-      const normalizedPrefix = allowedPrefix.startsWith('/') ? allowedPrefix : `/${allowedPrefix}`;
-      if (!resolved.pathname.startsWith(normalizedPrefix)) {
-        return false;
+      const withLeadingSlash = allowedPrefix.startsWith('/') ? allowedPrefix : `/${allowedPrefix}`;
+      const normalizedPrefix = withLeadingSlash.replace(/\/+$/, '');
+      if (normalizedPrefix.length > 0) {
+        if (
+          resolved.pathname !== normalizedPrefix &&
+          !resolved.pathname.startsWith(`${normalizedPrefix}/`)
+        ) {
+          return false;
+        }
       }
     }
     return true;

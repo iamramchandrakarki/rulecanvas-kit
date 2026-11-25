@@ -49,19 +49,18 @@ export function useIntegerDraftStore(
         return { ...prev, [fieldKey]: rawDraft };
       });
 
-      setDraftErrors((prev) => {
-        if (errorMessage === null) {
-          if (!Object.hasOwn(prev, fieldKey)) return prev;
-          const next = { ...prev };
+      if (errorMessage === null) {
+        if (Object.hasOwn(draftErrorsRef.current, fieldKey)) {
+          const next = { ...draftErrorsRef.current };
           delete next[fieldKey];
           draftErrorsRef.current = next;
-          return next;
+          setDraftErrors(next);
         }
-        if (prev[fieldKey] === errorMessage) return prev;
-        const next = { ...prev, [fieldKey]: errorMessage };
+      } else if (draftErrorsRef.current[fieldKey] !== errorMessage) {
+        const next = { ...draftErrorsRef.current, [fieldKey]: errorMessage };
         draftErrorsRef.current = next;
-        return next;
-      });
+        setDraftErrors(next);
+      }
 
       onErrorChangeRef.current?.(fieldKey, errorMessage);
     },
@@ -83,29 +82,18 @@ export function useIntegerDraftStore(
     });
 
     const removedErrorKeys: string[] = [];
-    for (const k of Object.keys(draftErrorsRef.current)) {
+    const nextErrors: Record<string, string> = {};
+    for (const [k, v] of Object.entries(draftErrorsRef.current)) {
       if (matchesDraftPrefix(k, prefix)) {
         removedErrorKeys.push(k);
+      } else {
+        nextErrors[k] = v;
       }
     }
 
     if (removedErrorKeys.length > 0) {
-      setDraftErrors((prev) => {
-        let changed = false;
-        const next: Record<string, string> = {};
-        for (const [k, v] of Object.entries(prev)) {
-          if (matchesDraftPrefix(k, prefix)) {
-            changed = true;
-          } else {
-            next[k] = v;
-          }
-        }
-        if (changed) {
-          draftErrorsRef.current = next;
-          return next;
-        }
-        return prev;
-      });
+      draftErrorsRef.current = nextErrors;
+      setDraftErrors(nextErrors);
       for (const k of removedErrorKeys) {
         onErrorChangeRef.current?.(k, null);
       }
