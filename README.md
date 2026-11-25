@@ -212,7 +212,13 @@ InterlockSim is an educational browser workbench for exploring discrete BSL-3 ai
 
 ## Screenshots
 
-Authentic screenshots and a sub-three-minute walkthrough video for the `v1.0.0` milestone are pending maintainer capture and integration. Headless Chromium regression screenshots generated during `pnpm test:browser` are written to `SCREENSHOT_DIR` (outside git tracking) and are not checked in as marketing assets.
+**AgentGate.** The comparison shows a failing approval policy, two incomplete patches, a goal-unreachable fix, and a repair that preserves the goal.
+
+![AgentGate comparison table showing five presets with verdicts, states explored, and goal reachability](docs/screenshots/agent-gate.png)
+
+**InterlockSim.** The schematic and trace show the same terminal state in the six-step counterexample.
+
+![InterlockSim schematic, operator controls, verification verdict, and replay timeline](docs/screenshots/interlock-sim.png)
 
 ## Build, Pack, and Verification Instructions
 
