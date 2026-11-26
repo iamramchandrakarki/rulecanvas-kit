@@ -27,7 +27,7 @@ The timestamps follow the captioned recording. Both workbenches can be run from 
 | 0:19–0:32 | Open **Compare All 5 Presets**. Highlight the goal column for **Vacuous Fix** and **Principled Fix**. | The comparison shows why a passing invariant alone can be misleading. The vacuous fix makes the goal unreachable. The principled fix preserves safety and still reaches the goal. |
 | 0:32–0:43 | Follow the **InterlockSim** link and show the schematic and six-step trace. | InterlockSim uses the same verification core for a different domain, an educational discrete airlock model. The operator console shows the counterexample and the state of both doors. |
 | 0:43–0:54 | Select **Apply Principled Repair**, then **Verify Interlock Model**. Show `VERIFIED` and **Goal reachable: Yes**. | Apply the modeled repair and verify again. The reachable states satisfy the invariant and the goal remains reachable. Both results apply within each model and its stated assumptions. |
-| 0:54–1:04 | Show the shared package layout and Kiro steering. | The shared foundation contains the verifier, replay helpers, worker transport, and React adapters. Kiro steering keeps the package boundaries explicit. |
+| 0:54–1:04 | Show the closing card with the shared layers and repository link. | The shared foundation contains the verifier, replay helpers, worker transport, and React adapters. Kiro steering keeps the package boundaries explicit. |
 
 ## Submission checklist
 
