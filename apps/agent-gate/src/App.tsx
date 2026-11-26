@@ -18,18 +18,20 @@ import {
   type ReplaySession,
 } from '@rulecanvas/ui';
 import {
+  WorkbenchBrandMark,
+  WorkbenchDiscardDialog,
   WorkbenchNavigation,
+  WorkbenchThemeSwitch,
   readPresetFromSearch,
   useVerificationSnapshot,
   useWorkbenchRoute,
+  useWorkbenchTheme,
   type WorkbenchNavLink,
 } from '@rulecanvas/workbench-react';
 import { DEFAULT_VERIFY_OPTIONS, runPresetComparison } from './comparison.js';
 import { ComparisonPanel } from './components/ComparisonPanel.js';
-import { PolicyEditorPane } from './components/PolicyEditorPane.js';
-import {
-  VerificationWorkbenchPane,
-} from './components/VerificationWorkbenchPane.js';
+import { PolicyEditorPane, type FocusedRuleRequest } from './components/PolicyEditorPane.js';
+import { VerificationWorkbenchPane } from './components/VerificationWorkbenchPane.js';
 import { indexModelDiagnostics, parseStrictIntegerDraft } from './model-editor.js';
 import { AGENT_GATE_PRESETS, getPresetDescriptor, loadPresetModel } from './presets.js';
 import type { ApprovalLaunderingVariant } from './scenarios/approval-laundering.js';
@@ -122,6 +124,8 @@ export function App({
   initialShowComparison = false,
   workerFactory,
 }: AppProps) {
+  const theme = useWorkbenchTheme();
+
   const resolvedInitialVariant: ApprovalLaunderingVariant =
     initialVariant ??
     (typeof window !== 'undefined'
@@ -145,6 +149,8 @@ export function App({
   const [editorDraftErrorMap, setEditorDraftErrorMap] = useState<Readonly<Record<string, string>>>(
     {},
   );
+  const [focusedRuleRequest, setFocusedRuleRequest] = useState<FocusedRuleRequest | null>(null);
+  const focusSeqRef = useRef<number>(0);
 
   const modelRevisionRef = useRef(0);
   const createClient = useCallback(() => createAppVerifyClient(workerFactory), [workerFactory]);
@@ -270,6 +276,18 @@ export function App({
     [verifiedSnapshot],
   );
 
+  const activeTraceStepsByRuleId = useMemo((): Readonly<Record<string, readonly number[]>> => {
+    if (replaySession === null || replaySession.steps.length === 0) return {};
+    const map: Record<string, number[]> = {};
+    replaySession.steps.forEach((step, idx) => {
+      if (!Object.hasOwn(map, step.ruleId)) {
+        map[step.ruleId] = [];
+      }
+      map[step.ruleId]!.push(idx + 1);
+    });
+    return map;
+  }, [replaySession]);
+
   const runVerification = (
     targetModel: TransitionSystemModel,
     targetLabel: string,
@@ -280,10 +298,12 @@ export function App({
     setCancelledNotice(null);
     setReplayError(null);
 
-    if (targetOptions === null ||
+    if (
+      targetOptions === null ||
       targetOptionErrors.length > 0 ||
       targetDraftErrors.length > 0 ||
-      validateModel(targetModel).length > 0) {
+      validateModel(targetModel).length > 0
+    ) {
       clearVerification();
       return;
     }
@@ -305,6 +325,7 @@ export function App({
     latestEditorDraftErrorMapRef.current = {};
     setEditorDraftErrorMap({});
     setJsonDraftDirty(false);
+    setFocusedRuleRequest(null);
     setEditorResetKey((prev) => prev + 1);
 
     latestActivePresetRef.current = variant;
@@ -335,6 +356,7 @@ export function App({
     latestEditorDraftErrorMapRef.current = {};
     setEditorDraftErrorMap({});
     setJsonDraftDirty(false);
+    setFocusedRuleRequest(null);
     setEditorResetKey((prev) => prev + 1);
 
     latestActivePresetRef.current = null;
@@ -390,7 +412,8 @@ export function App({
     setShowComparison((prev) => !prev);
   };
 
-  const handleVerifyCurrent = () => {
+  const handleVerifyCurrent = useCallback(() => {
+    if (isPending()) return;
     const syncModel = latestModelRef.current;
     const syncPreset = latestActivePresetRef.current;
     const syncDraftErrors: ValidationError[] = Object.entries(
@@ -407,7 +430,12 @@ export function App({
       optionErrors,
       syncDraftErrors,
     );
-  };
+  }, [isPending, optionErrors, parsedOptions]);
+
+  const handleInspectRule = useCallback((ruleId: string) => {
+    focusSeqRef.current += 1;
+    setFocusedRuleRequest({ ruleId, seq: focusSeqRef.current });
+  }, []);
 
   const handleResetReplay = () => {
     if (replaySession === null) return;
@@ -504,17 +532,35 @@ export function App({
     }
   }, [pendingPrompt !== null]);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handleGlobalShortcut = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && pendingPrompt === null) {
+        event.preventDefault();
+        handleVerifyCurrent();
+      }
+    };
+    window.addEventListener('keydown', handleGlobalShortcut);
+    return () => window.removeEventListener('keydown', handleGlobalShortcut);
+  }, [handleVerifyCurrent, pendingPrompt]);
+
+  const scrollToSection = (elementId: string) => {
+    if (typeof document === 'undefined') return;
+    document.getElementById(elementId)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
   return (
     <div className="ag-shell">
       <header className="ag-topbar">
         <div className="ag-brand">
-          <h1 className="ag-brand-mark">
-            <span className="ag-brand-glyph" aria-hidden="true" />
-            AgentGate
-          </h1>
-          <span className="ag-brand-subtitle">
-            Discrete finite-state policy verification workbench
+          <span className="ag-brand-suite">
+            <WorkbenchBrandMark className="ag-brand-icon" />
+            <span>RuleCanvasKit</span>
+            <span className="ag-brand-sep" aria-hidden="true">
+              /
+            </span>
           </span>
+          <h1 className="ag-brand-mark">AgentGate</h1>
           <WorkbenchNavigation
             current="agent-gate"
             links={WORKBENCH_NAV_LINKS}
@@ -625,6 +671,9 @@ export function App({
           <button
             type="button"
             className="ag-btn ag-btn-primary"
+            disabled={isRunning}
+            aria-busy={isRunning ? 'true' : undefined}
+            title="Run bounded BFS verification (Ctrl/Cmd+Enter)"
             onClick={handleVerifyCurrent}
           >
             Verify Policy
@@ -638,42 +687,32 @@ export function App({
           >
             Compare All 5 Presets
           </button>
+
+          <WorkbenchThemeSwitch
+            value={theme.preference}
+            onChange={theme.setPreference}
+            className="ag-theme-switch"
+            buttonClassName="ag-theme-btn"
+            activeButtonClassName="ag-theme-btn-active"
+          />
         </div>
       </header>
 
       {pendingPrompt !== null && (
-        <div
-          className="ag-discard-banner"
-          role="alertdialog"
-          aria-labelledby="ag-discard-title"
-          aria-describedby="ag-discard-desc"
-          onKeyDown={(e) => {
-            if (e.key === 'Escape') {
-              e.preventDefault();
-              declinePrompt();
-            }
-          }}
-        >
-          <div>
-            <strong id="ag-discard-title">Unsaved Custom Edits</strong>
-            <p id="ag-discard-desc">
-              {pendingPrompt.label} will discard your current unsaved custom edits.
-            </p>
-          </div>
-          <div className="ag-inline-actions">
-            <button
-              ref={stayHereButtonRef}
-              type="button"
-              className="ag-btn ag-btn-sm ag-btn-secondary"
-              onClick={declinePrompt}
-            >
-              Stay Here
-            </button>
-            <button type="button" className="ag-btn ag-btn-sm ag-btn-primary" onClick={acceptPrompt}>
-              Discard &amp; Continue
-            </button>
-          </div>
-        </div>
+        <WorkbenchDiscardDialog
+          ref={stayHereButtonRef}
+          idPrefix="ag"
+          actionLabel={pendingPrompt.label}
+          onDecline={declinePrompt}
+          onAccept={acceptPrompt}
+          backdropClassName="ag-dialog-backdrop"
+          dialogClassName="ag-discard-dialog"
+          titleClassName="ag-discard-title"
+          descriptionClassName="ag-discard-desc"
+          actionsClassName="ag-discard-actions"
+          stayButtonClassName="ag-btn ag-btn-sm ag-btn-secondary"
+          acceptButtonClassName="ag-btn ag-btn-sm ag-btn-primary"
+        />
       )}
 
       <div className="ag-context-strip">
@@ -683,9 +722,28 @@ export function App({
             ? `: ${activePresetInfo.summary}`
             : ': Edited custom policy model'}
         </span>
-        {activePresetInfo !== null && (
-          <span className="ag-context-note">{activePresetInfo.policyNote}</span>
-        )}
+
+        <div className="ag-inline-actions">
+          {activePresetInfo !== null && (
+            <span className="ag-context-note">{activePresetInfo.policyNote}</span>
+          )}
+          <div className="ag-mobile-jump" role="navigation" aria-label="Workspace pane jump">
+            <button
+              type="button"
+              className="ag-btn ag-btn-sm"
+              onClick={() => scrollToSection('ag-verdict-pane')}
+            >
+              Jump to Verdict &amp; Trace
+            </button>
+            <button
+              type="button"
+              className="ag-btn ag-btn-sm"
+              onClick={() => scrollToSection('ag-editor-pane')}
+            >
+              Jump to Editor
+            </button>
+          </div>
+        </div>
       </div>
 
       {showComparison && (
@@ -704,6 +762,8 @@ export function App({
           model={model}
           diagnostics={diagnostics}
           resetKey={editorResetKey}
+          activeTraceStepsByRuleId={activeTraceStepsByRuleId}
+          focusedRuleRequest={focusedRuleRequest}
           onChangeModel={handleChangeModel}
           onImportModel={handleImportModel}
           onDraftErrorChange={handleEditorDraftErrorChange}
@@ -731,6 +791,7 @@ export function App({
           onJumpToStep={handleJumpToStep}
           onApplyManualStep={handleApplyManualStep}
           onRestoreVerdictTrace={handleRestoreVerdictTrace}
+          onInspectRule={handleInspectRule}
         />
       </main>
     </div>

@@ -33,6 +33,7 @@ import {
   applySchemaVarRenameState,
   matchesDraftPrefix,
   resolveOrderedSchemaKeys,
+  resolveQuickBooleanVariable,
   shouldPruneGuardDraftsOnAppend,
   tryExportModelJson,
 } from '../src/components/PolicyEditorPane.js';
@@ -1705,5 +1706,95 @@ describe('AgentGate workbench domain modules and UI', () => {
     if (!nonIntWithTrailingComma.ok) {
       expect(nonIntWithTrailingComma.errors[0]?.code).toBe('NON_INTEGER_JSON_NUMBER');
     }
+  });
+
+  it('prevents non-Boolean quick-clause corruption, deduplicates violation/shortcut UI, and ships self-hosted Light/Dark tokens', () => {
+    const intEnumModel: TransitionSystemModel = {
+      id: 'int-enum-policy',
+      name: 'Integer and Enum Only Policy',
+      schema: {
+        revision: { kind: 'int', min: 0, max: 3 },
+        stage: { kind: 'enum', values: ['draft', 'published'] },
+      },
+      initialState: {
+        revision: 0,
+        stage: 'draft',
+      },
+      rules: [
+        {
+          id: 'publish_step',
+          label: 'Publish revision',
+          guard: {
+            op: 'gte',
+            left: { op: 'var', name: 'revision' },
+            right: { op: 'lit', value: 1 },
+          },
+          updates: [{ var: 'stage', value: { op: 'lit', value: 'published' } }],
+        },
+      ],
+      invariants: [
+        {
+          id: 'inv_stage_revision',
+          label: 'Published requires revision >= 1',
+          holds: {
+            op: 'or',
+            args: [
+              { op: 'neq', left: { op: 'var', name: 'stage' }, right: { op: 'lit', value: 'published' } },
+              { op: 'gte', left: { op: 'var', name: 'revision' }, right: { op: 'lit', value: 1 } },
+            ],
+          },
+        },
+      ],
+      assumptions: [
+        {
+          id: 'asm_int_enum',
+          category: 'scope',
+          statement: 'Non-boolean schema test.',
+          notModeled: 'External state.',
+        },
+      ],
+    };
+
+    expect(validateModel(intEnumModel)).toEqual([]);
+    expect(
+      resolveQuickBooleanVariable(['revision', 'stage'], intEnumModel.schema, 'revision'),
+    ).toBe('');
+
+    const intEnumEditorHtml = renderToStaticMarkup(
+      createElement(PolicyEditorPane, {
+        model: intEnumModel,
+        diagnostics: indexModelDiagnostics([]),
+        onChangeModel: () => {},
+        onImportModel: () => {},
+      }),
+    );
+    expect(intEnumEditorHtml).not.toContain('quick-clause-var');
+    expect(intEnumEditorHtml).not.toContain('+ Append');
+
+    // Broken preset: VIOLATED verdict shows non-competing witness note, no duplicate Violated Invariants line,
+    // rule-specific disclosure labels, trace-to-rule jump action, and no duplicate !modifiedSinceApproval button
+    const brokenAppHtml = renderToStaticMarkup(createElement(App, { initialVariant: 'broken' }));
+    expect(brokenAppHtml).toContain('Goal witnessed on valid prefix');
+    expect(brokenAppHtml).not.toContain('Violated Invariants:</strong>');
+    expect(brokenAppHtml).toContain('Violated invariants: inv_no_confidential_publish.');
+    const publishRowStart = brokenAppHtml.indexOf('data-rule-id="publish_release_notes"');
+    expect(publishRowStart).toBeGreaterThan(-1);
+    const publishRowSlice = brokenAppHtml.slice(publishRowStart);
+    expect(publishRowSlice).toContain('+ Add !modifiedSinceApproval');
+    expect(publishRowSlice).not.toContain('+ Append !modifiedSinceApproval');
+    expect(brokenAppHtml).toContain(
+      'aria-label="Edit rule definition, guard AST, and atomic updates for publish_release_notes"',
+    );
+    expect(brokenAppHtml).toContain('aria-label="Inspect rule publish_release_notes in editor"');
+    expect(brokenAppHtml).toContain('aria-label="Color theme"');
+
+    // Tokens CSS self-hosts WOFF2 subsets for IBM Plex Sans & Mono and defines Light + Dark themes
+    const tokensCss = readFileSync(new URL('../src/styles/tokens.css', import.meta.url), 'utf8');
+    expect(tokensCss).toContain("font-family: 'IBM Plex Sans'");
+    expect(tokensCss).toContain("font-family: 'IBM Plex Mono'");
+    expect(tokensCss).toContain('.woff2');
+    expect(tokensCss).not.toMatch(/https?:\/\//i);
+    expect(tokensCss).toContain("color-scheme: light;");
+    expect(tokensCss).toContain("color-scheme: dark;");
   });
 });

@@ -43,6 +43,7 @@ export interface VerificationWorkbenchPaneProps {
   readonly onJumpToStep: (stepIndex: number) => void;
   readonly onApplyManualStep: (ruleId: string) => void;
   readonly onRestoreVerdictTrace: () => void;
+  readonly onInspectRule?: ((ruleId: string) => void) | undefined;
 }
 
 function describeExecutionMode(mode: VerifyExecutionMode): string {
@@ -95,6 +96,7 @@ export function VerificationWorkbenchPane({
   onJumpToStep,
   onApplyManualStep,
   onRestoreVerdictTrace,
+  onInspectRule,
 }: VerificationWorkbenchPaneProps) {
   const result = verifiedSnapshot?.result ?? null;
   const verdictView = result !== null ? buildVerdictSummaryView(result) : null;
@@ -145,27 +147,25 @@ export function VerificationWorkbenchPane({
 
   return (
     <section
+      id="ag-verdict-pane"
       className="ag-pane ag-pane-workbench"
       aria-label="Verification results and counterexample workbench"
     >
       <div className="ag-pane-header">
-        <div>
-          <h2 className="ag-pane-title">Verification &amp; Counterexample Workbench</h2>
-          <p className="ag-pane-subtitle">
-            Deterministic BFS exploration, shortest counterexample replay, and manual transition stepping.
-          </p>
-        </div>
-        {isStale && !isRunning && (
+        <h2 className="ag-pane-title">Verification &amp; Counterexample Workbench</h2>
+        {isStale && !isRunning ? (
           <button type="button" className="ag-btn ag-btn-sm ag-btn-active" onClick={onVerifyNow}>
             Re-verify Now
           </button>
+        ) : (
+          <span className="ag-meta-inline">Bounded BFS &amp; shortest trace</span>
         )}
       </div>
 
       <div className="ag-workbench-body">
         {/* 1. Running state */}
         {isRunning && (
-          <div className="ag-verdict" role="status" aria-live="polite">
+          <div className="ag-verdict" role="status" aria-live="polite" data-tone="running">
             <div className="ag-verdict-top">
               <span className="ag-badge" data-tone="running">
                 <span aria-hidden="true">…</span> RUNNING
@@ -182,13 +182,13 @@ export function VerificationWorkbenchPane({
             <p className="ag-verdict-detail">
               {runningExecutionMode === 'main-thread'
                 ? 'Web Workers are unavailable in this runtime. Verification runs deterministically on the main thread.'
-                : 'The deterministic verifier runs off the main thread so editing and inspection remain responsive.'}
+                : 'Verification runs off the main thread so rule inspection and editing stay responsive.'}
             </p>
           </div>
         )}
 
-        {/* 2. Cancellation notice */}
-        {!isRunning && cancelledNotice !== null && (
+        {/* 2. Cancellation notice (only when a previous snapshot still exists; when null, section 5 covers it cleanly) */}
+        {!isRunning && cancelledNotice !== null && verifiedSnapshot !== null && (
           <div className="ag-alert ag-alert-warning" role="status">
             <div className="ag-section-header">
               <strong>Verification Cancelled</strong>
@@ -243,9 +243,11 @@ export function VerificationWorkbenchPane({
                     ? 'INVALID'
                     : 'NOT YET VERIFIED'}
               </span>
-              <button type="button" className="ag-btn ag-btn-sm ag-btn-primary" onClick={onVerifyNow}>
-                Verify Policy
-              </button>
+              {activeErrors.length === 0 && (
+                <button type="button" className="ag-btn ag-btn-sm ag-btn-primary" onClick={onVerifyNow}>
+                  Verify Policy
+                </button>
+              )}
             </div>
             <p className="ag-verdict-headline">
               {cancelledNotice !== null
@@ -256,10 +258,10 @@ export function VerificationWorkbenchPane({
             </p>
             <p className="ag-verdict-detail">
               {cancelledNotice !== null
-                ? 'No verdict or counterexample replay is shown because the verification run was cancelled before completion.'
+                ? cancelledNotice
                 : activeErrors.length > 0
-                  ? 'Fix the validation errors above, then run Verify Policy to compute a fresh verdict and trace.'
-                  : 'Run Verify Policy to compute a deterministic verdict and counterexample replay for the active policy model.'}
+                  ? 'Resolve the validation diagnostics above, then run Verify Policy to compute a fresh verdict.'
+                  : 'Run Verify Policy to compute a deterministic verdict and counterexample replay for the active model.'}
             </p>
           </section>
         )}
@@ -274,11 +276,10 @@ export function VerificationWorkbenchPane({
               </button>
             </div>
             <p>
-              The verdict and replay below were computed for{' '}
-              <strong>{verifiedSnapshot.modelLabel}</strong> under{' '}
+              Results below belong to <strong>{verifiedSnapshot.modelLabel}</strong> under{' '}
               <code>maxStates={verifiedSnapshot.options.maxStates}</code>,{' '}
-              <code>maxDepth={verifiedSnapshot.options.maxDepth}</code>. Current policy edits,
-              bounds, or uncommitted numeric drafts have not been verified yet.
+              <code>maxDepth={verifiedSnapshot.options.maxDepth}</code>. Pending edits have not been
+              verified yet.
             </p>
           </div>
         )}
@@ -310,15 +311,19 @@ export function VerificationWorkbenchPane({
                   </>
                 )}
               </span>
-              {verdictView.goalReachable !== undefined && (
-                <span
-                  className="ag-badge"
-                  data-tone={verdictView.goalReachable ? 'success' : 'warning'}
-                >
-                  <span aria-hidden="true">{verdictView.goalReachable ? '✓' : '○'}</span>{' '}
-                  {verdictView.goalReachable ? 'Goal reachable: Yes' : 'Goal reachable: No'}
-                </span>
-              )}
+
+              {verdictView.goalReachable !== undefined &&
+                (verdictView.status === 'VERIFIED' ? (
+                  <span
+                    className="ag-badge"
+                    data-tone={verdictView.goalReachable ? 'success' : 'warning'}
+                  >
+                    <span aria-hidden="true">{verdictView.goalReachable ? '✓' : '○'}</span>{' '}
+                    {verdictView.goalReachable ? 'Goal reachable: Yes' : 'Goal reachable: No'}
+                  </span>
+                ) : verdictView.goalReachable ? (
+                  <span className="ag-verdict-witness">Goal witnessed on valid prefix</span>
+                ) : null)}
             </div>
 
             <p className="ag-verdict-headline">{verdictView.headline}</p>
@@ -337,7 +342,9 @@ export function VerificationWorkbenchPane({
               <div className="ag-alert ag-alert-warning" role="alert">
                 <strong>Vacuous Fix Warning</strong>
                 <p>
-                  Every reachable state satisfies the declared invariants, but the declared goal predicate is never reached. A policy that blocks all progress is not a functional fix.
+                  Every reachable state satisfies the declared invariants, but the declared goal
+                  predicate is never reached. A policy that blocks all progress is not a functional
+                  fix.
                 </p>
               </div>
             )}
@@ -346,22 +353,12 @@ export function VerificationWorkbenchPane({
               <div className="ag-alert ag-alert-warning" role="status">
                 <strong>Incomplete Exploration ({verdictView.inconclusiveReason})</strong>
                 <p>
-                  Completed depth: <code className="ag-tabular">{verdictView.completedDepth ?? 0}</code> |
-                  Frontier states remaining:{' '}
+                  Completed depth:{' '}
+                  <code className="ag-tabular">{verdictView.completedDepth ?? 0}</code> | Frontier
+                  states remaining:{' '}
                   <code className="ag-tabular">{verdictView.frontierRemaining ?? 0}</code>. Increase
                   bounds to exhaustively verify this model.
                 </p>
-              </div>
-            )}
-
-            {verdictView.violatedInvariantIds.length > 0 && (
-              <div>
-                <strong style={{ fontSize: 12.5 }}>Violated Invariants:</strong>{' '}
-                {verdictView.violatedInvariantIds.map((invId) => (
-                  <code key={invId} style={{ marginRight: 8 }}>
-                    {invId}
-                  </code>
-                ))}
               </div>
             )}
 
@@ -390,11 +387,11 @@ export function VerificationWorkbenchPane({
                 </h3>
                 <p className="ag-pane-subtitle">
                   {isStale
-                    ? `Inspecting outdated verified snapshot "${verifiedSnapshot.modelLabel}" (maxStates=${verifiedSnapshot.options.maxStates}, maxDepth=${verifiedSnapshot.options.maxDepth}). Re-verify to inspect current edits.`
-                    : `Inspecting verified snapshot "${verifiedSnapshot.modelLabel}" (maxStates=${verifiedSnapshot.options.maxStates}, maxDepth=${verifiedSnapshot.options.maxDepth}). Step through transitions or execute any enabled rule.`}
+                    ? `Outdated snapshot "${verifiedSnapshot.modelLabel}" (maxStates=${verifiedSnapshot.options.maxStates}, maxDepth=${verifiedSnapshot.options.maxDepth}).`
+                    : `Verified snapshot "${verifiedSnapshot.modelLabel}" (maxStates=${verifiedSnapshot.options.maxStates}, maxDepth=${verifiedSnapshot.options.maxDepth}).`}
                 </p>
               </div>
-              <span className="ag-badge">
+              <span className="ag-meta-inline">
                 {replaySession.mode === 'trace' ? 'Mode: Counterexample' : 'Mode: Manual'}
               </span>
             </div>
@@ -449,7 +446,10 @@ export function VerificationWorkbenchPane({
 
             {/* Step Timeline List */}
             <ol className="ag-timeline" aria-label="Execution trace steps">
-              <li className="ag-timeline-item">
+              <li
+                className="ag-timeline-item"
+                data-active={replaySession.cursor === 0 ? 'true' : 'false'}
+              >
                 <button
                   type="button"
                   className="ag-timeline-btn"
@@ -469,7 +469,11 @@ export function VerificationWorkbenchPane({
                 const label = ruleLabels.get(step.ruleId);
 
                 return (
-                  <li key={`${step.ruleId}-${stepNum}`} className="ag-timeline-item">
+                  <li
+                    key={`${step.ruleId}-${stepNum}`}
+                    className="ag-timeline-item"
+                    data-active={isActive ? 'true' : 'false'}
+                  >
                     <button
                       type="button"
                       className="ag-timeline-btn"
@@ -502,6 +506,17 @@ export function VerificationWorkbenchPane({
                         </div>
                       )}
                     </button>
+
+                    {onInspectRule !== undefined && (
+                      <button
+                        type="button"
+                        className="ag-btn ag-btn-sm ag-timeline-jump"
+                        aria-label={`Inspect rule ${step.ruleId} in editor`}
+                        onClick={() => onInspectRule(step.ruleId)}
+                      >
+                        Inspect rule
+                      </button>
+                    )}
                   </li>
                 );
               })}
@@ -509,10 +524,10 @@ export function VerificationWorkbenchPane({
 
             {/* Live State Variable Table built via @rulecanvas/ui buildStateTableView */}
             {stateTableView !== null && (
-              <div className="ag-section" style={{ paddingTop: 12, borderTop: 'none' }}>
+              <div className="ag-section" style={{ paddingTop: 8, borderTop: 'none' }}>
                 <div className="ag-section-header">
                   <h4 className="ag-section-title">State Variables at Step {replaySession.cursor}</h4>
-                  <span className="ag-mono ag-tabular" style={{ fontSize: 12, color: 'var(--color-ink-muted)' }}>
+                  <span className="ag-meta-inline">
                     {stateTableView.changedCount} modified on active step
                   </span>
                 </div>
@@ -591,11 +606,11 @@ export function VerificationWorkbenchPane({
                             <div className="ag-mono" style={{ fontWeight: 600 }}>
                               {inv.id}
                             </div>
-                            <div style={{ fontSize: 12, color: 'var(--color-ink-muted)' }}>
+                            <div style={{ fontSize: 11.5, color: 'var(--color-ink-muted)' }}>
                               {inv.label}
                             </div>
                           </td>
-                          <td className="ag-mono" style={{ fontSize: 12 }}>
+                          <td className="ag-mono" style={{ fontSize: 11.5 }}>
                             {inv.expressionText}
                           </td>
                           <td>
@@ -614,11 +629,11 @@ export function VerificationWorkbenchPane({
                             <div className="ag-mono" style={{ fontWeight: 600 }}>
                               {invariantsPanelView.goal.id}
                             </div>
-                            <div style={{ fontSize: 12, color: 'var(--color-ink-muted)' }}>
+                            <div style={{ fontSize: 11.5, color: 'var(--color-ink-muted)' }}>
                               {invariantsPanelView.goal.label}
                             </div>
                           </td>
-                          <td className="ag-mono" style={{ fontSize: 12 }}>
+                          <td className="ag-mono" style={{ fontSize: 11.5 }}>
                             {invariantsPanelView.goal.expressionText}
                           </td>
                           <td>
@@ -645,8 +660,8 @@ export function VerificationWorkbenchPane({
             {/* Manual Rule Execution Controls */}
             <div className="ag-section">
               <div className="ag-section-header">
-                <h4 className="ag-section-title">Manual Rule Execution (Step / Branch from Current State)</h4>
-                <span className="ag-mono ag-tabular" style={{ fontSize: 12, color: 'var(--color-ink-muted)' }}>
+                <h4 className="ag-section-title">Manual Rule Execution</h4>
+                <span className="ag-meta-inline">
                   {replaySession.enabledTransitions.filter((t) => t.enabled).length} of{' '}
                   {replaySession.enabledTransitions.length} enabled
                 </span>
@@ -689,23 +704,23 @@ export function VerificationWorkbenchPane({
                 <h3 className="ag-section-title">
                   Modeling Assumptions &amp; Scope Disclosure ({verifiedAssumptions.length})
                 </h3>
-                <span className="ag-badge">
+                <span className="ag-meta-inline">
                   Scope of verified snapshot: {verifiedSnapshot.modelLabel}
                 </span>
               </div>
               <p className="ag-scope-note">
                 Scope of verified snapshot: <strong>{verifiedSnapshot.modelLabel}</strong>.
-                Verification verdicts hold strictly within the declared discrete finite-state model
-                and its explicit assumptions below. AgentGate is a design-time finite-state
-                verification workbench, not a live runtime enforcement proxy or external production
-                security audit.
+                Verdicts hold strictly within the declared discrete finite-state model and its
+                explicit assumptions below. AgentGate is a design-time policy verification
+                workbench, not a live runtime enforcement proxy or external production security
+                audit.
               </p>
               <div className="ag-assumptions-list">
                 {verifiedAssumptions.map((asm, idx) => (
                   <div key={`${asm.id}-${idx}`} className="ag-assumption-item">
                     <div className="ag-section-header">
                       <strong className="ag-mono">{asm.id}</strong>
-                      <span className="ag-badge">{asm.category}</span>
+                      <span className="ag-assumption-category">{asm.category}</span>
                     </div>
                     <p>{asm.statement}</p>
                     <p className="ag-assumption-not-modeled">
@@ -716,25 +731,29 @@ export function VerificationWorkbenchPane({
               </div>
 
               {hasPendingEditedAssumptions && (
-                <div className="ag-pending-assumptions" role="region" aria-label="Pending edited assumptions">
+                <div
+                  className="ag-pending-assumptions"
+                  role="region"
+                  aria-label="Pending edited assumptions"
+                >
                   <div className="ag-section-header">
                     <h4 className="ag-section-title">
                       Pending Edited Assumptions (Unverified) ({model.assumptions.length})
                     </h4>
                     <span className="ag-badge" data-tone="warning">
-                      UNVERIFIED DRAFT
+                      <span aria-hidden="true">!</span> UNVERIFIED DRAFT
                     </span>
                   </div>
                   <p className="ag-pane-subtitle">
-                    These edited assumptions belong to the current unverified policy draft and do
-                    not apply to the verified snapshot above until you re-verify.
+                    These edited assumptions belong to the unverified policy draft and do not apply
+                    to the verified snapshot above until you re-verify.
                   </p>
                   <div className="ag-assumptions-list">
                     {model.assumptions.map((asm, idx) => (
                       <div key={`pending-${asm.id}-${idx}`} className="ag-assumption-item">
                         <div className="ag-section-header">
                           <strong className="ag-mono">{asm.id}</strong>
-                          <span className="ag-badge">{asm.category}</span>
+                          <span className="ag-assumption-category">{asm.category}</span>
                         </div>
                         <p>{asm.statement}</p>
                         <p className="ag-assumption-not-modeled">
@@ -753,7 +772,7 @@ export function VerificationWorkbenchPane({
                   Draft Model Assumptions (Unverified) ({model.assumptions.length})
                 </h3>
                 <span className="ag-badge" data-tone="warning">
-                  UNVERIFIED DRAFT
+                  <span aria-hidden="true">!</span> UNVERIFIED DRAFT
                 </span>
               </div>
               <p className="ag-scope-note">
@@ -767,7 +786,7 @@ export function VerificationWorkbenchPane({
                   <div key={`draft-${asm.id}-${idx}`} className="ag-assumption-item">
                     <div className="ag-section-header">
                       <strong className="ag-mono">{asm.id}</strong>
-                      <span className="ag-badge">{asm.category}</span>
+                      <span className="ag-assumption-category">{asm.category}</span>
                     </div>
                     <p>{asm.statement}</p>
                     <p className="ag-assumption-not-modeled">
