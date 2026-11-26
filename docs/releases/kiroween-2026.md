@@ -2,7 +2,7 @@
 
 ## Freeze the candidate
 
-Use [draft PR #17](https://github.com/iamramchandrakarki/rulecanvas-kit/pull/17) (`feat/phase6-workbench-integration`) as the release candidate, and record its final reviewed head SHA and passing CI run ID before deployment or tagging. (Prior tested app and library baseline before adding release-preflight tooling: `634435e152faca6dfd70aed3abcee768d033568a`, [CI run 45767754874](https://github.com/iamramchandrakarki/rulecanvas-kit/actions/runs/45767754874).) The freeze covers the verifier, model format, UI, presets, and runtime dependencies. Keep the existing branches, tags, and evidence. If the selected source revision changes, record its exact SHA and use the passing evidence for that revision.
+Use `main` at the `v0.5.0` release revision as the candidate (merged from [PR #17](https://github.com/iamramchandrakarki/rulecanvas-kit/pull/17) at `eb03d2980cdc12db4ebf346fb851b93d29c26337`, with cold-cache `verify-pack` CI fix at `e8299e2dc8950599191dbe63d78ddb29919af220`, [CI run 45782231512](https://github.com/iamramchandrakarki/rulecanvas-kit/actions/runs/45782231512)). The freeze covers the verifier, model format, UI, presets, and runtime dependencies. Keep the existing branches, tags, and evidence. If the selected source revision changes, record its exact SHA and use the passing evidence for that revision.
 
 ## Audit the submission
 
@@ -14,7 +14,7 @@ Use [draft PR #17](https://github.com/iamramchandrakarki/rulecanvas-kit/pull/17)
 | Entrant ownership, rights, and third-party permissions | MIT license and repository source are present. Entrant must confirm original work, ownership and permission for dependencies, assets and demo media, and absence of disqualifying financial or preferential support. |
 | Skeleton Crew category and two distinct app folders | AgentGate and InterlockSim live under `apps/agent-gate` and `apps/interlock-sim`. Both use the same model checker. Select Skeleton Crew in the form. Leave optional categories blank unless the entrant can provide the required evidence. |
 | Working project on its intended platform | Both browser apps and their workers passed the local and CI gates. The staged archives passed a fresh same-origin smoke test at both a root and a repository subpath. |
-| Functional app URLs and free judge access | Pending deployment. Provide direct URLs for both apps and keep them publicly accessible through the end of judging on January 29, 2027 at 1:00 p.m. Pacific. Verify signed out. |
+| Functional app URLs and free judge access | Deployed on Cloudflare Pages (`rulecanvaskit` project, deployment `https://d100be44.rulecanvaskit.pages.dev`): https://rulecanvaskit.pages.dev/agent-gate/ and https://rulecanvaskit.pages.dev/interlock-sim/. Verified publicly over HTTPS with `Background Web Worker` execution, preset deep links, and reciprocal navigation. Keep hosting available through January 29, 2027 at 1:00 p.m. Pacific. |
 | Public GitHub source, instructions, assets and detectable open-source license | GitHub reports PUBLIC and MIT. The candidate contains source, assets, and setup and build instructions. At submission, use a public repository link plus a direct link to the source revision matching the live apps. |
 | Visible, tracked root `.kiro/` | Candidate tracks steering, the hook definition, the specs directory README, and `.kiro/specs/release-artifact-preflight/`. Preserve these paths and verify them on the submitted revision. |
 | Working project built using Kiro and a factual usage write-up | Recorded Kiro review influenced the legacy worker fix and regression test, a separate CLI session loaded tracked steering, and `.kiro/specs/release-artifact-preflight/` executed the release preflight spec. The [write-up](../TOOL_ATTRIBUTION.md) describes all three activities. The judge decides whether the evidence establishes sufficient use. |
@@ -80,7 +80,7 @@ For a GitHub Pages fallback, choose **Settings → Pages → Source → GitHub A
 Replace the example base with the actual Pages URL. Include `/rulecanvas-kit` in the base for GitHub Pages.
 
 ```bash
-base='https://<assigned-project>.pages.dev'
+base='https://rulecanvaskit.pages.dev'
 curl -fsSL -o /dev/null -w '%{http_code} %{url_effective}\n' "$base/agent-gate/?preset=broken"
 curl -fsSL -o /dev/null -w '%{http_code} %{url_effective}\n' "$base/interlock-sim/?preset=broken"
 ```
@@ -105,7 +105,7 @@ curl -fsSL -o /dev/null -w '%{http_code} %{url_effective}\n' "$base/interlock-si
 | --- | --- |
 | Potential impact | AgentGate shows why a permitted approval sequence can still violate a policy, and the goal column makes overblocking visible. Lead with release and workflow reviewers. The airlock example shows abstraction reuse in education. |
 | Technological implementation | The exact BFS, replay, seeded differential tests and offline booking consumer show engineering depth. For the Kiro-specific criterion, show the review finding, its regression test, what the CLI steering actually enforced, and the executed release artifact preflight spec tracing requirements to tests. |
-| Design | The flows go from preset to verdict to replay and repair. Direct links and an explanation of “goal reachable” give judges a quick starting point. Signed-out hosted checks remain open. |
+| Design | The flows go from preset to verdict to replay and repair. Direct links and an explanation of “goal reachable” give judges a quick starting point. Both live URLs passed headless Chromium verification over HTTPS. |
 | Innovation | The distinguishing idea is a small shared foundation that exposes both shortest counterexamples and goal reachability in two domains. The third-domain consumer is concrete reuse evidence. |
 | Presentation | The 64-second demo shows both apps end to end and explains a vacuous fix. Pair the video with two direct links and state that proof applies to the declared models and bounds. |
 

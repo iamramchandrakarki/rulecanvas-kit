@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-26
+
+See [docs/releases/workbench-integration.md](./docs/releases/workbench-integration.md) and the [`v0.5.0`](https://github.com/iamramchandrakarki/rulecanvas-kit/releases/tag/v0.5.0) GitHub Release for full release notes and live deployment links.
+
 ### Added
 
 - **`@rulecanvas/workbench` (`v0.5.0`, private) (`packages/rulecanvas-workbench`)**:
@@ -20,7 +24,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `pnpm verify:pack` (`scripts/verify-pack.mjs`) verifying map-free `build:pack` tarballs against a positive archive allowlist (`package.json`, `README.md`, `LICENSE`, `dist/**/*.{js,d.ts,d.mts}`), rewritten `workspace:*` dependencies, offline pinned installation into an isolated third-app booking consumer, strict `tsc --noEmit` (`NodeNext` and `Bundler`), and Vite subpath (`/booking-demo/`) worker bundling.
   - `pnpm test:browser` runs both production workbenches and the packed booking worker in Chromium. It checks domain replay, keyboard operation, WCAG A/AA axe rules, and responsive layout down to 375 CSS pixels.
 - **Documentation**:
-  - Updated `README.md`, `CONTRIBUTING.md`, `docs/ARCHITECTURE.md`, and all four package `README.md` files with exact package exports, integrated workbench workflows, limitations, and build/pack/browser verification commands; added an honest Devpost Skeleton Crew draft and sub-three-minute demo script in [docs/SKELETON_CREW_SUBMISSION.md](./docs/SKELETON_CREW_SUBMISSION.md).
+  - Updated `README.md`, `CONTRIBUTING.md`, `docs/ARCHITECTURE.md`, and all four package `README.md` files with exact package exports, integrated workbench workflows, limitations, and build/pack/browser verification commands; added an honest Devpost Skeleton Crew draft, live deployment links, and sub-three-minute demo script in [docs/SKELETON_CREW_SUBMISSION.md](./docs/SKELETON_CREW_SUBMISSION.md).
+- **Release Artifact Preflight (`.kiro/specs/release-artifact-preflight/`)**:
+  - Added `pnpm verify:release:preflight` (`scripts/release-preflight.mjs`, `scripts/release-preflight-archive.py`, `scripts/release-preflight-browser.mjs`) and 25 regression tests (`pnpm test:release:preflight`, `tests/release-preflight.test.mjs`) to validate `SHA256SUMS.txt`, bounded tar/gzip safety, and Chromium `Background Web Worker` execution under `/` and `/rulecanvas-kit/` before atomic output publication.
 
 ### Changed
 
@@ -39,6 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Both workbenches mark out-of-range verification fields as invalid for assistive technology. The verification client returns core option diagnostics before dispatch.
 - AgentGate applies its JSON export size limit to invalid drafts.
 - Both workbenches expose keyboard-focusable scroll regions and support Escape on discard prompts. Narrow layouts keep controls and long diagnostics within the viewport.
+- `scripts/verify-pack.mjs` now packs `vite`, `typescript`, and their transitive consumer dependencies as local tarballs so offline third-app verification succeeds on cold pnpm metadata caches.
 
 ## [0.4.0] - 2026-11-25
 

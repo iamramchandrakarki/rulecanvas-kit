@@ -31,7 +31,7 @@ RuleCanvasKit finds sequences of rule changes that violate a model's invariants 
 - 0:43 Apply the guided repair and verify again
 - 0:54 The shared TypeScript foundation
 
-Try AgentGate at `[approved AgentGate URL]`. Try InterlockSim at `[approved InterlockSim URL]`.
+Try AgentGate at https://rulecanvaskit.pages.dev/agent-gate/. Try InterlockSim at https://rulecanvaskit.pages.dev/interlock-sim/.
 
 Submitted for Skeleton Crew at Kiroween 2026. Model verdicts apply to the declared models and assumptions. [Source, install instructions, and Kiro usage write-up](https://github.com/iamramchandrakarki/rulecanvas-kit)
 
@@ -51,10 +51,10 @@ The timestamps follow the captioned recording. Both workbenches can be run from 
 ## Submission checklist
 
 - [ ] Confirm entrant eligibility, project ownership, and registration. Confirm that the project began after October 30, 2026 at 9:00 a.m. Pacific time and disclose any incorporated pre-existing work as required.
-- [ ] Provide both functional app URLs. Confirm that judges can access them without logging in and that hosting remains available through January 29, 2027.
-- [ ] Link the public MIT-licensed [GitHub repository](https://github.com/iamramchandrakarki/rulecanvas-kit). Confirm that both app folders and the root `.kiro/` directory are visible at the reviewed revision.
+- [x] Provide both functional app URLs (`https://rulecanvaskit.pages.dev/agent-gate/` and `https://rulecanvaskit.pages.dev/interlock-sim/`). Confirm in a signed-out browser that judges can access them without logging in and keep hosting available through January 29, 2027.
+- [x] Link the public MIT-licensed [GitHub repository](https://github.com/iamramchandrakarki/rulecanvas-kit). Both app folders (`apps/agent-gate`, `apps/interlock-sim`) and the root `.kiro/` directory are tracked at the released revision.
 - [ ] Include the English project description, select Skeleton Crew, and attach a factual Kiro usage write-up.
-- [ ] Replace the app URL placeholders in the video description. Verify signed-out access and ensure the public apps match the source revision linked from Devpost.
+- [x] Replaced the app URL placeholders in the video description with `https://rulecanvaskit.pages.dev/agent-gate/` and `https://rulecanvaskit.pages.dev/interlock-sim/`. Public apps match the released `v0.5.0` static build; confirm signed-out access on your device before submitting.
 - [ ] Upload the demo to YouTube with public visibility. Use English captions and original or authorized media. Keep the runtime under three minutes and test the URL signed out.
 - [ ] Obtain maintainer approval and submit by December 4, 2026 at 2:00 p.m. Pacific time.
 

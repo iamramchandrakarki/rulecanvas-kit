@@ -2,6 +2,11 @@
 
 RuleCanvasKit now shares a portable model codec, verification transport, React snapshot controls, and preset navigation across AgentGate and InterlockSim. The verifier remains a pure ES2022 library. Each workbench still has its own model, production bundle, and module worker.
 
+## Live workbenches
+
+- **AgentGate**: https://rulecanvaskit.pages.dev/agent-gate/
+- **InterlockSim**: https://rulecanvaskit.pages.dev/interlock-sim/
+
 ## Release highlights
 
 - **AgentGate** replays the shortest modeled approval-policy failure and compares repairs against both invariants and the legitimate release goal.
