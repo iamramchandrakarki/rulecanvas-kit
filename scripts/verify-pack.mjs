@@ -164,31 +164,31 @@ try {
       const depTarDir = path.join(tmpRoot, 'dep-tarballs');
       mkdirSync(stageParent, { recursive: true });
       mkdirSync(depTarDir, { recursive: true });
-      cpSync(realDir, stagePkgDir, { recursive: true, dereference: true });
+      cpSync(realDir, stagePkgDir, {
+        recursive: true,
+        dereference: true,
+        filter: (src) => path.basename(src) !== 'node_modules',
+      });
 
       const tgzPath = path.join(depTarDir, `${safeKey}-${pkgVersion}.tgz`);
       execFileSync('tar', ['-czf', tgzPath, '-C', stageParent, 'package']);
       depSpecs[pkgName] = `file:${tgzPath}`;
+
+      const siblingNm = pkgName.startsWith('@')
+        ? path.resolve(realDir, '../..')
+        : path.resolve(realDir, '..');
+      const childDeps = { ...(pkg.dependencies ?? {}), ...(pkg.optionalDependencies ?? {}) };
+      for (const childName of Object.keys(childDeps)) {
+        stageDirAsTarball(path.join(siblingNm, ...childName.split('/')));
+      }
     };
 
-    // Pack pinned React 19 peer, react-dom, TypeScript types, and transitive peers from the locked repo store
+    // Pack pinned React 19 peer, react-dom, TypeScript, Vite, and transitive deps from the locked repo store
     const agentGateNm = path.join(REPO_ROOT, 'apps/agent-gate/node_modules');
-    for (const depName of ['react', 'react-dom', '@types/react', '@types/react-dom']) {
-      const linkPath = path.join(agentGateNm, ...depName.split('/'));
-      stageDirAsTarball(linkPath);
-      if (existsSync(linkPath)) {
-        const realDep = realpathSync(linkPath);
-        const siblingNm = depName.startsWith('@')
-          ? path.resolve(realDep, '../..')
-          : path.resolve(realDep, '..');
-        for (const sibling of ['scheduler', 'csstype']) {
-          const sibPath = path.join(siblingNm, sibling);
-          if (existsSync(sibPath)) {
-            stageDirAsTarball(sibPath);
-          }
-        }
-      }
+    for (const depName of ['react', 'react-dom', '@types/react', '@types/react-dom', 'vite']) {
+      stageDirAsTarball(path.join(agentGateNm, ...depName.split('/')));
     }
+    stageDirAsTarball(path.join(REPO_ROOT, 'node_modules/typescript'));
 
     // Pack host-platform native optional packages from the frozen pnpm virtual store
     const virtualStore = path.join(REPO_ROOT, 'node_modules/.pnpm');
@@ -233,13 +233,6 @@ try {
   const reactVer = readInstalledVersion(
     path.join(REPO_ROOT, 'apps/agent-gate/node_modules/react/package.json'),
   );
-  const tsVer = readInstalledVersion(
-    path.join(REPO_ROOT, 'node_modules/typescript/package.json'),
-  );
-  const viteVer = readInstalledVersion(
-    path.join(REPO_ROOT, 'apps/agent-gate/node_modules/vite/package.json'),
-  );
-
   const tarballSpecs = Object.fromEntries(
     LIB_PACKAGES.map((lib) => [lib.name, `file:${packedTarballs.get(lib.name)}`]),
   );
@@ -249,11 +242,16 @@ try {
     'react-dom': pinnedReactDomSpec,
     '@types/react': pinnedTypesReactSpec,
     '@types/react-dom': pinnedTypesReactDomSpec,
+    typescript: pinnedTsSpec,
+    vite: pinnedViteSpec,
     ...pinnedTransitiveSpecs
   } = pinnedConsumerDeps;
   assert(
-    typeof pinnedReactSpec === 'string' && typeof pinnedReactDomSpec === 'string',
-    'Missing pinned React 19 tarballs from locked workspace store',
+    typeof pinnedReactSpec === 'string' &&
+      typeof pinnedReactDomSpec === 'string' &&
+      typeof pinnedTsSpec === 'string' &&
+      typeof pinnedViteSpec === 'string',
+    'Missing pinned consumer tarballs from locked workspace store',
   );
 
   // 4. Write minimal independent third-application booking-model fixture & install via pnpm --offline
@@ -272,8 +270,8 @@ try {
         devDependencies: {
           '@types/react': pinnedTypesReactSpec,
           '@types/react-dom': pinnedTypesReactDomSpec,
-          typescript: tsVer,
-          vite: viteVer,
+          typescript: pinnedTsSpec,
+          vite: pinnedViteSpec,
           ...pinnedTransitiveSpecs,
         },
       },
