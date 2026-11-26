@@ -63,8 +63,10 @@ docs/
   ARCHITECTURE.md        # Engine design, tuple encoding, BFS semantics, layering, and verification gates
   TOOL_ATTRIBUTION.md    # Development tooling disclosure and specification policy
   SKELETON_CREW_SUBMISSION.md # Honest Devpost Skeleton Crew draft and sub-three-minute demo script
+  demos/                 # Illustrative walkthrough storyboards and rehearsal records (isolated from apps/*)
   releases/              # Release notes (v0.2.0, v0.3.0, v0.4.0)
   specs/                 # Formal requirements, design, and task specifications for @rulecanvas/core
+DESIGN.md                # Visual design system, Light/Dark precision tokens, typography, and schematic conventions
 ```
 
 Boundary tests automatically enforce an acyclic 4-library package graph (`@rulecanvas/core` -> `@rulecanvas/ui` & `@rulecanvas/workbench` -> `@rulecanvas/workbench-react` -> `apps/*`): no library imports from `apps/*`, `apps/*` never import from each other, and `packages/rulecanvas-core`, `packages/rulecanvas-ui`, and `packages/rulecanvas-workbench` never import `node:*`, third-party npm packages, or non-deterministic host globals. See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for full details.
@@ -193,8 +195,9 @@ if (result.status === 'VIOLATED') {
 
 ## Integrated Workbenches
 
-RuleCanvasKit powers two domain-separated React 19 + Vite workbenches built on the four shared packages. Both apps provide:
+RuleCanvasKit powers two domain-separated React 19 + Vite workbenches built on the four shared packages and styled according to [DESIGN.md](./DESIGN.md). Both apps provide:
 
+- **Persistent System / Light / Dark themes & self-hosted typography**: `useWorkbenchTheme` and `WorkbenchThemeSwitch` persist `System` / `Light` / `Dark` preferences (with `Light` fallback), paired with self-hosted IBM Plex Sans and IBM Plex Mono Latin WOFF2 subsets (SIL Open Font License 1.1) with zero external CDN requests.
 - **Reciprocal same-origin navigation**: `WorkbenchNavigation` links between `AgentGate` and `InterlockSim` (`../interlock-sim/` and `../agent-gate/` by default for sibling static deployments, configurable at build time via `VITE_INTERLOCK_SIM_URL` and `VITE_AGENT_GATE_URL`, and validated against the deployment path prefix).
 - **Preset URL query routing with discard protection**: Both apps synchronize active presets with `?preset=...` via `useWorkbenchRoute`, prompting with an accessible `role="alertdialog"` confirmation and focus restoration when switching presets or comparison rows while JSON or model edits are dirty.
 - **Snapshot-bound Web Worker verification**: Verification runs in a Vite module worker via `@rulecanvas/workbench/verify` and `useVerificationSnapshot`, with automatic cancellation of superseded runs, synchronous main-thread fallback when Web Workers are unavailable, and explicit `OUTDATED:` status separation after edits.
@@ -202,11 +205,11 @@ RuleCanvasKit powers two domain-separated React 19 + Vite workbenches built on t
 
 ### AgentGate (`apps/agent-gate`)
 
-AgentGate is the primary policy-modeling workbench in RuleCanvasKit for verifying AI agent permissions, security policies, and approval workflows before rollout. `@rulecanvas/agent-gate` exports executable TypeScript policy models (`broken`, `naive-patch-a`, `naive-patch-b`, `principled-fix`, and `vacuous-fix`) alongside the browser workbench featuring a structured schema/AST editor, strict integer draft validation, counterexample replay, and a 5-preset comparison matrix.
+AgentGate is the primary policy-modeling workbench in RuleCanvasKit for verifying AI agent permissions, security policies, and approval workflows before rollout. `@rulecanvas/agent-gate` exports executable TypeScript policy models (`broken`, `naive-patch-a`, `naive-patch-b`, `principled-fix`, and `vacuous-fix`) alongside the browser workbench featuring Master-Detail rule navigation, cross-pane trace-to-rule jump, a structured schema/AST editor, strict integer draft validation, counterexample replay, and a 5-preset comparison matrix.
 
 ### InterlockSim (`apps/interlock-sim`)
 
-InterlockSim is an educational browser workbench for exploring discrete BSL-3 airlock interlocks (`broken`, `fixed`, and `vacuous` presets). It pairs an accessible airlock schematic and operator console with shortest counterexample replay, predicate-level guard explanations, a guided repair for the built-in broken preset, a 3-preset comparison matrix, strict 512,000-character export (allowing clean zero-invariant drafts), and legacy duplicate-key import compatibility. See the [v0.4.0 release notes](docs/releases/v0.4.0.md) for a walkthrough.
+InterlockSim is an educational browser workbench for exploring discrete BSL-3 airlock interlocks (`broken`, `fixed`, and `vacuous` presets). It pairs a discrete CAD/P&ID airlock schematic and operator console with shortest counterexample replay, predicate-level guard explanations, a guided candidate repair for the built-in broken preset with explicit `OUTDATED SNAPSHOT` / candidate-repair distinction prior to re-verification, a 3-preset comparison matrix, strict 512,000-character export (allowing clean zero-invariant drafts), and legacy duplicate-key import compatibility. See the [v0.4.0 release notes](docs/releases/v0.4.0.md) for a walkthrough.
 
 ## Build another workbench on this foundation
 
@@ -217,6 +220,8 @@ InterlockSim is an educational browser workbench for exploring discrete BSL-3 ai
 
 ## Screenshots
 
+Live `1440x900` production captures of both workbenches:
+
 **AgentGate.** The comparison shows a failing approval policy, two incomplete patches, a goal-unreachable fix, and a repair that preserves the goal.
 
 ![AgentGate comparison table showing five presets with verdicts, states explored, and goal reachability](docs/screenshots/agent-gate.png)
@@ -224,6 +229,8 @@ InterlockSim is an educational browser workbench for exploring discrete BSL-3 ai
 **InterlockSim.** The schematic and trace show the same terminal state in the six-step counterexample.
 
 ![InterlockSim schematic, operator controls, verification verdict, and replay timeline](docs/screenshots/interlock-sim.png)
+
+For authored illustrative walkthrough storyboards and rehearsal records (distinct from live `@rulecanvas/core` verification outputs), see [docs/demos/README.md](docs/demos/README.md).
 
 ## Build, Pack, and Verification Instructions
 
@@ -275,7 +282,7 @@ PLAYWRIGHT_MODULE="$qa_dir/node_modules/playwright/index.mjs" \
   SCREENSHOT_DIR="$qa_dir/screenshots" pnpm test:browser
 ```
 
-The browser gate checks both workbench journeys, keyboard operation, four viewport widths down to 375 CSS pixels, and axe WCAG A/AA rules. It also checks the built booking worker when `BOOKING_FIXTURE_DIST` is set.
+The browser gate checks both workbench journeys, keyboard operation, self-hosted font loading with zero external network requests, viewport widths down to 360 CSS pixels, and axe WCAG A/AA rules in both Light and Dark themes. It also checks the built booking worker when `BOOKING_FIXTURE_DIST` is set.
 
 ## Known Limitations
 

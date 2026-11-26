@@ -35,6 +35,13 @@ Built entry point: `./dist/index.js` (`./dist/index.d.ts`).
 - `useWorkbenchRoute`, `createWorkbenchHistoryController`, `readPresetFromSearch`, `buildCanonicalPresetUrl`
 - Types: `HistoryHostLike`, `HistoryStamp`, `NavigationApiLike`, `NavigationEntryLike`, `PendingDiscardPrompt`, `UseWorkbenchRouteOptions`, `WorkbenchHistoryController`, `WorkbenchHistoryControllerOptions`
 
+### SSR-Safe Theme & Shell Primitives
+
+- Theme hooks & helpers: `useWorkbenchTheme`, `resolveWorkbenchTheme`, `applyDocumentTheme`, `readStoredThemePreference`, `writeStoredThemePreference`, `isThemePreference`, `WORKBENCH_THEME_STORAGE_KEY`
+- Theme types: `ResolvedTheme`, `ThemePreference`, `ThemeStorageLike`, `UseWorkbenchThemeOptions`, `WorkbenchThemeController`
+- Shell components: `WorkbenchThemeSwitch`, `WorkbenchBrandMark`, `WorkbenchDiscardDialog`
+- Shell types: `WorkbenchThemeSwitchProps`, `WorkbenchBrandMarkProps`, `WorkbenchDiscardDialogProps`
+
 ## Quick Start
 
 ```tsx
