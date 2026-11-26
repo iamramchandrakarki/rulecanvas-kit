@@ -4,7 +4,7 @@ Verify your rules before deployment.
 
 ## Project Overview
 
-RuleCanvasKit is a TypeScript finite-state verification toolkit for Guarded Transition Systems (GTS). You declare a bounded state schema, guarded transition rules, invariants, an optional goal predicate, and explicit modeling assumptions (`ModelAssumption[]`). The core engine explores the reachable state space deterministically via breadth-first search, returning either the shortest counterexample trace to an invariant violation or confirmation that every reachable state within the declared model satisfies all invariants.
+RuleCanvasKit is a TypeScript finite-state verification toolkit for Guarded Transition Systems (GTS). You declare a bounded state schema, guarded transition rules, invariants, an optional goal predicate, and explicit modeling assumptions (`ModelAssumption[]`). The core engine explores reachable states in deterministic breadth-first order. It reports the shortest counterexample it finds, verifies the invariants after complete exploration, or returns an inconclusive verdict when a bound stops exploration. Invalid models and transitions produce structured diagnostics.
 
 The monorepo pairs four acyclic library packages (`@rulecanvas/core`, `@rulecanvas/ui`, `@rulecanvas/workbench`, and `@rulecanvas/workbench-react`) with two integrated browser workbenches (`apps/agent-gate` and `apps/interlock-sim`) connected by reciprocal same-origin navigation and shareable preset URL routing.
 
