@@ -9,6 +9,7 @@ import {
   buildInvariantsPanelView,
   buildStateTableView,
   buildVerdictSummaryView,
+  formatBoolExpr,
   formatStateValue,
   type ReplaySession,
 } from '@rulecanvas/ui';
@@ -113,9 +114,10 @@ export function VerificationWorkbenchPane({
         ? result.errors
         : [];
 
-  const ruleLabels = new Map<string, string>(
-    (replaySession?.model ?? verifiedSnapshot?.model ?? model).rules.map((r) => [r.id, r.label]),
-  );
+  const snapshotRules = (replaySession?.model ?? verifiedSnapshot?.model ?? model).rules;
+  const ruleLabels = new Map<string, string>(snapshotRules.map((r) => [r.id, r.label]));
+  const snapshotRulesById = new Map(snapshotRules.map((r) => [r.id, r]));
+  const draftRuleIds = new Set(model.rules.map((r) => r.id));
 
   const stateTableView =
     replaySession !== null
@@ -148,6 +150,7 @@ export function VerificationWorkbenchPane({
   return (
     <section
       id="ag-verdict-pane"
+      tabIndex={-1}
       className="ag-pane ag-pane-workbench"
       aria-label="Verification results and counterexample workbench"
     >
@@ -467,6 +470,8 @@ export function VerificationWorkbenchPane({
                 const stepNum = idx + 1;
                 const isActive = replaySession.cursor === stepNum;
                 const label = ruleLabels.get(step.ruleId);
+                const snapshotRule = snapshotRulesById.get(step.ruleId);
+                const inDraft = draftRuleIds.has(step.ruleId);
 
                 return (
                   <li
@@ -505,18 +510,32 @@ export function VerificationWorkbenchPane({
                           })}
                         </div>
                       )}
+
+                      {isStale && isActive && snapshotRule !== undefined && (
+                        <div className="ag-code-strip" style={{ marginTop: 4 }}>
+                          <span className="ag-code-muted">Snapshot guard: </span>
+                          {formatBoolExpr(snapshotRule.guard)}
+                        </div>
+                      )}
                     </button>
 
-                    {onInspectRule !== undefined && (
-                      <button
-                        type="button"
-                        className="ag-btn ag-btn-sm ag-timeline-jump"
-                        aria-label={`Inspect rule ${step.ruleId} in editor`}
-                        onClick={() => onInspectRule(step.ruleId)}
-                      >
-                        Inspect rule
-                      </button>
-                    )}
+                    {onInspectRule !== undefined &&
+                      (inDraft ? (
+                        <button
+                          type="button"
+                          className="ag-btn ag-btn-sm ag-timeline-jump"
+                          aria-label={
+                            isStale
+                              ? `Edit draft rule ${step.ruleId} in editor`
+                              : `Inspect rule ${step.ruleId} in editor`
+                          }
+                          onClick={() => onInspectRule(step.ruleId)}
+                        >
+                          {isStale ? 'Edit draft rule' : 'Inspect rule'}
+                        </button>
+                      ) : (
+                        <span className="ag-meta-inline ag-timeline-jump">Removed in draft</span>
+                      ))}
                   </li>
                 );
               })}

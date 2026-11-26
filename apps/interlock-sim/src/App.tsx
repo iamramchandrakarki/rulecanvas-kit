@@ -535,9 +535,18 @@ export function App({
     return () => window.removeEventListener('keydown', handleGlobalShortcut);
   }, [handleVerifyCurrent, pendingPrompt]);
 
+  const draftRuleIds = useMemo(() => new Set(model.rules.map((r) => r.id)), [model.rules]);
+
   const scrollToSection = (elementId: string) => {
     if (typeof document === 'undefined') return;
-    document.getElementById(elementId)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    const target = document.getElementById(elementId);
+    if (!(target instanceof HTMLElement)) return;
+    const prefersReducedMotion =
+      typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    target.focus({ preventScroll: true });
+    target.scrollIntoView({ behavior: prefersReducedMotion ? 'auto' : 'smooth', block: 'start' });
   };
 
   return (
@@ -757,7 +766,7 @@ export function App({
       )}
 
       <main className="is-workspace">
-        <div id="is-schematic-pane" className="is-column is-column-left">
+        <div id="is-schematic-pane" tabIndex={-1} className="is-column is-column-left">
           <AirlockSchematic
             schema={replaySession?.model.schema ?? model.schema}
             state={replaySession?.currentState ?? model.initialState}
@@ -789,6 +798,7 @@ export function App({
               snapshotModel={verifiedSnapshot.model}
               modelLabel={verifiedSnapshot.modelLabel}
               isStale={isStale}
+              draftRuleIds={draftRuleIds}
               canRestoreCounterexample={verifiedSnapshot.result.status === 'VIOLATED'}
               replayError={replayError}
               onResetReplay={handleResetReplay}
@@ -823,7 +833,7 @@ export function App({
           )}
         </div>
 
-        <div id="is-verdict-pane" className="is-column">
+        <div id="is-verdict-pane" tabIndex={-1} className="is-column">
           <VerificationWorkbenchPane
             model={model}
             isRunning={isRunning}

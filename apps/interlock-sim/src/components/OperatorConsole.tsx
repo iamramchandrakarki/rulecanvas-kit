@@ -7,6 +7,7 @@ export interface OperatorConsoleProps {
   readonly snapshotModel: TransitionSystemModel;
   readonly modelLabel: string;
   readonly isStale: boolean;
+  readonly draftRuleIds?: ReadonlySet<string> | undefined;
   readonly canRestoreCounterexample: boolean;
   readonly replayError: string | null;
   readonly onResetReplay: () => void;
@@ -59,6 +60,7 @@ export function OperatorConsole({
   snapshotModel,
   modelLabel,
   isStale,
+  draftRuleIds,
   canRestoreCounterexample,
   replayError,
   onResetReplay,
@@ -225,16 +227,21 @@ export function OperatorConsole({
                   {item.ruleId}
                 </span>
                 <div className="is-inline-actions">
-                  {onInspectRule !== undefined && (
-                    <button
-                      type="button"
-                      className="is-btn is-btn-sm"
-                      aria-label={`Edit guard for ${item.ruleId} in Guard Inspector`}
-                      onClick={() => onInspectRule(item.ruleId)}
-                    >
-                      Edit guard
-                    </button>
-                  )}
+                  {onInspectRule !== undefined &&
+                    (draftRuleIds === undefined || draftRuleIds.has(item.ruleId)) && (
+                      <button
+                        type="button"
+                        className="is-btn is-btn-sm"
+                        aria-label={
+                          isStale
+                            ? `Edit draft guard for ${item.ruleId} in Guard Inspector`
+                            : `Edit guard for ${item.ruleId} in Guard Inspector`
+                        }
+                        onClick={() => onInspectRule(item.ruleId)}
+                      >
+                        {isStale ? 'Edit draft guard' : 'Edit guard'}
+                      </button>
+                    )}
                   <span className="is-badge" data-tone="warning">
                     <span aria-hidden="true">×</span> LOCKED
                   </span>

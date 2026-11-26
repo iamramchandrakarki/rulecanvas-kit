@@ -365,8 +365,8 @@ svg {
   }
 
   .is-btn-danger:hover:not(:disabled) {
-    background: var(--color-error);
-    border-color: var(--color-error);
+    background: var(--color-error-fill);
+    border-color: var(--color-error-fill);
     color: var(--color-accent-ink);
   }
 
@@ -674,10 +674,10 @@ svg {
 
 /* 7-variable discrete sensor readout grid */
 .is-telemetry-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(156px, 1fr));
+  display: flex;
+  flex-wrap: wrap;
   gap: 0;
-  background: var(--color-paper-3);
+  background: var(--color-paper-2);
   border-top: 1px solid var(--color-rule);
   border-left: 1px solid var(--color-rule);
   border-radius: var(--radius-sm);
@@ -686,6 +686,8 @@ svg {
 }
 
 .is-telemetry-cell {
+  flex: 1 1 156px;
+  min-width: 0;
   background: var(--color-paper-2);
   color: var(--color-ink);
   padding: 7px 10px;

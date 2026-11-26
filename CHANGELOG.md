@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A shared workbench shell, persistent System, Light, and Dark themes, and self-hosted IBM Plex fonts for AgentGate and InterlockSim.
+- A rule navigator and verification dock in AgentGate, plus a discrete airlock schematic and operator console in InterlockSim.
+- Browser screenshots and illustrative walkthroughs for both workbenches.
+
+### Fixed
+
+- Stale replay steps display the verified snapshot guard and identify actions that open the current draft. Trace-to-editor jumps move focus, respect reduced motion, and preserve numeric guard drafts.
+- Discard dialogs contain keyboard focus in both directions. Dark-theme destructive actions retain readable text on hover.
+- Custom InterlockSim readouts scope goal and invariant evaluations to the displayed step. The sensor readouts fill each row at narrow and wide widths.
+
 ## [0.5.0] - 2026-11-26
 
 See [docs/releases/workbench-integration.md](./docs/releases/workbench-integration.md) and the [`v0.5.0`](https://github.com/iamramchandrakarki/rulecanvas-kit/releases/tag/v0.5.0) GitHub Release for full release notes and live deployment links.

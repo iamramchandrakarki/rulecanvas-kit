@@ -968,7 +968,7 @@ describe('InterlockSim workbench architecture, semantics, security, and UI', () 
         modeLabel: 'Manual Simulation',
       }),
     );
-    expect(safeNonAirlockSchematic).toContain('INVARIANTS SAFE (1)');
+    expect(safeNonAirlockSchematic).toContain('INVARIANTS HOLD AT STEP 0 (1)');
     expect(safeNonAirlockSchematic).not.toContain('SEAL &amp; UV SAFE');
 
     const incompatEditorHtml = renderToStaticMarkup(
@@ -1160,9 +1160,9 @@ describe('InterlockSim workbench architecture, semantics, security, and UI', () 
         modeLabel: 'Trace Replay',
       }),
     );
-    expect(spoofedSchematicHtml).toContain('INVARIANTS SAFE (2)');
+    expect(spoofedSchematicHtml).toContain('INVARIANTS HOLD AT STEP 0 (2)');
     expect(spoofedSchematicHtml).not.toContain('SEAL &amp; UV SAFE');
-    expect(spoofedSchematicHtml).toContain('GOAL REACHED (goal_safe_lab_entry)');
+    expect(spoofedSchematicHtml).toContain('GOAL AT STEP 0: REACHED (goal_safe_lab_entry)');
     expect(spoofedSchematicHtml).not.toContain('GOAL REACHED: LAB ENTRY');
     expect(spoofedSchematicHtml).toContain('UNAVAILABLE');
 
@@ -1523,5 +1523,35 @@ describe('InterlockSim workbench architecture, semantics, security, and UI', () 
     expect(tokensCss).not.toMatch(/https?:\/\//i);
     expect(tokensCss).toContain('color-scheme: light;');
     expect(tokensCss).toContain('color-scheme: dark;');
+
+    // Custom schematic badges preserve explicit step qualifier on non-canonical models
+    const customSchematicHtml = renderToStaticMarkup(
+      createElement(AirlockSchematic, {
+        schema: { flag: { kind: 'boolean' } },
+        state: { flag: false },
+        changedVars: [],
+        violatedInvariantIds: [],
+        evaluatedInvariantIds: ['inv_custom'],
+        invariants: [
+          {
+            id: 'inv_custom',
+            label: 'Custom invariant',
+            holds: { op: 'not', arg: { op: 'var', name: 'flag' } },
+          },
+        ],
+        goal: {
+          id: 'custom_goal',
+          label: 'Custom goal',
+          reached: { op: 'lit', value: true },
+        },
+        isEvaluated: true,
+        isStale: false,
+        goalReached: true,
+        stepNumber: 2,
+        modeLabel: 'Manual Simulation',
+      }),
+    );
+    expect(customSchematicHtml).toContain('INVARIANTS HOLD AT STEP 2 (1)');
+    expect(customSchematicHtml).toContain('GOAL AT STEP 2: REACHED (custom_goal)');
   });
 });

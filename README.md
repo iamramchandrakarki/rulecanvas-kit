@@ -199,8 +199,9 @@ RuleCanvasKit powers two domain-separated React 19 + Vite workbenches built on t
 
 - **Persistent System / Light / Dark themes & self-hosted typography**: `useWorkbenchTheme` and `WorkbenchThemeSwitch` persist `System` / `Light` / `Dark` preferences (with `Light` fallback), paired with self-hosted IBM Plex Sans and IBM Plex Mono Latin WOFF2 subsets (SIL Open Font License 1.1) with zero external CDN requests.
 - **Reciprocal same-origin navigation**: `WorkbenchNavigation` links between `AgentGate` and `InterlockSim` (`../interlock-sim/` and `../agent-gate/` by default for sibling static deployments, configurable at build time via `VITE_INTERLOCK_SIM_URL` and `VITE_AGENT_GATE_URL`, and validated against the deployment path prefix).
-- **Preset URL query routing with discard protection**: Both apps synchronize active presets with `?preset=...` via `useWorkbenchRoute`, prompting with an accessible `role="alertdialog"` confirmation and focus restoration when switching presets or comparison rows while JSON or model edits are dirty.
+- **Preset URL query routing with discard protection**: Both apps synchronize active presets with `?preset=...` via `useWorkbenchRoute`. When switching presets or comparison rows with unsaved edits, the confirmation dialog keeps keyboard focus inside and restores focus when dismissed.
 - **Snapshot-bound Web Worker verification**: Verification runs in a Vite module worker via `@rulecanvas/workbench/verify` and `useVerificationSnapshot`, with automatic cancellation of superseded runs, synchronous main-thread fallback when Web Workers are unavailable, and explicit `OUTDATED:` status separation after edits.
+- **Trace-to-editor navigation**: Jump from a replay step to its rule or guard editor. On an outdated trace, the active step shows the snapshot guard and labels any available editor link as a draft action.
 - **Portable JSON import/export**: Both apps use the shared codec for portable exports. InterlockSim also uses it for imports with last-value handling for duplicate keys. AgentGate retains its previous import limits for existing model files. Both import paths check raw integer literals before parsing.
 
 ### AgentGate (`apps/agent-gate`)
@@ -220,7 +221,7 @@ InterlockSim is an educational browser workbench for exploring discrete BSL-3 ai
 
 ## Screenshots
 
-Live `1440x900` production captures of both workbenches:
+These screenshots show both locally served production builds at `1440×900` CSS pixels.
 
 **AgentGate.** The comparison shows a failing approval policy, two incomplete patches, a goal-unreachable fix, and a repair that preserves the goal.
 
@@ -264,6 +265,9 @@ pnpm verify:boundaries
 
 # Check test hygiene (no skipped, focused, or pending tests)
 pnpm verify:hygiene
+
+# Run the release-artifact preflight tests
+pnpm test:release:preflight
 
 # Run the deterministic benchmark suite
 pnpm bench

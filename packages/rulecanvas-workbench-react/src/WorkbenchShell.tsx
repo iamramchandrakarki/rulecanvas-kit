@@ -1,4 +1,4 @@
-import { forwardRef, type ReactNode } from 'react';
+import { forwardRef, useRef, type ReactNode } from 'react';
 import type { ThemePreference } from './theme.js';
 
 export interface WorkbenchThemeSwitchProps {
@@ -163,6 +163,7 @@ export const WorkbenchDiscardDialog = forwardRef<HTMLButtonElement, WorkbenchDis
   ): ReactNode {
     const titleId = `${idPrefix}-discard-title`;
     const descId = `${idPrefix}-discard-desc`;
+    const dialogRef = useRef<HTMLDivElement | null>(null);
 
     return (
       <div
@@ -174,6 +175,7 @@ export const WorkbenchDiscardDialog = forwardRef<HTMLButtonElement, WorkbenchDis
         }}
       >
         <div
+          ref={dialogRef}
           className={dialogClassName}
           role="alertdialog"
           aria-modal="true"
@@ -183,6 +185,31 @@ export const WorkbenchDiscardDialog = forwardRef<HTMLButtonElement, WorkbenchDis
             if (event.key === 'Escape') {
               event.preventDefault();
               onDecline();
+              return;
+            }
+            if (event.key === 'Tab' && dialogRef.current !== null) {
+              const focusables = Array.from(
+                dialogRef.current.querySelectorAll<HTMLElement>(
+                  'button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
+                ),
+              );
+              if (focusables.length > 0) {
+                const first = focusables[0]!;
+                const last = focusables[focusables.length - 1]!;
+                const active = dialogRef.current.ownerDocument?.activeElement ?? null;
+                if (event.shiftKey) {
+                  if (active === first || (active !== null && !dialogRef.current.contains(active))) {
+                    event.preventDefault();
+                    last.focus();
+                  }
+                } else if (
+                  active === last ||
+                  (active !== null && !dialogRef.current.contains(active))
+                ) {
+                  event.preventDefault();
+                  first.focus();
+                }
+              }
             }
           }}
         >

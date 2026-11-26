@@ -361,8 +361,8 @@ pre,
   }
 
   .ag-btn-danger:hover:not(:disabled) {
-    background-color: var(--color-danger);
-    border-color: var(--color-danger);
+    background-color: var(--color-danger-fill);
+    border-color: var(--color-danger-fill);
     color: var(--color-accent-ink);
   }
 

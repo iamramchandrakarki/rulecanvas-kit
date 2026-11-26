@@ -1796,5 +1796,32 @@ describe('AgentGate workbench domain modules and UI', () => {
     expect(tokensCss).not.toMatch(/https?:\/\//i);
     expect(tokensCss).toContain("color-scheme: light;");
     expect(tokensCss).toContain("color-scheme: dark;");
+
+    // Regression: rule named `constructor` (or `toString`) never reads Object.prototype in PolicyEditorPane
+    const protoNamedRuleModel: TransitionSystemModel = {
+      ...loadPresetModel('broken'),
+      rules: [
+        ...loadPresetModel('broken').rules,
+        {
+          id: 'constructor',
+          label: 'Object prototype collision probe',
+          guard: { op: 'lit', value: false },
+          updates: [],
+        },
+      ],
+    };
+    expect(validateModel(protoNamedRuleModel)).toEqual([]);
+    const traceMap = new Map<string, readonly number[]>([['publish_release_notes', [5]]]);
+    const protoEditorHtml = renderToStaticMarkup(
+      createElement(PolicyEditorPane, {
+        model: protoNamedRuleModel,
+        diagnostics: indexModelDiagnostics([]),
+        activeTraceStepsByRuleId: traceMap,
+        onChangeModel: () => {},
+        onImportModel: () => {},
+      }),
+    );
+    expect(protoEditorHtml).toContain('data-rule-id="constructor"');
+    expect(protoEditorHtml).toContain('s5');
   });
 });

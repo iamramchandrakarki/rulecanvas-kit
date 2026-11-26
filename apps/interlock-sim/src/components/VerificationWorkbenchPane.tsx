@@ -9,6 +9,7 @@ import {
   buildInvariantsPanelView,
   buildStateTableView,
   buildVerdictSummaryView,
+  formatBoolExpr,
   formatStateValue,
   type ReplaySession,
 } from '@rulecanvas/ui';
@@ -102,9 +103,10 @@ export function VerificationWorkbenchPane({
         ? result.errors
         : [];
 
-  const ruleLabels = new Map<string, string>(
-    (replaySession?.model ?? verifiedSnapshot?.model ?? model).rules.map((r) => [r.id, r.label]),
-  );
+  const snapshotRules = (replaySession?.model ?? verifiedSnapshot?.model ?? model).rules;
+  const ruleLabels = new Map<string, string>(snapshotRules.map((r) => [r.id, r.label]));
+  const snapshotRulesById = new Map(snapshotRules.map((r) => [r.id, r]));
+  const draftRuleIds = new Set(model.rules.map((r) => r.id));
 
   const stateTableView =
     replaySession !== null
@@ -435,18 +437,32 @@ export function VerificationWorkbenchPane({
                         })}
                       </div>
                     )}
+
+                    {isStale && isActive && snapshotRulesById.has(step.ruleId) && (
+                      <div className="is-code-strip" style={{ marginTop: 4 }}>
+                        <strong>Snapshot guard:</strong>{' '}
+                        {formatBoolExpr(snapshotRulesById.get(step.ruleId)!.guard)}
+                      </div>
+                    )}
                   </button>
 
-                  {onInspectRule !== undefined && (
-                    <button
-                      type="button"
-                      className="is-btn is-btn-sm is-timeline-jump"
-                      aria-label={`Inspect guard for ${step.ruleId}`}
-                      onClick={() => onInspectRule(step.ruleId)}
-                    >
-                      Inspect guard
-                    </button>
-                  )}
+                  {onInspectRule !== undefined &&
+                    (draftRuleIds.has(step.ruleId) ? (
+                      <button
+                        type="button"
+                        className="is-btn is-btn-sm is-timeline-jump"
+                        aria-label={
+                          isStale
+                            ? `Edit draft guard for ${step.ruleId}`
+                            : `Inspect guard for ${step.ruleId}`
+                        }
+                        onClick={() => onInspectRule(step.ruleId)}
+                      >
+                        {isStale ? 'Edit draft guard' : 'Inspect guard'}
+                      </button>
+                    ) : (
+                      <span className="is-meta-inline is-timeline-jump">Removed in draft</span>
+                    ))}
                 </li>
               );
             })}

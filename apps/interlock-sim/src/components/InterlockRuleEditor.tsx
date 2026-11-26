@@ -90,7 +90,7 @@ export function InterlockRuleEditor({
   const nextRowIdRef = useRef<number>(0);
   const prevResetKeyRef = useRef<string | number>(resetKey);
   const prevFocusSeqRef = useRef<number>(0);
-  const sectionRef = useRef<HTMLElement | null>(null);
+  const ruleSelectRef = useRef<HTMLSelectElement | null>(null);
   const preserveNextNoticeRef = useRef<boolean>(false);
   const onDraftErrorChangeRef = useRef(onDraftErrorChange);
   onDraftErrorChangeRef.current = onDraftErrorChange;
@@ -107,6 +107,7 @@ export function InterlockRuleEditor({
   });
 
   const [activeTab, setActiveTab] = useState<InspectorTabId>('guard');
+  const [pendingFocusSeq, setPendingFocusSeq] = useState<number | null>(null);
   const [selectedRuleId, setSelectedRuleId] = useState<string>(() =>
     defaultRuleSelection(model.rules),
   );
@@ -163,6 +164,7 @@ export function InterlockRuleEditor({
     if (prevResetKeyRef.current !== resetKey) {
       prevResetKeyRef.current = resetKey;
       setSelectedRuleId(defaultRuleSelection(model.rules));
+      setPendingFocusSeq(null);
       setAsmRowIds(model.assumptions.map(() => allocRowId('asm')));
     }
   }, [resetKey, model]);
@@ -173,14 +175,27 @@ export function InterlockRuleEditor({
     }
     prevFocusSeqRef.current = focusedRuleRequest.seq;
     if (model.rules.some((r) => r.id === focusedRuleRequest.ruleId)) {
-      pruneDraftsByPrefix('rule');
       setActiveTab('guard');
       setSelectedRuleId(focusedRuleRequest.ruleId);
-      queueMicrotask(() => {
-        sectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-      });
+      setPendingFocusSeq(focusedRuleRequest.seq);
     }
-  }, [focusedRuleRequest, model.rules, pruneDraftsByPrefix]);
+  }, [focusedRuleRequest, model.rules]);
+
+  useEffect(() => {
+    if (pendingFocusSeq === null || activeTab !== 'guard') {
+      return;
+    }
+    const prefersReducedMotion =
+      typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    ruleSelectRef.current?.focus({ preventScroll: true });
+    ruleSelectRef.current?.scrollIntoView({
+      behavior: prefersReducedMotion ? 'auto' : 'smooth',
+      block: 'center',
+    });
+    setPendingFocusSeq(null);
+  }, [pendingFocusSeq, activeTab]);
 
   const resolvedAsmRowIds = alignRowIds(asmRowIds, model.assumptions.length, 'asm');
 
@@ -299,7 +314,6 @@ export function InterlockRuleEditor({
 
   return (
     <section
-      ref={sectionRef}
       className="is-pane"
       aria-label="Interlock guard inspector and model editor"
     >
@@ -363,6 +377,7 @@ export function InterlockRuleEditor({
         <div className="is-field">
           <label htmlFor="inspector-rule-select">Inspect / Edit Transition Rule</label>
           <select
+            ref={ruleSelectRef}
             id="inspector-rule-select"
             className="is-select is-mono"
             value={selectedRule?.id ?? ''}

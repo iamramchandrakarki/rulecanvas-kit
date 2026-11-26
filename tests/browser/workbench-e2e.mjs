@@ -302,6 +302,106 @@ try {
     assert(iconText.length > 0, `Status badge "${expectedText}" at ${label} has empty icon`);
   };
 
+  const installScrollSpy = async () => {
+    await page.evaluate(() => {
+      if (!window.__rcOrigScrollIntoView) {
+        window.__rcOrigScrollIntoView = Element.prototype.scrollIntoView;
+      }
+      window.__rcScrollCalls = [];
+      Element.prototype.scrollIntoView = function (options) {
+        window.__rcScrollCalls.push({
+          id: this.id || null,
+          className: typeof this.className === 'string' ? this.className : '',
+          options: options && typeof options === 'object' ? { behavior: options.behavior, block: options.block } : options ?? null,
+        });
+        return window.__rcOrigScrollIntoView.apply(this, arguments);
+      };
+    });
+  };
+
+  const clearScrollSpy = async () => {
+    await page.evaluate(() => {
+      window.__rcScrollCalls = [];
+    });
+  };
+
+  const readScrollSpy = async () => page.evaluate(() => window.__rcScrollCalls ?? []);
+
+  const waitForVisibleFocus = async (selector) => {
+    await page.waitForFunction((targetSelector) => {
+      const target = document.querySelector(targetSelector);
+      if (target === null || document.activeElement !== target) return false;
+      const { top, bottom } = target.getBoundingClientRect();
+      const header = document.querySelector('header');
+      const headerBottom = header && getComputedStyle(header).position === 'sticky'
+        ? Math.max(0, header.getBoundingClientRect().bottom)
+        : 0;
+      return top >= headerBottom && bottom <= innerHeight;
+    }, selector, { timeout: 5_000 });
+  };
+
+  const uninstallScrollSpy = async () => {
+    await page.evaluate(() => {
+      if (window.__rcOrigScrollIntoView) {
+        Element.prototype.scrollIntoView = window.__rcOrigScrollIntoView;
+        delete window.__rcOrigScrollIntoView;
+      }
+      delete window.__rcScrollCalls;
+    });
+  };
+
+  const assertTelemetryGridEdgeToEdge = async (label) => {
+    const metrics = await page.evaluate(() => {
+      const grid = document.querySelector('.is-telemetry-grid');
+      if (!grid) return { found: false };
+      const gridRect = grid.getBoundingClientRect();
+      const cells = [...grid.querySelectorAll('.is-telemetry-cell')].map((el) => {
+        const r = el.getBoundingClientRect();
+        return { left: r.left, right: r.right, top: r.top, width: r.width, height: r.height };
+      });
+      return {
+        found: true,
+        vw: window.innerWidth,
+        gridLeft: gridRect.left,
+        gridRight: gridRect.right,
+        cells,
+      };
+    });
+    assert(metrics.found, `Missing .is-telemetry-grid at ${label}`);
+    assert(metrics.cells.length === 7, `Expected 7 telemetry cells at ${label}, got ${metrics.cells.length}`);
+    const rows = [];
+    for (const cell of metrics.cells) {
+      assert(cell.width > 0 && cell.height > 0, `Hidden telemetry cell at ${label}`);
+      assert(
+        cell.left >= -1 && cell.right <= metrics.vw + 1,
+        `Telemetry cell overflows viewport at ${label}: [${cell.left}..${cell.right}] vs ${metrics.vw}`,
+      );
+      const row = rows.find((r) => Math.abs(r.top - cell.top) <= 2);
+      if (row) {
+        row.cells.push(cell);
+      } else {
+        rows.push({ top: cell.top, cells: [cell] });
+      }
+    }
+    for (const row of rows) {
+      row.cells.sort((a, b) => a.left - b.left);
+      const first = row.cells[0];
+      const last = row.cells[row.cells.length - 1];
+      assert(
+        Math.abs(first.left - metrics.gridLeft) <= 2,
+        `Telemetry row left edge not flush at ${label}: ${first.left} vs ${metrics.gridLeft}`,
+      );
+      assert(
+        Math.abs(last.right - metrics.gridRight) <= 2,
+        `Telemetry row right edge not flush at ${label}: ${last.right} vs ${metrics.gridRight}`,
+      );
+      for (let i = 1; i < row.cells.length; i += 1) {
+        const gap = Math.abs(row.cells[i].left - row.cells[i - 1].right);
+        assert(gap <= 2, `Telemetry row gap/overlap (${gap}px) at ${label}`);
+      }
+    }
+  };
+
   // --- 1. AgentGate under /suite/agent-gate/ ---
   await page.goto(`${baseUrl}/suite/agent-gate/`, { waitUntil: 'networkidle' });
   const agBrokenVerdict = page.locator('section.ag-verdict[data-status="VIOLATED"]');
@@ -354,16 +454,46 @@ try {
   await page.getByRole('button', { name: 'System', exact: true }).click();
 
   // Cross-pane Inspect rule jump from counterexample trace step 5 -> publish_release_notes
-  const step5JumpBtn = page
-    .locator('.ag-timeline-item', { hasText: 'publish_release_notes' })
-    .getByRole('button', { name: 'Inspect rule' });
+  // Verify cross-tab focus & reduced-motion scrollIntoView, including repeated same-target jump
+  const agStep5Item = page.locator('.ag-timeline .ag-timeline-item', {
+    hasText: 'publish_release_notes',
+  });
+  assert((await agStep5Item.count()) === 1, 'Expected unique AgentGate trace item for publish_release_notes');
+  const step5JumpBtn = agStep5Item.getByRole('button', { name: 'Inspect rule' });
+  const publishDisclosure = '.ag-item-row[data-rule-id="publish_release_notes"] .ag-disclosure-btn';
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await installScrollSpy();
+  await page.getByRole('tab', { name: 'Schema & State' }).click();
+  await clearScrollSpy();
   await step5JumpBtn.click();
+  await waitForVisibleFocus(publishDisclosure);
+  assert(
+    (await page.getByRole('tab', { name: 'Rules' }).getAttribute('aria-selected')) === 'true',
+    'Cross-tab Inspect rule jump did not activate Rules tab',
+  );
   assert(
     (await page
       .locator('.ag-item-row[data-rule-id="publish_release_notes"] .ag-disclosure-btn')
       .getAttribute('aria-expanded')) === 'true',
     'Inspect rule on Step 5 did not expand publish_release_notes disclosure',
   );
+  const agFirstScrolls = await readScrollSpy();
+  assert(
+    agFirstScrolls.some((c) => c.options?.behavior === 'auto' && c.options?.block === 'center'),
+    `Expected centered reduced-motion scroll on AgentGate jump, got ${JSON.stringify(agFirstScrolls)}`,
+  );
+  // Repeated same-target cross-tab jump
+  await page.getByRole('tab', { name: 'Schema & State' }).click();
+  await clearScrollSpy();
+  await step5JumpBtn.click();
+  await waitForVisibleFocus(publishDisclosure);
+  const agRepeatScrolls = await readScrollSpy();
+  assert(
+    agRepeatScrolls.some((c) => c.options?.behavior === 'auto' && c.options?.block === 'center'),
+    `Expected reduced-motion scrollIntoView on repeated AgentGate jump, got ${JSON.stringify(agRepeatScrolls)}`,
+  );
+  await uninstallScrollSpy();
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
   await page
     .locator('.ag-item-row[data-rule-id="publish_release_notes"] .ag-disclosure-btn')
     .click();
@@ -461,10 +591,42 @@ try {
   );
   await page.keyboard.press('Enter');
 
+  // Stale AgentGate removes step tags, shows snapshot guard on active step with distinct draft action,
+  // and removing a snapshot rule disables the misleading jump
+  assert(
+    (await page.locator('.ag-rule-step-tag').count()) > 0,
+    'Expected step tags on fresh AgentGate trace',
+  );
+  await page.getByRole('button', { name: '+ Add !modifiedSinceApproval' }).click();
+  assert(
+    (await page.locator('.ag-rule-step-tag').count()) === 0,
+    'Stale AgentGate did not remove step tags',
+  );
+  await page
+    .locator('.ag-timeline .ag-timeline-item[data-active="true"]', { hasText: 'Snapshot guard:' })
+    .waitFor({ state: 'visible' });
+  const agEditDraftRuleBtn = agStep5Item.getByRole('button', { name: 'Edit draft rule' });
+  await agEditDraftRuleBtn.waitFor({ state: 'visible' });
+  assert(
+    (await agEditDraftRuleBtn.getAttribute('aria-label')) === 'Edit draft rule publish_release_notes in editor',
+    'Stale AgentGate trace jump aria-label missing exact Edit draft rule + ruleId',
+  );
+  const pubDisclosure = page.locator('.ag-item-row[data-rule-id="publish_release_notes"] .ag-disclosure-btn');
+  if ((await pubDisclosure.getAttribute('aria-expanded')) !== 'true') {
+    await pubDisclosure.click();
+  }
+  await page.getByRole('button', { name: 'Remove rule publish_release_notes' }).click();
+  assert(
+    (await agStep5Item.getByRole('button', { name: /Edit draft rule|Inspect rule/ }).count()) === 0,
+    'Removed snapshot rule still rendered misleading jump button in AgentGate trace',
+  );
+  await agStep5Item.getByText('Removed in draft', { exact: true }).waitFor({ state: 'visible' });
+
   // Keyboard preset switch + keyboard verification trigger -> principled-fix VERIFIED
   const agPresetSelect = page.locator('#preset-select');
   await focusViaKeyboard(agPresetSelect, 'AgentGate preset select');
   await page.keyboard.press('p');
+  await page.getByRole('alertdialog').getByRole('button', { name: 'Discard & Continue' }).click();
   await page.getByText('Goal reachable: Yes').first().waitFor({ state: 'visible' });
   assert(!(await page.getByText('OUTDATED:', { exact: false }).first().isVisible()),
     'Fresh AgentGate verdict marked outdated');
@@ -586,6 +748,25 @@ try {
   await checkNoOverflow('AgentGate mobile 375x812 (Schema tab)');
   await page.getByRole('tab', { name: 'Rules' }).click();
   await checkNoOverflow('AgentGate mobile 375x812 (Rules tab)');
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await installScrollSpy();
+  await page.getByRole('button', { name: 'Jump to Verdict & Trace' }).click();
+  assert(
+    (await page.evaluate(() => document.activeElement?.id ?? '')) === 'ag-verdict-pane',
+    'AgentGate mobile Jump to Verdict & Trace did not focus #ag-verdict-pane',
+  );
+  await page.getByRole('button', { name: 'Jump to Editor' }).click();
+  assert(
+    (await page.evaluate(() => document.activeElement?.id ?? '')) === 'ag-editor-pane',
+    'AgentGate mobile Jump to Editor did not focus #ag-editor-pane',
+  );
+  const agMobileScrolls = await readScrollSpy();
+  assert(
+    agMobileScrolls.filter((c) => c.options?.behavior === 'auto' && c.options?.block === 'start').length >= 2,
+    `Expected reduced-motion scrollIntoView on AgentGate mobile pane shortcuts, got ${JSON.stringify(agMobileScrolls)}`,
+  );
+  await uninstallScrollSpy();
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
   await checkAxeWcagAA('AgentGate mobile 375x812');
   await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'agent-gate-mobile-375.png') });
   await page.setViewportSize({ width: 360, height: 800 });
@@ -692,6 +873,61 @@ try {
   await page
     .locator('.is-schematic-status-strip .is-badge', { hasText: 'OUTDATED SNAPSHOT' })
     .waitFor({ state: 'visible' });
+  await page.getByText('Snapshot guard:', { exact: false }).first().waitFor({ state: 'visible' });
+  const isOpenInnerItem = page.locator('.is-timeline .is-timeline-item', {
+    hasText: 'open_inner_door',
+  });
+  assert((await isOpenInnerItem.count()) === 1, 'Expected unique InterlockSim trace item for open_inner_door');
+  const editDraftGuardBtn = isOpenInnerItem.getByRole('button', { name: 'Edit draft guard' });
+  await editDraftGuardBtn.waitFor({ state: 'visible' });
+  assert(
+    (await editDraftGuardBtn.getAttribute('aria-label')) === 'Edit draft guard for open_inner_door',
+    'Stale InterlockSim trace jump aria-label missing exact Edit draft guard + ruleId',
+  );
+
+  // Unsaved numeric draft in Guard Inspector is preserved across cross-tab guard jump under reduced motion,
+  // including repeated same-target jumps, and restores the existing valid number
+  const guardIntInput = page.locator('.is-guard-tree-scroll input[inputmode="numeric"]').first();
+  const originalGuardInt = await guardIntInput.inputValue();
+  await guardIntInput.fill('1x');
+  assert(
+    (await guardIntInput.getAttribute('aria-invalid')) === 'true',
+    'Invalid numeric guard draft missing aria-invalid before jump',
+  );
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await installScrollSpy();
+  await page.getByRole('tab', { name: 'Assumptions' }).click();
+  await clearScrollSpy();
+  await editDraftGuardBtn.click();
+  await waitForVisibleFocus('#inspector-rule-select');
+  assert(
+    (await page.getByRole('tab', { name: 'Guard Inspector' }).getAttribute('aria-selected')) === 'true',
+    'Cross-tab Edit draft guard jump did not activate Guard Inspector tab',
+  );
+  const isFirstScrolls = await readScrollSpy();
+  assert(
+    isFirstScrolls.some((c) => c.options?.behavior === 'auto' && c.options?.block === 'center'),
+    `Expected centered reduced-motion scroll on InterlockSim jump, got ${JSON.stringify(isFirstScrolls)}`,
+  );
+  assert(
+    (await guardIntInput.inputValue()) === '1x' &&
+      (await guardIntInput.getAttribute('aria-invalid')) === 'true',
+    'Guard jump wiped unsaved invalid numeric draft',
+  );
+  // Repeated same-target cross-tab jump
+  await page.getByRole('tab', { name: 'Assumptions' }).click();
+  await clearScrollSpy();
+  await editDraftGuardBtn.click();
+  await waitForVisibleFocus('#inspector-rule-select');
+  const isRepeatScrolls = await readScrollSpy();
+  assert(
+    isRepeatScrolls.some((c) => c.options?.behavior === 'auto' && c.options?.block === 'center'),
+    `Expected reduced-motion scrollIntoView on repeated InterlockSim jump, got ${JSON.stringify(isRepeatScrolls)}`,
+  );
+  await uninstallScrollSpy();
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await guardIntInput.fill(originalGuardInt);
+
   await assertBadgeHasIconAndText(
     page.locator('header .is-badge[data-tone="warning"]'),
     'OUTDATED: VIOLATED',
@@ -755,6 +991,25 @@ try {
     interlockDialogFocus === 'Stay Here',
     `Expected InterlockSim alertdialog to focus "Stay Here", got "${interlockDialogFocus}"`,
   );
+  // Verify Tab and Shift+Tab trap focus strictly inside aria-modal="true" alertdialog
+  await page.keyboard.press('Tab');
+  assert(
+    (await page.evaluate(() => document.activeElement?.textContent?.trim() ?? '')) ===
+      'Discard & Continue',
+    'Tab from Stay Here did not move to Discard & Continue inside alertdialog',
+  );
+  await page.keyboard.press('Tab');
+  assert(
+    (await page.evaluate(() => document.activeElement?.textContent?.trim() ?? '')) === 'Stay Here',
+    'Tab from last alertdialog control escaped modal focus trap',
+  );
+  await page.keyboard.press('Shift+Tab');
+  assert(
+    (await page.evaluate(() => document.activeElement?.textContent?.trim() ?? '')) ===
+      'Discard & Continue',
+    'Shift+Tab from first alertdialog control escaped modal focus trap',
+  );
+  await page.keyboard.press('Shift+Tab');
   await page.getByRole('button', { name: 'Stay Here' }).click();
   const interlockRestoredFocus = await page.evaluate(() => document.activeElement?.id ?? '');
   assert(
@@ -808,12 +1063,33 @@ try {
   await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'interlock-sim-mobile-390.png') });
   await page.setViewportSize({ width: 375, height: 812 });
   await checkNoOverflow('InterlockSim mobile 375x812');
+  await assertTelemetryGridEdgeToEdge('InterlockSim mobile 375x812');
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await installScrollSpy();
+  await page.getByRole('button', { name: 'Jump to Schematic' }).click();
+  assert(
+    (await page.evaluate(() => document.activeElement?.id ?? '')) === 'is-schematic-pane',
+    'InterlockSim mobile Jump to Schematic did not focus #is-schematic-pane',
+  );
+  await page.getByRole('button', { name: 'Jump to Verdict & Guard' }).click();
+  assert(
+    (await page.evaluate(() => document.activeElement?.id ?? '')) === 'is-verdict-pane',
+    'InterlockSim mobile Jump to Verdict & Guard did not focus #is-verdict-pane',
+  );
+  const isMobileScrolls = await readScrollSpy();
+  assert(
+    isMobileScrolls.filter((c) => c.options?.behavior === 'auto' && c.options?.block === 'start').length >= 2,
+    `Expected reduced-motion scrollIntoView on InterlockSim mobile pane shortcuts, got ${JSON.stringify(isMobileScrolls)}`,
+  );
+  await uninstallScrollSpy();
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
   await checkAxeWcagAA('InterlockSim mobile 375x812');
   await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'interlock-sim-mobile-375.png') });
   await page.setViewportSize({ width: 360, height: 800 });
   await checkNoOverflow('InterlockSim mobile 360x800');
   await page.setViewportSize({ width: 1440, height: 900 });
   await checkNoOverflow('InterlockSim desktop 1440x900');
+  await assertTelemetryGridEdgeToEdge('InterlockSim desktop 1440x900');
 
   // Clean reciprocal link back to AgentGate
   await page.setViewportSize({ width: 1280, height: 800 });
@@ -961,8 +1237,26 @@ try {
       };
     });
     await faultPage.goto(`${baseUrl}/suite/${app}/`);
+    await faultPage.getByRole('button', { name: 'Dark', exact: true }).click();
     await faultPage.getByRole('button', { name: verifyButton }).click();
-    await faultPage.getByRole('button', { name: 'Cancel Verification' }).click();
+    const cancelBtn = faultPage.getByRole('button', { name: 'Cancel Verification' });
+    await cancelBtn.hover();
+    assert(
+      await cancelBtn.evaluate((el) => el.matches(':hover')),
+      `Cancel Verification button was not in :hover state on ${app}`,
+    );
+    const hoverAxe = await new AxeBuilder({ page: faultPage })
+      .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'])
+      .analyze();
+    const hoverBlocking = hoverAxe.violations.filter(
+      (v) => v.impact === 'critical' || v.impact === 'serious',
+    );
+    assert(
+      hoverBlocking.length === 0,
+      `Dark hover WCAG AA violation on ${app} Cancel Verification: ${hoverBlocking.map((v) => v.id).join(', ')}`,
+    );
+    axeAudits.push(`${app} Dark Cancel Verification hover`);
+    await cancelBtn.click();
     await faultPage.getByText('Verification Cancelled', { exact: false }).last().waitFor();
     await faultPage.close();
 

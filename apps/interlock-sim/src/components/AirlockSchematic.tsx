@@ -205,11 +205,11 @@ export function AirlockSchematic({
           : `GOAL AT STEP ${stepNumber}: NOT REACHED`
         : goal !== undefined
           ? goalReached
-            ? `GOAL REACHED (${goal.id})`
-            : `GOAL NOT REACHED (${goal.id})`
+            ? `GOAL AT STEP ${stepNumber}: REACHED (${goal.id})`
+            : `GOAL AT STEP ${stepNumber}: NOT REACHED (${goal.id})`
           : goalReached
-            ? 'GOAL REACHED'
-            : 'GOAL NOT REACHED';
+            ? `GOAL AT STEP ${stepNumber}: REACHED`
+            : `GOAL AT STEP ${stepNumber}: NOT REACHED`;
   const changedSet = new Set(changedVars);
 
   const safetyBadgeTone = !isEvaluated
@@ -233,7 +233,7 @@ export function AirlockSchematic({
       : hasAirlockInvariants
         ? `INVARIANTS HOLD AT STEP ${stepNumber}`
         : evaluatedInvariantIds.length > 0
-          ? `INVARIANTS SAFE (${evaluatedInvariantIds.length})`
+          ? `INVARIANTS HOLD AT STEP ${stepNumber} (${evaluatedInvariantIds.length})`
           : 'NO INVARIANTS EVALUATED';
 
   const subtitleText = isRunning

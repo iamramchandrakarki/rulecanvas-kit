@@ -74,7 +74,7 @@ export interface PolicyEditorPaneProps {
   readonly model: TransitionSystemModel;
   readonly diagnostics: ModelDiagnosticsIndex;
   readonly resetKey?: string | number | undefined;
-  readonly activeTraceStepsByRuleId?: Readonly<Record<string, readonly number[]>> | undefined;
+  readonly activeTraceStepsByRuleId?: ReadonlyMap<string, readonly number[]> | undefined;
   readonly focusedRuleRequest?: FocusedRuleRequest | null | undefined;
   readonly onChangeModel: (next: TransitionSystemModel) => void;
   readonly onImportModel: (imported: TransitionSystemModel) => void;
@@ -243,7 +243,7 @@ export function PolicyEditorPane({
   model,
   diagnostics,
   resetKey = 0,
-  activeTraceStepsByRuleId = {},
+  activeTraceStepsByRuleId,
   focusedRuleRequest = null,
   onChangeModel,
   onImportModel,
@@ -256,7 +256,7 @@ export function PolicyEditorPane({
   const preserveNextNoticeRef = useRef<boolean>(false);
   const onDraftErrorChangeRef = useRef(onDraftErrorChange);
   onDraftErrorChangeRef.current = onDraftErrorChange;
-  const ruleItemRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const ruleDisclosureRefs = useRef<Record<string, HTMLButtonElement | null>>({});
 
   const allocRowId = (prefix: string): string => {
     nextRowIdRef.current += 1;
@@ -272,6 +272,7 @@ export function PolicyEditorPane({
   });
 
   const [activeTab, setActiveTab] = useState<EditorTabId>('rules');
+  const [pendingRuleFocus, setPendingRuleFocus] = useState<{ readonly rowId: string } | null>(null);
   const [newVarName, setNewVarName] = useState('');
   const [newVarKind, setNewVarKind] = useState<VarDef['kind']>('boolean');
   const [newVarEnumValues, setNewVarEnumValues] = useState('alpha, beta');
@@ -399,6 +400,7 @@ export function PolicyEditorPane({
       });
       setExpandedRuleIds(nextExpanded);
       setSelectedRuleRowId(nextSelectedRowId);
+      setPendingRuleFocus(null);
       setVarNameDrafts({});
       setVarNameErrors({});
     }
@@ -420,6 +422,13 @@ export function PolicyEditorPane({
   const resolvedInvRowIds = alignRowIds(invRowIds, model.invariants.length, 'inv-row');
   const resolvedAsmRowIds = alignRowIds(asmRowIds, model.assumptions.length, 'asm-row');
 
+  const selectAndFocusRuleRow = (rowId: string) => {
+    setActiveTab('rules');
+    setSelectedRuleRowId(rowId);
+    setExpandedRuleIds(new Set([rowId]));
+    setPendingRuleFocus({ rowId });
+  };
+
   useEffect(() => {
     if (focusedRuleRequest === null || focusedRuleRequest.seq === prevFocusedSeqRef.current) {
       return;
@@ -429,13 +438,25 @@ export function PolicyEditorPane({
     if (targetIdx < 0) return;
     const rowId = resolvedRuleRowIds[targetIdx];
     if (rowId === undefined) return;
-    setActiveTab('rules');
-    setSelectedRuleRowId(rowId);
-    setExpandedRuleIds(new Set([rowId]));
-    queueMicrotask(() => {
-      ruleItemRefs.current[rowId]?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    });
+    selectAndFocusRuleRow(rowId);
   }, [focusedRuleRequest, model.rules, resolvedRuleRowIds]);
+
+  useEffect(() => {
+    if (pendingRuleFocus === null || activeTab !== 'rules') {
+      return;
+    }
+    const target = ruleDisclosureRefs.current[pendingRuleFocus.rowId];
+    const prefersReducedMotion =
+      typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    target?.focus({ preventScroll: true });
+    target?.scrollIntoView({
+      behavior: prefersReducedMotion ? 'auto' : 'smooth',
+      block: 'center',
+    });
+    setPendingRuleFocus(null);
+  }, [pendingRuleFocus, activeTab]);
 
   const booleanKeys = schemaKeys.filter((k) => model.schema[k]?.kind === 'boolean');
   const selectedQuickVar = resolveQuickBooleanVariable(schemaKeys, model.schema, quickClauseVar);
@@ -868,7 +889,12 @@ export function PolicyEditorPane({
   };
 
   return (
-    <section id="ag-editor-pane" className="ag-pane ag-pane-editor" aria-label="Policy and schema editor">
+    <section
+      id="ag-editor-pane"
+      tabIndex={-1}
+      className="ag-pane ag-pane-editor"
+      aria-label="Policy and schema editor"
+    >
       <div className="ag-pane-header">
         <h2 className="ag-pane-title">Policy &amp; Schema Editor</h2>
         <span className="ag-meta-inline">
@@ -1269,7 +1295,7 @@ export function PolicyEditorPane({
             <div className="ag-rule-nav" role="group" aria-label="Jump to transition rule">
               {model.rules.map((rule, idx) => {
                 const rowId = resolvedRuleRowIds[idx]!;
-                const traceSteps = activeTraceStepsByRuleId[rule.id] ?? [];
+                const traceSteps = activeTraceStepsByRuleId?.get(rule.id) ?? [];
                 const isSelected = selectedRuleRowId === rowId;
                 return (
                   <button
@@ -1277,14 +1303,7 @@ export function PolicyEditorPane({
                     type="button"
                     className="ag-rule-nav-btn"
                     data-selected={isSelected ? 'true' : 'false'}
-                    onClick={() => {
-                      setSelectedRuleRowId(rowId);
-                      setExpandedRuleIds(new Set([rowId]));
-                      ruleItemRefs.current[rowId]?.scrollIntoView({
-                        behavior: 'smooth',
-                        block: 'nearest',
-                      });
-                    }}
+                    onClick={() => selectAndFocusRuleRow(rowId)}
                   >
                     <span>{rule.id}</span>
                     {traceSteps.length > 0 && (
@@ -1345,7 +1364,7 @@ export function PolicyEditorPane({
               const rowId = resolvedRuleRowIds[idx]!;
               const isExpanded = expandedRuleIds.has(rowId);
               const isFocusedRule = selectedRuleRowId === rowId;
-              const traceSteps = activeTraceStepsByRuleId[rule.id] ?? [];
+              const traceSteps = activeTraceStepsByRuleId?.get(rule.id) ?? [];
               const summary = formatRuleSummary(rule);
               const ruleErrors = getErrorsForPathPrefix(diagnostics, `rules[${idx}]`);
               const resolvedUpdRowIds = alignRowIds(
@@ -1370,9 +1389,6 @@ export function PolicyEditorPane({
               return (
                 <div
                   key={rowId}
-                  ref={(el) => {
-                    ruleItemRefs.current[rowId] = el;
-                  }}
                   className="ag-item-row"
                   data-rule-id={rule.id}
                   data-focused-rule={isFocusedRule ? 'true' : 'false'}
@@ -1410,6 +1426,9 @@ export function PolicyEditorPane({
                         </button>
                       )}
                       <button
+                        ref={(el) => {
+                          ruleDisclosureRefs.current[rowId] = el;
+                        }}
                         type="button"
                         className="ag-disclosure-btn"
                         aria-expanded={isExpanded}

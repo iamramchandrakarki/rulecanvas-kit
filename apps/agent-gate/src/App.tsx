@@ -276,17 +276,19 @@ export function App({
     [verifiedSnapshot],
   );
 
-  const activeTraceStepsByRuleId = useMemo((): Readonly<Record<string, readonly number[]>> => {
-    if (replaySession === null || replaySession.steps.length === 0) return {};
-    const map: Record<string, number[]> = {};
+  const activeTraceStepsByRuleId = useMemo((): ReadonlyMap<string, readonly number[]> => {
+    const map = new Map<string, number[]>();
+    if (isStale || replaySession === null || replaySession.steps.length === 0) return map;
     replaySession.steps.forEach((step, idx) => {
-      if (!Object.hasOwn(map, step.ruleId)) {
-        map[step.ruleId] = [];
+      const existing = map.get(step.ruleId);
+      if (existing !== undefined) {
+        existing.push(idx + 1);
+      } else {
+        map.set(step.ruleId, [idx + 1]);
       }
-      map[step.ruleId]!.push(idx + 1);
     });
     return map;
-  }, [replaySession]);
+  }, [isStale, replaySession]);
 
   const runVerification = (
     targetModel: TransitionSystemModel,
@@ -546,7 +548,14 @@ export function App({
 
   const scrollToSection = (elementId: string) => {
     if (typeof document === 'undefined') return;
-    document.getElementById(elementId)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    const target = document.getElementById(elementId);
+    if (!(target instanceof HTMLElement)) return;
+    const prefersReducedMotion =
+      typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    target.focus({ preventScroll: true });
+    target.scrollIntoView({ behavior: prefersReducedMotion ? 'auto' : 'smooth', block: 'start' });
   };
 
   return (
