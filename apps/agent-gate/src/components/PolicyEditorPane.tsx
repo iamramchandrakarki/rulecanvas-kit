@@ -12,7 +12,6 @@ import {
   formatStateValue,
   formatVarDef,
 } from '@rulecanvas/ui';
-import { useIntegerDraftStore } from '@rulecanvas/workbench-react';
 import {
   addAssumption,
   addInvariant,
@@ -46,7 +45,7 @@ import {
   updateSchemaVariable,
   type ModelDiagnosticsIndex,
 } from '../model-editor.js';
-import { BoolExprEditor, ValueExprEditor, type LiftedIntDraftStore } from './ExprEditor.js';
+import { BoolExprEditor, ValueExprEditor, useExpressionDraftStore } from './ExprEditor.js';
 import { StrictIntegerInput } from './StrictIntegerInput.js';
 
 export type EditorTabId = 'schema' | 'rules' | 'invariants' | 'assumptions' | 'json';
@@ -328,7 +327,7 @@ export function PolicyEditorPane({
   const [varNameErrors, setVarNameErrors] = useState<Readonly<Record<string, string>>>({});
 
   // Lifted integer drafts & errors keyed by stable logical fieldKey (shared store)
-  const intDraftStore: LiftedIntDraftStore = useIntegerDraftStore({
+  const intDraftStore = useExpressionDraftStore({
     resetKey,
     onErrorChange: onDraftErrorChange,
   });

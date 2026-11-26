@@ -27,6 +27,88 @@ function assert(cond, msg) {
   if (!cond) throw new Error(`Browser E2E failed: ${msg}`);
 }
 
+async function checkGuardDraftRoundTrip(context, baseUrl, app, operator) {
+  const page = await context.newPage();
+  const isAgentGate = app === 'agent-gate';
+  const originalRule = isAgentGate ? 'publish_release_notes' : 'open_inner_door';
+  const otherRule = isAgentGate ? 'draft_public_notes' : 'equalize_pressure';
+  const guardLabel = isAgentGate ? `Rule ${originalRule} guard` : `Guard for ${originalRule}`;
+  const selectRule = (id) => isAgentGate
+    ? page.locator(`.ag-rule-nav-btn[data-rule-id="${id}"]`).click()
+    : page.locator('#inspector-rule-select').selectOption(id);
+  const combobox = (label) => page.getByRole('combobox', { name: label, exact: true });
+  const button = (name) => page.getByRole('button', { name, exact: true });
+  const integer = (label) => page.getByRole('textbox', { name: label, exact: true });
+  const scenario = `${app} ${operator} guard`;
+  const verify = page.locator('header').getByRole('button', {
+    name: isAgentGate ? 'Verify Policy' : 'Verify Interlock Model',
+    exact: true,
+  });
+  const verdict = page.locator(`section.${isAgentGate ? 'ag' : 'is'}-verdict`);
+  const switchRule = !isAgentGate && operator !== 'gte'
+    ? (id) => button(`Edit draft guard for ${id}`).click()
+    : selectRule;
+
+  try {
+    await page.goto(`${baseUrl}/suite/${app}/?preset=broken`);
+    await verify.click();
+    await verdict.and(page.locator('[data-status="VIOLATED"]')).waitFor();
+    await selectRule(originalRule);
+    await combobox(`${guardLabel} operator`).selectOption(operator);
+
+    let draftInput;
+    let restoredInput;
+    let removeEarlierRow;
+    if (operator === 'in') {
+      await combobox(`${guardLabel} target variable`).selectOption(isAgentGate ? 'revision' : 'purgeCycles');
+      await button('+ Add value').click();
+      draftInput = integer(`${guardLabel} value 2`);
+      restoredInput = integer(`${guardLabel} value 1`);
+      removeEarlierRow = button('Remove set value 1');
+    } else if (operator === 'and' || operator === 'or') {
+      await button('+ Add clause').click();
+      await combobox(`${guardLabel} clause 2 operator`).selectOption('gte');
+      draftInput = integer(`${guardLabel} clause 2 right integer literal`);
+      restoredInput = integer(`${guardLabel} clause 1 right integer literal`);
+      removeEarlierRow = button('Remove clause 1');
+    } else {
+      draftInput = integer(`${guardLabel} right integer literal`);
+      restoredInput = draftInput;
+    }
+
+    const committed = await draftInput.inputValue();
+    await draftInput.fill('2.9');
+    await removeEarlierRow?.click();
+    assert((await restoredInput.inputValue()) === '2.9', `${scenario}: draft lost before switching rules`);
+
+    await switchRule(otherRule);
+    await restoredInput.waitFor({ state: 'detached' });
+    await switchRule(originalRule);
+    await restoredInput.waitFor();
+    const validationError = page.getByText(/Validation Errors \(1\)/);
+    const freshVerdict = verdict.and(
+      page.locator('[data-stale="false"]:is([data-status="VERIFIED"], [data-status="VIOLATED"])'),
+    );
+    await verify.click();
+    await validationError.or(freshVerdict).first().waitFor();
+    const blocked = (await verdict.and(page.locator('[data-stale]')).count()) === 0;
+    assert(
+      (await restoredInput.inputValue()) === '2.9' &&
+        (await restoredInput.getAttribute('aria-invalid')) === 'true',
+      `${scenario}: rule switch lost the draft or its field error (verification blocked: ${blocked})`,
+    );
+    assert(blocked, `${scenario}: verification ignored the restored draft error`);
+    await validationError.waitFor();
+    await page.getByText('INVALID_INTEGER_DRAFT', { exact: true }).waitFor();
+    await restoredInput.fill(committed);
+    assert((await restoredInput.getAttribute('aria-invalid')) === null, `${scenario}: field error did not clear`);
+    await verify.click();
+    await freshVerdict.waitFor();
+  } finally {
+    await page.close();
+  }
+}
+
 async function loadBrowserTools() {
   const pwCandidates = [
     process.env.PLAYWRIGHT_MODULE,
@@ -174,6 +256,16 @@ try {
   context.on('response', (res) => {
     if (res.status() >= 400) httpErrors.push(`${res.status()} ${res.url()}`);
   });
+  const guardDraftChecks = await Promise.allSettled([
+    checkGuardDraftRoundTrip(context, baseUrl, 'agent-gate', 'and'),
+    checkGuardDraftRoundTrip(context, baseUrl, 'agent-gate', 'in'),
+    checkGuardDraftRoundTrip(context, baseUrl, 'interlock-sim', 'or'),
+    checkGuardDraftRoundTrip(context, baseUrl, 'interlock-sim', 'in'),
+    checkGuardDraftRoundTrip(context, baseUrl, 'interlock-sim', 'gte'),
+  ]);
+  const guardDraftFailures = guardDraftChecks.filter((check) => check.status === 'rejected');
+  assert(guardDraftFailures.length === 0, guardDraftFailures.map((check) => check.reason.message).join('\n'));
+
   const page = await context.newPage();
 
   const checkNoOverflow = async (label) => {

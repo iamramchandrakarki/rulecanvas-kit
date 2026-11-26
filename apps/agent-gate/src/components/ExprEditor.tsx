@@ -1,6 +1,12 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import type { BoolExpr, StateSchema, StateValue, ValueExpr } from '@rulecanvas/core';
 import { formatBoolExpr, formatValueExpr } from '@rulecanvas/ui';
+import {
+  matchesDraftPrefix,
+  useIntegerDraftStore,
+  type LiftedIntDraftStore,
+  type UseIntegerDraftStoreOptions,
+} from '@rulecanvas/workbench-react';
 import {
   createDefaultBoolExpr,
   createDefaultValueExpr,
@@ -25,14 +31,46 @@ const BOOL_OPS: readonly BoolExpr['op'][] = [
 
 const VALUE_OPS: readonly ValueExpr['op'][] = ['lit', 'var', 'add', 'sub'];
 
-export interface LiftedIntDraftStore {
-  readonly draftValues: Readonly<Record<string, string>>;
-  readonly draftErrors: Readonly<Record<string, string>>;
-  readonly onDraftChange: (fieldKey: string, rawDraft: string, errorMessage: string | null) => void;
-  readonly onPruneDrafts: (prefix: string) => void;
+export type { LiftedIntDraftStore } from '@rulecanvas/workbench-react';
+
+function useExpressionRows(resetKey: string | number | undefined) {
+  const [idsByPath, setIdsByPath] = useState(() => new Map<string, readonly string[]>());
+
+  useEffect(() => {
+    setIdsByPath((previous) => (previous.size === 0 ? previous : new Map()));
+  }, [resetKey]);
+
+  return {
+    idsByPath,
+    remember: (path: string, rowIds: readonly string[]) =>
+      setIdsByPath((previous) => new Map(previous).set(path, rowIds)),
+    prune: (prefix: string) =>
+      setIdsByPath((previous) => {
+        const remaining = new Map([...previous].filter(([path]) => !matchesDraftPrefix(path, prefix)));
+        return remaining.size === previous.size ? previous : remaining;
+      }),
+  };
 }
 
-function alignLocalRowIds(
+export interface ExpressionDraftStore extends LiftedIntDraftStore {
+  readonly expressionRows: ReturnType<typeof useExpressionRows>;
+}
+
+export function useExpressionDraftStore(options: UseIntegerDraftStoreOptions): ExpressionDraftStore {
+  const intDraftStore = useIntegerDraftStore(options);
+  // Keep row identity and numeric drafts in the same editor lifetime.
+  const expressionRows = useExpressionRows(options.resetKey);
+  return {
+    ...intDraftStore,
+    expressionRows,
+    onPruneDrafts: (prefix) => {
+      intDraftStore.onPruneDrafts(prefix);
+      expressionRows.prune(prefix);
+    },
+  };
+}
+
+function alignRowIds(
   current: readonly string[],
   targetLength: number,
   prefix: string,
@@ -303,7 +341,7 @@ export interface BoolExprEditorProps {
   readonly ariaLabelPrefix?: string | undefined;
   readonly resetKey?: string | number | undefined;
   readonly fieldPath?: string | undefined;
-  readonly intDraftStore?: LiftedIntDraftStore | undefined;
+  readonly intDraftStore?: (LiftedIntDraftStore & Partial<Pick<ExpressionDraftStore, 'expressionRows'>>) | undefined;
   readonly onDraftErrorChange?: ((fieldKey: string, errorMessage: string | null) => void) | undefined;
 }
 
@@ -320,62 +358,26 @@ export function BoolExprEditor({
   onDraftErrorChange,
 }: BoolExprEditorProps) {
   const baseId = useId();
-  const localRowCounterRef = useRef<number>(0);
-  const prevResetKeyRef = useRef<string | number | undefined>(resetKey);
-
-  const allocLocalId = (prefix: string): string => {
-    localRowCounterRef.current += 1;
-    return `${prefix}-${localRowCounterRef.current}`;
-  };
-
-  const [clauseRowIds, setClauseRowIds] = useState<readonly string[]>(() =>
-    value.op === 'and' || value.op === 'or'
-      ? value.args.map(() => allocLocalId('clause'))
-      : [],
-  );
-  const [inItemRowIds, setInItemRowIds] = useState<readonly string[]>(() =>
-    value.op === 'in' ? value.values.map(() => allocLocalId('in-item')) : [],
-  );
-
-  useEffect(() => {
-    if (prevResetKeyRef.current !== resetKey) {
-      prevResetKeyRef.current = resetKey;
-      setClauseRowIds(
-        value.op === 'and' || value.op === 'or'
-          ? value.args.map(() => allocLocalId('clause'))
-          : [],
-      );
-      setInItemRowIds(value.op === 'in' ? value.values.map(() => allocLocalId('in-item')) : []);
-    }
-  }, [resetKey, value]);
-
   const schemaKeys = schemaKeysOrder ?? Object.keys(schema);
   const booleanKeys = schemaKeys.filter((k) => schema[k]?.kind === 'boolean');
-
+  const localRows = useExpressionRows(resetKey);
+  const rows = intDraftStore?.expressionRows ?? localRows;
+  const clauseListPath = `${fieldPath ?? baseId}.args`;
+  const inListPath = `${fieldPath ?? baseId}.values`;
   const resolvedClauseRowIds =
     value.op === 'and' || value.op === 'or'
-      ? alignLocalRowIds(clauseRowIds, value.args.length, 'clause')
+      ? alignRowIds(rows.idsByPath.get(clauseListPath) ?? [], value.args.length, 'clause')
       : [];
   const resolvedInItemRowIds =
-    value.op === 'in' ? alignLocalRowIds(inItemRowIds, value.values.length, 'in-item') : [];
+    value.op === 'in'
+      ? alignRowIds(rows.idsByPath.get(inListPath) ?? [], value.values.length, 'in-item')
+      : [];
 
   const handleOpChange = (nextOp: BoolExpr['op']) => {
     if (nextOp === value.op) return;
-    if (fieldPath !== undefined) {
-      intDraftStore?.onPruneDrafts(fieldPath);
-    }
-    const nextExpr = createDefaultBoolExpr(nextOp, schema);
-    if (nextExpr.op === 'and' || nextExpr.op === 'or') {
-      setClauseRowIds(nextExpr.args.map(() => allocLocalId('clause')));
-    } else {
-      setClauseRowIds([]);
-    }
-    if (nextExpr.op === 'in') {
-      setInItemRowIds(nextExpr.values.map(() => allocLocalId('in-item')));
-    } else {
-      setInItemRowIds([]);
-    }
-    onChange(nextExpr);
+    if (fieldPath !== undefined) intDraftStore?.onPruneDrafts(fieldPath);
+    if (rows === localRows) localRows.prune(fieldPath ?? baseId);
+    onChange(createDefaultBoolExpr(nextOp, schema));
   };
 
   const opId = `${baseId}-op`;
@@ -451,7 +453,6 @@ export function BoolExprEditor({
             type="button"
             className="ag-btn ag-btn-sm"
             onClick={() => {
-              setClauseRowIds([...resolvedClauseRowIds, allocLocalId('clause')]);
               onChange({
                 op: value.op,
                 args: [...value.args, createDefaultBoolExpr('var', schema)],
@@ -490,8 +491,7 @@ export function BoolExprEditor({
         <div className="ag-expr-children">
           {value.args.map((child, idx) => {
             const clauseId = resolvedClauseRowIds[idx]!;
-            const clauseFieldPath =
-              fieldPath !== undefined ? `${fieldPath}.args.${clauseId}` : undefined;
+            const clauseFieldPath = `${clauseListPath}.${clauseId}`;
             return (
               <div key={clauseId} className="ag-expr-row" style={{ alignItems: 'flex-start' }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
@@ -502,7 +502,7 @@ export function BoolExprEditor({
                     depth={depth + 1}
                     ariaLabelPrefix={`${ariaLabelPrefix} clause ${idx + 1}`}
                     resetKey={resetKey}
-                    fieldPath={clauseFieldPath}
+                    fieldPath={fieldPath !== undefined ? clauseFieldPath : undefined}
                     intDraftStore={intDraftStore}
                     onDraftErrorChange={onDraftErrorChange}
                     onChange={(nextChild) =>
@@ -519,10 +519,11 @@ export function BoolExprEditor({
                     className="ag-btn ag-btn-sm ag-btn-danger"
                     aria-label={`Remove clause ${idx + 1}`}
                     onClick={() => {
-                      if (clauseFieldPath !== undefined) {
-                        intDraftStore?.onPruneDrafts(clauseFieldPath);
-                      }
-                      setClauseRowIds(resolvedClauseRowIds.filter((_, i) => i !== idx));
+                      if (fieldPath !== undefined) intDraftStore?.onPruneDrafts(clauseFieldPath);
+                      rows.remember(
+                        clauseListPath,
+                        resolvedClauseRowIds.filter((_, i) => i !== idx),
+                      );
                       onChange({
                         op: value.op,
                         args: value.args.filter((_, i) => i !== idx),
@@ -560,9 +561,7 @@ export function BoolExprEditor({
               if (left.op === 'var' && value.right.op === 'lit') {
                 const def = schema[left.name];
                 if (def !== undefined) {
-                  if (fieldPath !== undefined) {
-                    intDraftStore?.onPruneDrafts(`${fieldPath}.right`);
-                  }
+                  if (fieldPath !== undefined) intDraftStore?.onPruneDrafts(`${fieldPath}.right`);
                   nextRight = { op: 'lit', value: defaultValueForVarDef(def) };
                 }
               }
@@ -607,8 +606,6 @@ export function BoolExprEditor({
                 type="button"
                 className="ag-btn ag-btn-sm"
                 onClick={() => {
-                  const nextId = allocLocalId('in-item');
-                  setInItemRowIds([...resolvedInItemRowIds, nextId]);
                   const nextVal = defaultInItemValue(value.expr, schema);
                   onChange({
                     ...value,
@@ -630,8 +627,7 @@ export function BoolExprEditor({
                     : 'string';
               const itemTypeId = `${baseId}-in-type-${itemRowId}`;
               const itemValId = `${baseId}-in-val-${itemRowId}`;
-              const itemFieldKey =
-                fieldPath !== undefined ? `${fieldPath}.values.${itemRowId}` : undefined;
+              const itemFieldKey = fieldPath !== undefined ? `${inListPath}.${itemRowId}` : undefined;
 
               const updateInItem = (nextItem: StateValue) => {
                 onChange({
@@ -727,10 +723,11 @@ export function BoolExprEditor({
                     className="ag-btn ag-btn-sm ag-btn-danger"
                     aria-label={`Remove set value ${itemIdx + 1}`}
                     onClick={() => {
-                      if (itemFieldKey !== undefined) {
-                        intDraftStore?.onPruneDrafts(itemFieldKey);
-                      }
-                      setInItemRowIds(resolvedInItemRowIds.filter((_, i) => i !== itemIdx));
+                      if (itemFieldKey !== undefined) intDraftStore?.onPruneDrafts(itemFieldKey);
+                      rows.remember(
+                        inListPath,
+                        resolvedInItemRowIds.filter((_, i) => i !== itemIdx),
+                      );
                       onChange({
                         ...value,
                         values: value.values.filter((_, i) => i !== itemIdx),

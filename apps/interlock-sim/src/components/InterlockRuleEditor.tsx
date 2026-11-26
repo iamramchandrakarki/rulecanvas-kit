@@ -1,11 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type RefObject } from 'react';
 import type { TransitionRule, TransitionSystemModel, ValidationError } from '@rulecanvas/core';
 import { formatBoolExpr, formatUpdateAssignment } from '@rulecanvas/ui';
-import {
-  matchesDraftPrefix,
-  useIntegerDraftStore,
-  type LiftedIntDraftStore,
-} from '@rulecanvas/workbench-react';
+import { matchesDraftPrefix } from '@rulecanvas/workbench-react';
 import {
   addAssumption,
   appendGuardClause,
@@ -21,7 +17,7 @@ import {
   updateRuleGuard,
   type ModelDiagnosticsIndex,
 } from '../model-inspector.js';
-import { BoolExprEditor } from './ExprEditor.js';
+import { BoolExprEditor, useExpressionDraftStore, type ExpressionDraftStore } from './ExprEditor.js';
 
 export { matchesDraftPrefix };
 
@@ -73,7 +69,7 @@ export interface InterlockEditorState {
   readonly openInnerDoorRepaired: boolean;
   readonly schemaKeys: readonly string[];
   readonly repairGen: number;
-  readonly intDraftStore: LiftedIntDraftStore;
+  readonly intDraftStore: ExpressionDraftStore;
   readonly resolvedAsmRowIds: readonly string[];
   readonly jsonDraft: string;
   readonly hasJsonDraft: boolean;
@@ -173,7 +169,7 @@ export function useInterlockEditorState({
     model.assumptions.map(() => allocRowId('asm')),
   );
 
-  const intDraftStore: LiftedIntDraftStore = useIntegerDraftStore({
+  const intDraftStore = useExpressionDraftStore({
     resetKey,
     onErrorChange: onDraftErrorChange,
   });
@@ -279,12 +275,6 @@ export function useInterlockEditorState({
     onChangeModel(
       updateRuleGuard(model, selectedRule.id, appendGuardClause(selectedRule.guard, nextGuard)),
     );
-  };
-
-  const handleSelectRule = (nextRuleId: string) => {
-    if (nextRuleId === selectedRuleId) return;
-    pruneDraftsByPrefix('rule');
-    setSelectedRuleId(nextRuleId);
   };
 
   const handleJsonDraftChange = (nextVal: string) => {
@@ -399,7 +389,7 @@ export function useInterlockEditorState({
     jsonNotice,
     handleApplyPrincipledRepair,
     handleAppendPressureGuardClause,
-    handleSelectRule,
+    handleSelectRule: setSelectedRuleId,
     handleJsonDraftChange,
     handleCopyJson,
     handleDownloadJson,
