@@ -44,3 +44,27 @@ export {
   type WorkbenchHistoryController,
   type WorkbenchHistoryControllerOptions,
 } from './history-route.js';
+
+export {
+  WORKBENCH_THEME_STORAGE_KEY,
+  applyDocumentTheme,
+  isThemePreference,
+  readStoredThemePreference,
+  resolveWorkbenchTheme,
+  useWorkbenchTheme,
+  writeStoredThemePreference,
+  type ResolvedTheme,
+  type ThemePreference,
+  type ThemeStorageLike,
+  type UseWorkbenchThemeOptions,
+  type WorkbenchThemeController,
+} from './theme.js';
+
+export {
+  WorkbenchBrandMark,
+  WorkbenchDiscardDialog,
+  WorkbenchThemeSwitch,
+  type WorkbenchBrandMarkProps,
+  type WorkbenchDiscardDialogProps,
+  type WorkbenchThemeSwitchProps,
+} from './WorkbenchShell.js';
