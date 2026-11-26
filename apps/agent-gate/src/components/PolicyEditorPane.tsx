@@ -256,7 +256,9 @@ export function PolicyEditorPane({
   const preserveNextNoticeRef = useRef<boolean>(false);
   const onDraftErrorChangeRef = useRef(onDraftErrorChange);
   onDraftErrorChangeRef.current = onDraftErrorChange;
-  const ruleDisclosureRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const ruleFocusRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  const ruleNavRef = useRef<HTMLDivElement>(null);
+  const addRuleButtonRef = useRef<HTMLButtonElement>(null);
 
   const allocRowId = (prefix: string): string => {
     nextRowIdRef.current += 1;
@@ -317,16 +319,6 @@ export function PolicyEditorPane({
     buildInitialRowIds('asm-row', model.assumptions.length, nextRowIdRef),
   );
 
-  const [expandedRuleIds, setExpandedRuleIds] = useState<ReadonlySet<string>>(() => {
-    const initial = new Set<string>();
-    model.rules.forEach((rule, idx) => {
-      if (rule.id === 'publish_release_notes') {
-        const rowId = ruleRowIds[idx];
-        if (rowId !== undefined) initial.add(rowId);
-      }
-    });
-    return initial;
-  });
   const [selectedRuleRowId, setSelectedRuleRowId] = useState<string | null>(() => {
     const pubIdx = model.rules.findIndex((r) => r.id === 'publish_release_notes');
     return pubIdx >= 0 ? (ruleRowIds[pubIdx] ?? null) : (ruleRowIds[0] ?? null);
@@ -387,18 +379,15 @@ export function PolicyEditorPane({
       setInvRowIds(nextInvIds);
       setAsmRowIds(nextAsmIds);
 
-      const nextExpanded = new Set<string>();
       let nextSelectedRowId: string | null = nextRuleIds[0] ?? null;
       model.rules.forEach((rule, idx) => {
         if (rule.id === 'publish_release_notes') {
           const rowId = nextRuleIds[idx];
           if (rowId !== undefined) {
-            nextExpanded.add(rowId);
             nextSelectedRowId = rowId;
           }
         }
       });
-      setExpandedRuleIds(nextExpanded);
       setSelectedRuleRowId(nextSelectedRowId);
       setPendingRuleFocus(null);
       setVarNameDrafts({});
@@ -422,11 +411,42 @@ export function PolicyEditorPane({
   const resolvedInvRowIds = alignRowIds(invRowIds, model.invariants.length, 'inv-row');
   const resolvedAsmRowIds = alignRowIds(asmRowIds, model.assumptions.length, 'asm-row');
 
-  const selectAndFocusRuleRow = (rowId: string) => {
+  const selectedRuleIndex = (() => {
+    if (model.rules.length === 0) return -1;
+    if (selectedRuleRowId !== null) {
+      const idx = resolvedRuleRowIds.indexOf(selectedRuleRowId);
+      if (idx >= 0) return idx;
+    }
+    return 0;
+  })();
+  const selectedRule = selectedRuleIndex >= 0 ? model.rules[selectedRuleIndex]! : null;
+  const activeSelectedRuleRowId =
+    selectedRuleIndex >= 0 ? resolvedRuleRowIds[selectedRuleIndex]! : null;
+
+  useEffect(() => {
+    const revealSelectedRule = () => {
+      const nav = ruleNavRef.current;
+      const active = nav?.querySelector('[aria-pressed="true"]');
+      if (nav === null || active == null || nav.scrollWidth <= nav.clientWidth) return;
+      const navBounds = nav.getBoundingClientRect();
+      const activeBounds = active.getBoundingClientRect();
+      if (activeBounds.right > navBounds.right) {
+        nav.scrollLeft += activeBounds.right - navBounds.right;
+      } else if (activeBounds.left < navBounds.left) {
+        nav.scrollLeft += activeBounds.left - navBounds.left;
+      }
+    };
+    revealSelectedRule();
+    window.addEventListener('resize', revealSelectedRule);
+    return () => window.removeEventListener('resize', revealSelectedRule);
+  }, [activeSelectedRuleRowId]);
+
+  const selectRuleRow = (rowId: string, focusDetail: boolean) => {
     setActiveTab('rules');
     setSelectedRuleRowId(rowId);
-    setExpandedRuleIds(new Set([rowId]));
-    setPendingRuleFocus({ rowId });
+    if (focusDetail) {
+      setPendingRuleFocus({ rowId });
+    }
   };
 
   useEffect(() => {
@@ -438,14 +458,18 @@ export function PolicyEditorPane({
     if (targetIdx < 0) return;
     const rowId = resolvedRuleRowIds[targetIdx];
     if (rowId === undefined) return;
-    selectAndFocusRuleRow(rowId);
+    selectRuleRow(rowId, true);
   }, [focusedRuleRequest, model.rules, resolvedRuleRowIds]);
 
   useEffect(() => {
-    if (pendingRuleFocus === null || activeTab !== 'rules') {
+    if (
+      pendingRuleFocus === null ||
+      activeTab !== 'rules' ||
+      activeSelectedRuleRowId !== pendingRuleFocus.rowId
+    ) {
       return;
     }
-    const target = ruleDisclosureRefs.current[pendingRuleFocus.rowId];
+    const target = ruleFocusRefs.current[pendingRuleFocus.rowId];
     const prefersReducedMotion =
       typeof window !== 'undefined' &&
       typeof window.matchMedia === 'function' &&
@@ -456,7 +480,7 @@ export function PolicyEditorPane({
       block: 'center',
     });
     setPendingRuleFocus(null);
-  }, [pendingRuleFocus, activeTab]);
+  }, [pendingRuleFocus, activeTab, activeSelectedRuleRowId]);
 
   const booleanKeys = schemaKeys.filter((k) => model.schema[k]?.kind === 'boolean');
   const selectedQuickVar = resolveQuickBooleanVariable(schemaKeys, model.schema, quickClauseVar);
@@ -535,18 +559,6 @@ export function PolicyEditorPane({
       case 'json':
         return jsonErrors.length;
     }
-  };
-
-  const toggleRuleExpanded = (rowId: string) => {
-    setExpandedRuleIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(rowId)) {
-        next.delete(rowId);
-      } else {
-        next.add(rowId);
-      }
-      return next;
-    });
   };
 
   const handleAddSchemaVar = () => {
@@ -652,11 +664,9 @@ export function PolicyEditorPane({
     const newRowId = allocRowId('rule-row');
     setRuleRowIds([...resolvedRuleRowIds, newRowId]);
     setUpdateRowIdsByRule((prev) => ({ ...prev, [newRowId]: [] }));
-    setExpandedRuleIds((prev) => {
-      const next = new Set(prev);
-      next.add(newRowId);
-      return next;
-    });
+    setActiveTab('rules');
+    setSelectedRuleRowId(newRowId);
+    setPendingRuleFocus({ rowId: newRowId });
     onChangeModel(addRule(model, createDefaultRule(model)));
   };
 
@@ -672,19 +682,23 @@ export function PolicyEditorPane({
   };
 
   const handleRemoveRule = (idx: number, rowId: string) => {
-    setRuleRowIds(resolvedRuleRowIds.filter((_, i) => i !== idx));
+    const nextRuleIds = resolvedRuleRowIds.filter((_, i) => i !== idx);
+    setRuleRowIds(nextRuleIds);
     setUpdateRowIdsByRule((prev) => {
       if (!Object.hasOwn(prev, rowId)) return prev;
       const next = { ...prev };
       delete next[rowId];
       return next;
     });
-    setExpandedRuleIds((prev) => {
-      if (!prev.has(rowId)) return prev;
-      const next = new Set(prev);
-      next.delete(rowId);
-      return next;
-    });
+    if (selectedRuleRowId === rowId) {
+      const fallbackRowId = nextRuleIds[Math.min(idx, nextRuleIds.length - 1)] ?? null;
+      setSelectedRuleRowId(fallbackRowId);
+      if (fallbackRowId !== null) {
+        setPendingRuleFocus({ rowId: fallbackRowId });
+      } else {
+        addRuleButtonRef.current?.focus();
+      }
+    }
     pruneDraftsByPrefix(`rule:${rowId}`);
     onChangeModel(removeRule(model, idx));
   };
@@ -902,39 +916,111 @@ export function PolicyEditorPane({
         </span>
       </div>
 
-      <div className="ag-tablist" role="tablist" aria-label="Policy editor sections">
-        {EDITOR_TABS.map((tab, idx) => {
-          const errCount = tabErrorCount(tab.id);
-          const isSelected = activeTab === tab.id;
-          return (
-            <button
-              key={tab.id}
-              ref={(el) => {
-                tabRefs.current[tab.id] = el;
-              }}
-              id={`tab-${tab.id}`}
-              type="button"
-              role="tab"
-              className="ag-tab"
-              aria-selected={isSelected}
-              aria-controls={`panel-${tab.id}`}
-              tabIndex={isSelected ? 0 : -1}
-              onClick={() => setActiveTab(tab.id)}
-              onKeyDown={(e) => handleTabKeyDown(e, idx)}
-            >
-              <span>{tab.label}</span>
-              {errCount > 0 && (
-                <span
-                  className="ag-tab-count ag-tab-count-error"
-                  aria-label={`${errCount} validation errors`}
+      <div className="ag-editor-shell">
+        <aside className="ag-rule-sidebar" aria-label="Transition rules navigator">
+          <div className="ag-rule-sidebar-content">
+            <div className="ag-rule-sidebar-head">
+              <h3 className="ag-rule-sidebar-title">Rules ({model.rules.length})</h3>
+              <button
+                ref={addRuleButtonRef}
+                type="button"
+                className="ag-btn ag-btn-primary ag-btn-sm"
+                onClick={handleAddRule}
+              >
+                + Add Rule
+              </button>
+            </div>
+
+            {model.rules.length > 0 ? (
+              <div ref={ruleNavRef} className="ag-rule-nav" role="group" aria-label="Jump to transition rule">
+                {model.rules.map((rule, idx) => {
+                  const rowId = resolvedRuleRowIds[idx]!;
+                  const traceSteps = activeTraceStepsByRuleId?.get(rule.id) ?? [];
+                  const ruleErrors = getErrorsForPathPrefix(diagnostics, `rules[${idx}]`);
+                  const hasRuleErrors =
+                    ruleErrors.length > 0 || countIntDraftErrorsByPrefix(`rule:${rowId}`) > 0;
+                  const isSelected = activeSelectedRuleRowId === rowId;
+                  return (
+                    <button
+                      key={rowId}
+                      type="button"
+                      className="ag-rule-nav-btn"
+                      data-rule-id={rule.id}
+                      data-selected={isSelected ? 'true' : 'false'}
+                      aria-pressed={isSelected}
+                      onClick={() => selectRuleRow(rowId, false)}
+                    >
+                      <span className="ag-rule-nav-row">
+                        <span className="ag-rule-nav-id" title={rule.id || '(unnamed rule)'}>
+                          {rule.id || '(unnamed rule)'}
+                        </span>
+                        {(traceSteps.length > 0 || hasRuleErrors) && (
+                          <span className="ag-rule-nav-badges">
+                            {traceSteps.length > 0 && (
+                              <span
+                                className="ag-rule-step-tag"
+                                title={`Executed at step ${traceSteps.join(', ')}`}
+                              >
+                                s{traceSteps.join(',')}
+                              </span>
+                            )}
+                            {hasRuleErrors && (
+                              <span
+                                className="ag-rule-err-dot"
+                                title="Rule has validation errors"
+                                aria-label="Rule has validation errors"
+                              >
+                                !
+                              </span>
+                            )}
+                          </span>
+                        )}
+                      </span>
+                      <span className="ag-rule-nav-label">{rule.label || 'Untitled rule'}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="ag-rule-sidebar-empty">No transition rules defined.</p>
+            )}
+          </div>
+        </aside>
+
+        <div className="ag-editor-main">
+          <div className="ag-tablist" role="tablist" aria-label="Policy editor sections">
+            {EDITOR_TABS.map((tab, idx) => {
+              const errCount = tabErrorCount(tab.id);
+              const isSelected = activeTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  ref={(el) => {
+                    tabRefs.current[tab.id] = el;
+                  }}
+                  id={`tab-${tab.id}`}
+                  type="button"
+                  role="tab"
+                  className="ag-tab"
+                  aria-selected={isSelected}
+                  aria-controls={`panel-${tab.id}`}
+                  tabIndex={isSelected ? 0 : -1}
+                  onClick={() => setActiveTab(tab.id)}
+                  onKeyDown={(e) => handleTabKeyDown(e, idx)}
                 >
-                  {errCount}
-                </span>
-              )}
-            </button>
-          );
-        })}
-      </div>
+                  <span>{tab.label}</span>
+                  {errCount > 0 && (
+                    <span
+                      className="ag-tab-count ag-tab-count-error"
+                      aria-label={`${errCount} validation errors`}
+                    >
+                      {errCount}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
 
       <div
         id="panel-schema"
@@ -1278,92 +1364,11 @@ export function PolicyEditorPane({
         hidden={activeTab !== 'rules'}
       >
         <div className="ag-section">
-          <div className="ag-section-header">
-            <h3 className="ag-section-title">Transition Rules ({model.rules.length})</h3>
-            <button
-              type="button"
-              className="ag-btn ag-btn-primary ag-btn-sm"
-              onClick={() => {
-                handleAddRule();
-              }}
-            >
-              + Add Rule
-            </button>
-          </div>
-
-          {model.rules.length > 0 && (
-            <div className="ag-rule-nav" role="group" aria-label="Jump to transition rule">
-              {model.rules.map((rule, idx) => {
-                const rowId = resolvedRuleRowIds[idx]!;
-                const traceSteps = activeTraceStepsByRuleId?.get(rule.id) ?? [];
-                const isSelected = selectedRuleRowId === rowId;
-                return (
-                  <button
-                    key={rowId}
-                    type="button"
-                    className="ag-rule-nav-btn"
-                    data-selected={isSelected ? 'true' : 'false'}
-                    onClick={() => selectAndFocusRuleRow(rowId)}
-                  >
-                    <span>{rule.id}</span>
-                    {traceSteps.length > 0 && (
-                      <span className="ag-rule-step-tag" title={`Executed at step ${traceSteps.join(', ')}`}>
-                        s{traceSteps.join(',')}
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          )}
-
-          {booleanKeys.length > 0 && selectedQuickVar.length > 0 && (
-            <div className="ag-helper-bar">
-              <strong>Quick guard clause:</strong>
-              <span className="ag-inline-field">
-                <label htmlFor="quick-clause-polarity" className="ag-inline-label">
-                  Polarity
-                </label>
-                <select
-                  id="quick-clause-polarity"
-                  className="ag-select ag-input-mono"
-                  aria-label="Quick clause polarity"
-                  value={quickClauseNegated ? 'not' : 'var'}
-                  onChange={(e) => setQuickClauseNegated(e.target.value === 'not')}
-                >
-                  <option value="not">! (negated)</option>
-                  <option value="var">true (positive)</option>
-                </select>
-              </span>
-              <span className="ag-inline-field">
-                <label htmlFor="quick-clause-var" className="ag-inline-label">
-                  Variable
-                </label>
-                <select
-                  id="quick-clause-var"
-                  className="ag-select ag-input-mono"
-                  aria-label="Quick clause boolean variable"
-                  value={selectedQuickVar}
-                  onChange={(e) => setQuickClauseVar(e.target.value)}
-                >
-                  {booleanKeys.map((k) => (
-                    <option key={k} value={k}>
-                      {k}
-                    </option>
-                  ))}
-                </select>
-              </span>
-              <span style={{ color: 'var(--color-ink-muted)' }}>
-                Append to any rule guard below.
-              </span>
-            </div>
-          )}
-
-          <div className="ag-item-list">
-            {model.rules.map((rule: TransitionRule, idx: number) => {
-              const rowId = resolvedRuleRowIds[idx]!;
-              const isExpanded = expandedRuleIds.has(rowId);
-              const isFocusedRule = selectedRuleRowId === rowId;
+          {selectedRule !== null && activeSelectedRuleRowId !== null ? (
+            (() => {
+              const idx = selectedRuleIndex;
+              const rowId = activeSelectedRuleRowId;
+              const rule = selectedRule;
               const traceSteps = activeTraceStepsByRuleId?.get(rule.id) ?? [];
               const summary = formatRuleSummary(rule);
               const ruleErrors = getErrorsForPathPrefix(diagnostics, `rules[${idx}]`);
@@ -1389,272 +1394,295 @@ export function PolicyEditorPane({
               return (
                 <div
                   key={rowId}
-                  className="ag-item-row"
+                  className="ag-item-row ag-rule-detail"
                   data-rule-id={rule.id}
-                  data-focused-rule={isFocusedRule ? 'true' : 'false'}
                 >
-                  <div className="ag-section-header">
-                    <div>
-                      <span className="ag-mono" style={{ fontWeight: 600 }}>
-                        {summary.id}
-                      </span>{' '}
-                      <span style={{ color: 'var(--color-ink-secondary)', fontSize: 12.5 }}>
-                        : {summary.label}
-                      </span>
+                  <div className="ag-rule-detail-head">
+                    <div className="ag-rule-detail-title-wrap">
+                      <h3 className="ag-section-title ag-rule-detail-title">
+                        <span className="ag-mono">{summary.id}</span>
+                        <span className="ag-rule-detail-subtitle">: {summary.label}</span>
+                      </h3>
                       {traceSteps.length > 0 && (
-                        <>
-                          {' '}
-                          <span className="ag-rule-step-tag">
-                            Trace Step {traceSteps.join(', ')}
-                          </span>
-                        </>
+                        <span className="ag-rule-step-tag">
+                          Trace Step {traceSteps.join(', ')}
+                        </span>
                       )}
                     </div>
+
                     <div className="ag-inline-actions">
-                      {showPrincipledShortcut && (
-                        <button
-                          type="button"
-                          className="ag-btn ag-btn-sm ag-btn-active"
-                          onClick={() =>
-                            handleAppendRuleGuardClause(idx, rule, rowId, {
-                              op: 'not',
-                              arg: { op: 'var', name: 'modifiedSinceApproval' },
-                            })
-                          }
-                        >
-                          + Add !modifiedSinceApproval
-                        </button>
-                      )}
                       <button
-                        ref={(el) => {
-                          ruleDisclosureRefs.current[rowId] = el;
-                        }}
                         type="button"
-                        className="ag-disclosure-btn"
-                        aria-expanded={isExpanded}
-                        aria-controls={`rule-details-${rowId}`}
-                        aria-label={`Edit rule definition, guard AST, and atomic updates for ${rule.id}`}
-                        onClick={() => {
-                          setSelectedRuleRowId(rowId);
-                          toggleRuleExpanded(rowId);
-                        }}
+                        className="ag-btn ag-btn-sm"
+                        disabled={idx === 0}
+                        aria-label={`Move rule ${rule.id} up`}
+                        onClick={() => handleMoveRule(idx, idx - 1)}
                       >
-                        <span aria-hidden="true">{isExpanded ? '▾' : '▸'}</span>
-                        <span>Edit rule definition, guard AST, and atomic updates</span>
+                        Up
+                      </button>
+                      <button
+                        type="button"
+                        className="ag-btn ag-btn-sm"
+                        disabled={idx === model.rules.length - 1}
+                        aria-label={`Move rule ${rule.id} down`}
+                        onClick={() => handleMoveRule(idx, idx + 1)}
+                      >
+                        Down
+                      </button>
+                      <button
+                        type="button"
+                        className="ag-btn ag-btn-sm ag-btn-danger"
+                        aria-label={`Remove rule ${rule.id}`}
+                        onClick={() => handleRemoveRule(idx, rowId)}
+                      >
+                        Remove
                       </button>
                     </div>
                   </div>
 
-                  <div className="ag-code-strip">
-                    <div>
-                      <span className="ag-code-muted">when </span>
-                      {summary.guardText}
-                    </div>
-                    <div>
-                      <span className="ag-code-muted">then </span>
+                  <div className="ag-code-strip ag-rule-prop-strip">
+                    <span className="ag-code-muted">when</span>
+                    <span className="ag-rule-prop-expr">{summary.guardText}</span>
+                    <span className="ag-code-muted">then</span>
+                    <span className="ag-rule-prop-expr">
                       {summary.updatesText.length > 0 ? summary.updatesText.join('; ') : 'no-op'}
-                    </div>
+                    </span>
                   </div>
+
+                  {showPrincipledShortcut && (
+                    <div className="ag-rule-candidate">
+                      <span>Candidate guard</span>
+                      <button
+                        type="button"
+                        className="ag-btn ag-btn-sm ag-btn-active"
+                        onClick={() =>
+                          handleAppendRuleGuardClause(idx, rule, rowId, {
+                            op: 'not',
+                            arg: { op: 'var', name: 'modifiedSinceApproval' },
+                          })
+                        }
+                      >
+                        + Add !modifiedSinceApproval
+                      </button>
+                    </div>
+                  )}
 
                   <InlineErrorList errors={ruleErrors} />
 
-                  <div>
-                    <div
-                      id={`rule-details-${rowId}`}
-                      className="ag-disclosure-body"
-                      hidden={!isExpanded}
-                    >
-                      <div className="ag-inline-actions">
-                        {showQuickAppend && (
-                          <button
-                            type="button"
-                            className="ag-btn ag-btn-sm"
-                            onClick={() => {
-                              const clause: BoolExpr = quickClauseNegated
-                                ? { op: 'not', arg: { op: 'var', name: selectedQuickVar } }
-                                : { op: 'var', name: selectedQuickVar };
-                              handleAppendRuleGuardClause(idx, rule, rowId, clause);
-                            }}
-                          >
-                            + Append {quickClauseNegated ? `!${selectedQuickVar}` : selectedQuickVar}
-                          </button>
-                        )}
-                        <button
-                          type="button"
-                          className="ag-btn ag-btn-sm"
-                          disabled={idx === 0}
-                          aria-label={`Move rule ${rule.id} up`}
-                          onClick={() => handleMoveRule(idx, idx - 1)}
-                        >
-                          Up
-                        </button>
-                        <button
-                          type="button"
-                          className="ag-btn ag-btn-sm"
-                          disabled={idx === model.rules.length - 1}
-                          aria-label={`Move rule ${rule.id} down`}
-                          onClick={() => handleMoveRule(idx, idx + 1)}
-                        >
-                          Down
-                        </button>
-                        <button
-                          type="button"
-                          className="ag-btn ag-btn-sm ag-btn-danger"
-                          aria-label={`Remove rule ${rule.id}`}
-                          onClick={() => handleRemoveRule(idx, rowId)}
-                        >
-                          Remove
-                        </button>
-                      </div>
-                      <div className="ag-row-grid">
-                        <div className="ag-field">
-                          <label htmlFor={`rule-id-${rowId}`}>Rule ID</label>
-                          <input
-                            id={`rule-id-${rowId}`}
-                            type="text"
-                            className="ag-input ag-input-mono"
-                            value={rule.id}
-                            onChange={(e) =>
-                              onChangeModel(
-                                updateRule(model, idx, { ...rule, id: e.target.value }),
-                              )
-                            }
-                          />
-                        </div>
-                        <div className="ag-field">
-                          <label htmlFor={`rule-label-${rowId}`}>Label</label>
-                          <input
-                            id={`rule-label-${rowId}`}
-                            type="text"
-                            className="ag-input"
-                            value={rule.label}
-                            onChange={(e) =>
-                              onChangeModel(
-                                updateRule(model, idx, { ...rule, label: e.target.value }),
-                              )
-                            }
-                          />
-                        </div>
-                      </div>
-
+                  <div className="ag-rule-detail-body">
+                    <div className="ag-row-grid">
                       <div className="ag-field">
-                        <span className="ag-field-label">Guard Expression</span>
-                        <BoolExprEditor
-                          value={rule.guard}
-                          schema={model.schema}
-                          schemaKeysOrder={schemaKeys}
-                          ariaLabelPrefix={`Rule ${rule.id} guard`}
-                          resetKey={resetKey}
-                          fieldPath={`rule:${rowId}.guard`}
-                          intDraftStore={intDraftStore}
-                          onChange={(nextGuard) =>
+                        <label htmlFor={`rule-id-${rowId}`}>Rule ID</label>
+                        <input
+                          ref={(el) => {
+                            ruleFocusRefs.current[rowId] = el;
+                          }}
+                          id={`rule-id-${rowId}`}
+                          type="text"
+                          className="ag-input ag-input-mono"
+                          value={rule.id}
+                          onChange={(e) =>
                             onChangeModel(
-                              updateRule(model, idx, { ...rule, guard: nextGuard }),
+                              updateRule(model, idx, { ...rule, id: e.target.value }),
                             )
                           }
                         />
                       </div>
-
                       <div className="ag-field">
-                        <div className="ag-section-header">
-                          <span className="ag-field-label">
-                            Atomic Updates ({rule.updates.length})
-                          </span>
-                          <button
-                            type="button"
-                            className="ag-btn ag-btn-sm"
-                            onClick={() => handleAddRuleUpdate(idx, rule, rowId)}
-                          >
-                            + Add Update
-                          </button>
-                        </div>
+                        <label htmlFor={`rule-label-${rowId}`}>Label</label>
+                        <input
+                          id={`rule-label-${rowId}`}
+                          type="text"
+                          className="ag-input"
+                          value={rule.label}
+                          onChange={(e) =>
+                            onChangeModel(
+                              updateRule(model, idx, { ...rule, label: e.target.value }),
+                            )
+                          }
+                        />
+                      </div>
+                    </div>
 
-                        {rule.updates.map((upd, updIdx) => {
-                          const updRowId = resolvedUpdRowIds[updIdx]!;
-                          const updVarSelectId = `rule-upd-var-${rowId}-${updRowId}`;
-                          return (
-                            <div
-                              key={updRowId}
-                              className="ag-expr-row"
-                              style={{ alignItems: 'flex-start', paddingTop: 4 }}
-                            >
-                              <span className="ag-inline-field">
-                                <label htmlFor={updVarSelectId} className="ag-inline-label">
-                                  Target variable
-                                </label>
-                                <select
-                                  id={updVarSelectId}
-                                  className="ag-select ag-input-mono"
-                                  aria-label={`Update ${updIdx + 1} target variable for ${rule.id}`}
-                                  value={upd.var}
-                                  onChange={(e) =>
-                                    onChangeModel(
-                                      updateRule(
-                                        model,
-                                        idx,
-                                        updateRuleUpdate(rule, updIdx, {
-                                          ...upd,
-                                          var: e.target.value,
-                                        }),
-                                      ),
-                                    )
-                                  }
-                                >
-                                  {!schemaKeys.includes(upd.var) && (
-                                    <option value={upd.var}>{upd.var} (undeclared)</option>
-                                  )}
-                                  {schemaKeys.map((k) => (
-                                    <option key={k} value={k}>
-                                      {k}
-                                    </option>
-                                  ))}
-                                </select>
-                              </span>
-                              <span className="ag-mono" style={{ paddingTop: 5 }}>
-                                :=
-                              </span>
-                              <div style={{ flex: 1, minWidth: 0 }}>
-                                <ValueExprEditor
-                                  value={upd.value}
-                                  schema={model.schema}
-                                  schemaKeysOrder={schemaKeys}
-                                  ariaLabelPrefix={`Update ${updIdx + 1} value for ${rule.id}`}
-                                  resetKey={resetKey}
-                                  fieldPath={`rule:${rowId}.update:${updRowId}.value`}
-                                  intDraftStore={intDraftStore}
-                                  onChange={(nextVal) =>
-                                    onChangeModel(
-                                      updateRule(
-                                        model,
-                                        idx,
-                                        updateRuleUpdate(rule, updIdx, {
-                                          ...upd,
-                                          value: nextVal,
-                                        }),
-                                      ),
-                                    )
-                                  }
-                                />
-                              </div>
+                    <div className="ag-field ag-rule-subsection">
+                      <span className="ag-field-label">Guard Expression</span>
+                      {booleanKeys.length > 0 && selectedQuickVar.length > 0 && (
+                        <details className="ag-quick-clause">
+                          <summary>Quick guard clause</summary>
+                          <div className="ag-helper-bar">
+                            <span className="ag-inline-field">
+                              <label htmlFor="quick-clause-polarity" className="ag-inline-label">
+                                Polarity
+                              </label>
+                              <select
+                                id="quick-clause-polarity"
+                                className="ag-select ag-input-mono"
+                                aria-label="Quick clause polarity"
+                                value={quickClauseNegated ? 'not' : 'var'}
+                                onChange={(e) => setQuickClauseNegated(e.target.value === 'not')}
+                              >
+                                <option value="not">! (negated)</option>
+                                <option value="var">true (positive)</option>
+                              </select>
+                            </span>
+                            <span className="ag-inline-field">
+                              <label htmlFor="quick-clause-var" className="ag-inline-label">
+                                Variable
+                              </label>
+                              <select
+                                id="quick-clause-var"
+                                className="ag-select ag-input-mono"
+                                aria-label="Quick clause boolean variable"
+                                value={selectedQuickVar}
+                                onChange={(e) => setQuickClauseVar(e.target.value)}
+                              >
+                                {booleanKeys.map((k) => (
+                                  <option key={k} value={k}>
+                                    {k}
+                                  </option>
+                                ))}
+                              </select>
+                            </span>
+                            {showQuickAppend && (
                               <button
                                 type="button"
-                                className="ag-btn ag-btn-sm ag-btn-danger"
-                                onClick={() =>
-                                  handleRemoveRuleUpdate(idx, rule, rowId, updIdx, updRowId)
-                                }
+                                className="ag-btn ag-btn-sm"
+                                onClick={() => {
+                                  const clause: BoolExpr = quickClauseNegated
+                                    ? { op: 'not', arg: { op: 'var', name: selectedQuickVar } }
+                                    : { op: 'var', name: selectedQuickVar };
+                                  handleAppendRuleGuardClause(idx, rule, rowId, clause);
+                                }}
                               >
-                                Remove
+                                + Append {quickClauseNegated ? `!${selectedQuickVar}` : selectedQuickVar}
                               </button>
-                            </div>
-                          );
-                        })}
+                            )}
+                          </div>
+                        </details>
+                      )}
+                      <BoolExprEditor
+                        value={rule.guard}
+                        schema={model.schema}
+                        schemaKeysOrder={schemaKeys}
+                        ariaLabelPrefix={`Rule ${rule.id} guard`}
+                        resetKey={resetKey}
+                        fieldPath={`rule:${rowId}.guard`}
+                        intDraftStore={intDraftStore}
+                        onChange={(nextGuard) =>
+                          onChangeModel(
+                            updateRule(model, idx, { ...rule, guard: nextGuard }),
+                          )
+                        }
+                      />
+                    </div>
+
+                    <div className="ag-field ag-rule-subsection">
+                      <div className="ag-section-header">
+                        <span className="ag-field-label">
+                          Atomic Updates ({rule.updates.length})
+                        </span>
+                        <button
+                          type="button"
+                          className="ag-btn ag-btn-sm"
+                          onClick={() => handleAddRuleUpdate(idx, rule, rowId)}
+                        >
+                          + Add Update
+                        </button>
                       </div>
+
+                      {rule.updates.length > 0 ? (
+                        <div className="ag-update-list">
+                          {rule.updates.map((upd, updIdx) => {
+                            const updRowId = resolvedUpdRowIds[updIdx]!;
+                            const updVarSelectId = `rule-upd-var-${rowId}-${updRowId}`;
+                            return (
+                              <div key={updRowId} className="ag-expr-row ag-update-row">
+                                <span className="ag-inline-field">
+                                  <label htmlFor={updVarSelectId} className="ag-inline-label">
+                                    Target variable
+                                  </label>
+                                  <select
+                                    id={updVarSelectId}
+                                    className="ag-select ag-input-mono"
+                                    aria-label={`Update ${updIdx + 1} target variable for ${rule.id}`}
+                                    value={upd.var}
+                                    onChange={(e) =>
+                                      onChangeModel(
+                                        updateRule(
+                                          model,
+                                          idx,
+                                          updateRuleUpdate(rule, updIdx, {
+                                            ...upd,
+                                            var: e.target.value,
+                                          }),
+                                        ),
+                                      )
+                                    }
+                                  >
+                                    {!schemaKeys.includes(upd.var) && (
+                                      <option value={upd.var}>{upd.var} (undeclared)</option>
+                                    )}
+                                    {schemaKeys.map((k) => (
+                                      <option key={k} value={k}>
+                                        {k}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </span>
+                                <span className="ag-mono ag-update-assign" aria-hidden="true">
+                                  :=
+                                </span>
+                                <button
+                                  type="button"
+                                  className="ag-btn ag-btn-sm ag-btn-danger"
+                                  onClick={() =>
+                                    handleRemoveRuleUpdate(idx, rule, rowId, updIdx, updRowId)
+                                  }
+                                >
+                                  Remove
+                                </button>
+                                <div className="ag-update-value">
+                                  <ValueExprEditor
+                                    value={upd.value}
+                                    schema={model.schema}
+                                    schemaKeysOrder={schemaKeys}
+                                    ariaLabelPrefix={`Update ${updIdx + 1} value for ${rule.id}`}
+                                    resetKey={resetKey}
+                                    fieldPath={`rule:${rowId}.update:${updRowId}.value`}
+                                    intDraftStore={intDraftStore}
+                                    onChange={(nextVal) =>
+                                      onChangeModel(
+                                        updateRule(
+                                          model,
+                                          idx,
+                                          updateRuleUpdate(rule, updIdx, {
+                                            ...upd,
+                                            value: nextVal,
+                                          }),
+                                        ),
+                                      )
+                                    }
+                                  />
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <p className="ag-pane-subtitle">
+                          No atomic state updates (rule acts as a no-op transition when guard holds).
+                        </p>
+                      )}
                     </div>
                   </div>
                 </div>
               );
-            })}
-          </div>
+            })()
+          ) : (
+            <p className="ag-pane-subtitle">
+              Add a rule from the navigator to edit its guard and updates.
+            </p>
+          )}
         </div>
       </div>
 
@@ -1972,23 +2000,25 @@ export function PolicyEditorPane({
             </div>
           )}
 
-          <div className="ag-field">
-            <label htmlFor="model-json-textarea">TransitionSystemModel JSON</label>
-            <textarea
-              id="model-json-textarea"
-              rows={20}
-              className="ag-textarea ag-textarea-mono"
-              spellCheck={false}
-              value={jsonDraft}
-              onChange={(e) => {
-                const nextVal = e.target.value;
-                setJsonDraft(nextVal);
-                onJsonDraftDirtyChangeRef.current?.(nextVal !== committedJsonRef.current);
-              }}
-            />
+            <div className="ag-field">
+              <label htmlFor="model-json-textarea">TransitionSystemModel JSON</label>
+              <textarea
+                id="model-json-textarea"
+                rows={20}
+                className="ag-textarea ag-textarea-mono"
+                spellCheck={false}
+                value={jsonDraft}
+                onChange={(e) => {
+                  const nextVal = e.target.value;
+                  setJsonDraft(nextVal);
+                  onJsonDraftDirtyChangeRef.current?.(nextVal !== committedJsonRef.current);
+                }}
+              />
+            </div>
           </div>
         </div>
       </div>
+    </div>
     </section>
   );
 }

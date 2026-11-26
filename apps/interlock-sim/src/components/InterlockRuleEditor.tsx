@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent, type RefObject } from 'react';
 import type { TransitionRule, TransitionSystemModel, ValidationError } from '@rulecanvas/core';
 import { formatBoolExpr, formatUpdateAssignment } from '@rulecanvas/ui';
 import {
@@ -49,6 +49,54 @@ export interface InterlockRuleEditorProps {
   readonly onJsonDraftDirtyChange?: ((dirty: boolean) => void) | undefined;
 }
 
+export interface UseInterlockEditorStateOptions {
+  readonly model: TransitionSystemModel;
+  readonly diagnostics: ModelDiagnosticsIndex;
+  readonly resetKey?: string | number | undefined;
+  readonly focusedRuleRequest?: FocusedInterlockRuleRequest | null | undefined;
+  readonly isGuardTabActive: boolean;
+  readonly onActivateGuardTab: () => void;
+  readonly onChangeModel: (next: TransitionSystemModel) => void;
+  readonly onImportModel: (imported: TransitionSystemModel) => void;
+  readonly onDraftErrorChange?: ((fieldKey: string, errorMessage: string | null) => void) | undefined;
+  readonly onJsonDraftDirtyChange?: ((dirty: boolean) => void) | undefined;
+}
+
+export interface InterlockEditorState {
+  readonly model: TransitionSystemModel;
+  readonly diagnostics: ModelDiagnosticsIndex;
+  readonly resetKey: string | number;
+  readonly ruleSelectRef: RefObject<HTMLSelectElement | null>;
+  readonly selectedRule: TransitionRule | null;
+  readonly effectiveRuleIndex: number;
+  readonly repairableOpenInnerDoor: boolean;
+  readonly openInnerDoorRepaired: boolean;
+  readonly schemaKeys: readonly string[];
+  readonly repairGen: number;
+  readonly intDraftStore: LiftedIntDraftStore;
+  readonly resolvedAsmRowIds: readonly string[];
+  readonly jsonDraft: string;
+  readonly hasJsonDraft: boolean;
+  readonly exportBlocked: boolean;
+  readonly exportError: ValidationError | null;
+  readonly jsonErrors: readonly ValidationError[];
+  readonly jsonNotice: string | null;
+  readonly handleApplyPrincipledRepair: () => void;
+  readonly handleAppendPressureGuardClause: () => void;
+  readonly handleSelectRule: (nextRuleId: string) => void;
+  readonly handleJsonDraftChange: (nextVal: string) => void;
+  readonly handleCopyJson: () => Promise<void>;
+  readonly handleDownloadJson: () => void;
+  readonly handleApplyJsonImport: () => void;
+  readonly handleAddAssumption: () => void;
+  readonly handleRemoveAssumption: (idx: number) => void;
+  readonly handleUpdateAssumption: (
+    idx: number,
+    next: TransitionSystemModel['assumptions'][number],
+  ) => void;
+  readonly handleGuardChange: (ruleId: string, nextGuard: TransitionRule['guard']) => void;
+}
+
 function defaultRuleSelection(rules: readonly TransitionRule[]): string {
   const openInner = rules.find((r) => r.id === 'open_inner_door');
   return openInner !== undefined ? openInner.id : (rules[0]?.id ?? '');
@@ -77,36 +125,33 @@ function alignRowIds(
   return next;
 }
 
-export function InterlockRuleEditor({
+export function useInterlockEditorState({
   model,
   diagnostics,
   resetKey = 0,
   focusedRuleRequest = null,
+  isGuardTabActive,
+  onActivateGuardTab,
   onChangeModel,
   onImportModel,
   onDraftErrorChange,
   onJsonDraftDirtyChange,
-}: InterlockRuleEditorProps) {
+}: UseInterlockEditorStateOptions): InterlockEditorState {
   const nextRowIdRef = useRef<number>(0);
   const prevResetKeyRef = useRef<string | number>(resetKey);
   const prevFocusSeqRef = useRef<number>(0);
   const ruleSelectRef = useRef<HTMLSelectElement | null>(null);
   const preserveNextNoticeRef = useRef<boolean>(false);
-  const onDraftErrorChangeRef = useRef(onDraftErrorChange);
-  onDraftErrorChangeRef.current = onDraftErrorChange;
+  const onActivateGuardTabRef = useRef(onActivateGuardTab);
+  onActivateGuardTabRef.current = onActivateGuardTab;
+  const onJsonDraftDirtyChangeRef = useRef(onJsonDraftDirtyChange);
+  onJsonDraftDirtyChangeRef.current = onJsonDraftDirtyChange;
 
   const allocRowId = (prefix: string): string => {
     nextRowIdRef.current += 1;
     return `${prefix}-${nextRowIdRef.current}`;
   };
 
-  const tabRefs = useRef<Record<InspectorTabId, HTMLButtonElement | null>>({
-    guard: null,
-    assumptions: null,
-    json: null,
-  });
-
-  const [activeTab, setActiveTab] = useState<InspectorTabId>('guard');
   const [pendingFocusSeq, setPendingFocusSeq] = useState<number | null>(null);
   const [selectedRuleId, setSelectedRuleId] = useState<string>(() =>
     defaultRuleSelection(model.rules),
@@ -114,8 +159,6 @@ export function InterlockRuleEditor({
 
   const [initialJsonExport] = useState(() => tryExportModelJson(model));
   const committedJsonRef = useRef<string>(initialJsonExport.ok ? initialJsonExport.text : '');
-  const onJsonDraftDirtyChangeRef = useRef(onJsonDraftDirtyChange);
-  onJsonDraftDirtyChangeRef.current = onJsonDraftDirtyChange;
   const [jsonDraft, setJsonDraft] = useState<string>(() =>
     initialJsonExport.ok ? initialJsonExport.text : '',
   );
@@ -175,14 +218,14 @@ export function InterlockRuleEditor({
     }
     prevFocusSeqRef.current = focusedRuleRequest.seq;
     if (model.rules.some((r) => r.id === focusedRuleRequest.ruleId)) {
-      setActiveTab('guard');
+      onActivateGuardTabRef.current();
       setSelectedRuleId(focusedRuleRequest.ruleId);
       setPendingFocusSeq(focusedRuleRequest.seq);
     }
   }, [focusedRuleRequest, model.rules]);
 
   useEffect(() => {
-    if (pendingFocusSeq === null || activeTab !== 'guard') {
+    if (pendingFocusSeq === null || !isGuardTabActive) {
       return;
     }
     const prefersReducedMotion =
@@ -195,7 +238,7 @@ export function InterlockRuleEditor({
       block: 'center',
     });
     setPendingFocusSeq(null);
-  }, [pendingFocusSeq, activeTab]);
+  }, [pendingFocusSeq, isGuardTabActive]);
 
   const resolvedAsmRowIds = alignRowIds(asmRowIds, model.assumptions.length, 'asm');
 
@@ -207,31 +250,16 @@ export function InterlockRuleEditor({
   const openInnerDoorRepaired = isPrincipledOpenInnerDoorGuard(model);
   const schemaKeys = Object.keys(model.schema);
   const exportBlocked = exportError !== null;
-
-  const handleTabKeyDown = (e: KeyboardEvent<HTMLButtonElement>, currentIdx: number) => {
-    let targetIdx: number | null = null;
-    if (e.key === 'ArrowRight') {
-      targetIdx = (currentIdx + 1) % INSPECTOR_TABS.length;
-    } else if (e.key === 'ArrowLeft') {
-      targetIdx = (currentIdx - 1 + INSPECTOR_TABS.length) % INSPECTOR_TABS.length;
-    } else if (e.key === 'Home') {
-      targetIdx = 0;
-    } else if (e.key === 'End') {
-      targetIdx = INSPECTOR_TABS.length - 1;
-    }
-    if (targetIdx !== null) {
-      e.preventDefault();
-      const targetTab = INSPECTOR_TABS[targetIdx]!;
-      setActiveTab(targetTab.id);
-      tabRefs.current[targetTab.id]?.focus();
-    }
-  };
+  const hasJsonDraft = jsonDraft !== committedJsonRef.current;
 
   const handleApplyPrincipledRepair = () => {
+    if (hasJsonDraft) return;
     pruneDraftsByPrefix('rule');
     setRepairGen((g) => g + 1);
     onChangeModel(applyPrincipledInterlockRepair(model));
     setSelectedRuleId('open_inner_door');
+    onActivateGuardTabRef.current();
+    setPendingFocusSeq((seq) => (seq ?? 0) + 1);
   };
 
   const handleAppendPressureGuardClause = () => {
@@ -257,6 +285,11 @@ export function InterlockRuleEditor({
     if (nextRuleId === selectedRuleId) return;
     pruneDraftsByPrefix('rule');
     setSelectedRuleId(nextRuleId);
+  };
+
+  const handleJsonDraftChange = (nextVal: string) => {
+    setJsonDraft(nextVal);
+    onJsonDraftDirtyChangeRef.current?.(nextVal !== committedJsonRef.current);
   };
 
   const handleCopyJson = async () => {
@@ -312,6 +345,409 @@ export function InterlockRuleEditor({
     onImportModel(imported.model);
   };
 
+  const handleAddAssumption = () => {
+    const existingIds = new Set(model.assumptions.map((a) => a.id));
+    let counter = 1;
+    while (existingIds.has(`assumption_custom_${counter}`)) {
+      counter += 1;
+    }
+    setAsmRowIds([...resolvedAsmRowIds, allocRowId('asm')]);
+    onChangeModel(
+      addAssumption(model, {
+        id: `assumption_custom_${counter}`,
+        category: 'scope',
+        statement: 'Discrete state abstraction assumption.',
+        notModeled: 'Physical hardware degradation and continuous dynamics.',
+      }),
+    );
+  };
+
+  const handleRemoveAssumption = (idx: number) => {
+    setAsmRowIds(resolvedAsmRowIds.filter((_, i) => i !== idx));
+    onChangeModel(removeAssumption(model, idx));
+  };
+
+  const handleUpdateAssumption = (
+    idx: number,
+    next: TransitionSystemModel['assumptions'][number],
+  ) => {
+    onChangeModel(updateAssumption(model, idx, next));
+  };
+
+  const handleGuardChange = (ruleId: string, nextGuard: TransitionRule['guard']) => {
+    onChangeModel(updateRuleGuard(model, ruleId, nextGuard));
+  };
+
+  return {
+    model,
+    diagnostics,
+    resetKey,
+    ruleSelectRef,
+    selectedRule,
+    effectiveRuleIndex,
+    repairableOpenInnerDoor,
+    openInnerDoorRepaired,
+    schemaKeys,
+    repairGen,
+    intDraftStore,
+    resolvedAsmRowIds,
+    jsonDraft,
+    hasJsonDraft,
+    exportBlocked,
+    exportError,
+    jsonErrors,
+    jsonNotice,
+    handleApplyPrincipledRepair,
+    handleAppendPressureGuardClause,
+    handleSelectRule,
+    handleJsonDraftChange,
+    handleCopyJson,
+    handleDownloadJson,
+    handleApplyJsonImport,
+    handleAddAssumption,
+    handleRemoveAssumption,
+    handleUpdateAssumption,
+    handleGuardChange,
+  };
+}
+
+export function GuidedRepairCallout({ editor }: { readonly editor: InterlockEditorState }) {
+  if (!editor.repairableOpenInnerDoor || editor.openInnerDoorRepaired) {
+    return null;
+  }
+  return (
+    <div className="is-repair-callout">
+      <div className="is-section-header">
+        <strong>Candidate Guard Repair Available for open_inner_door</strong>
+        <button
+          type="button"
+          className="is-btn is-btn-sm is-btn-primary"
+          disabled={editor.hasJsonDraft}
+          onClick={editor.handleApplyPrincipledRepair}
+        >
+          Apply Principled Repair
+        </button>
+      </div>
+      <p style={{ fontSize: 12, color: 'var(--color-ink-2)' }}>
+        Stages a candidate guard edit enforcing <code className="is-mono">pressure == negative</code>{' '}
+        unconditionally alongside closed outer door, UV-off, and occupancy so{' '}
+        <code className="is-mono">maintenanceOverride</code> bypasses only the HEPA purge count.
+        Run <strong>Verify Interlock Model</strong> afterward to confirm the verdict.
+      </p>
+      {editor.hasJsonDraft && (
+        <p>Import the JSON or restore its original text before applying the candidate repair.</p>
+      )}
+    </div>
+  );
+}
+
+export function GuardInspectorContent({ editor }: { readonly editor: InterlockEditorState }) {
+  const { model, diagnostics, resetKey, selectedRule, effectiveRuleIndex } = editor;
+  return (
+    <>
+      <div className="is-field">
+        <label htmlFor="inspector-rule-select">Inspect / Edit Transition Rule</label>
+        <select
+          ref={editor.ruleSelectRef}
+          id="inspector-rule-select"
+          className="is-select is-mono"
+          value={selectedRule?.id ?? ''}
+          onChange={(e) => editor.handleSelectRule(e.target.value)}
+        >
+          {model.rules.map((rule) => (
+            <option key={rule.id} value={rule.id}>
+              {rule.id}: {rule.label}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {selectedRule !== null && (
+        <>
+          <div className="is-code-strip">
+            <div>
+              <strong>guard:</strong> {formatBoolExpr(selectedRule.guard)}
+            </div>
+            <div style={{ marginTop: 4, color: 'var(--color-muted)' }}>
+              <strong>updates:</strong>{' '}
+              {selectedRule.updates.map((u) => formatUpdateAssignment(u)).join('; ')}
+            </div>
+          </div>
+
+          <div className="is-section-header">
+            <span className="is-section-title">Guard Expression AST</span>
+            <button
+              type="button"
+              className="is-btn is-btn-sm"
+              onClick={editor.handleAppendPressureGuardClause}
+            >
+              + Add Conjunction Clause
+            </button>
+          </div>
+
+          <div
+            className="is-guard-tree-scroll"
+            tabIndex={0}
+            role="region"
+            aria-label="Guard expression AST editor"
+          >
+            <BoolExprEditor
+              key={`${resetKey}:${selectedRule.id}:${editor.repairGen}`}
+              value={selectedRule.guard}
+              schema={model.schema}
+              schemaKeysOrder={editor.schemaKeys}
+              ariaLabelPrefix={`Guard for ${selectedRule.id}`}
+              resetKey={`${resetKey}:${selectedRule.id}:${editor.repairGen}`}
+              fieldPath={`rule:${selectedRule.id}.guard`}
+              intDraftStore={editor.intDraftStore}
+              onChange={(nextGuard) => editor.handleGuardChange(selectedRule.id, nextGuard)}
+            />
+          </div>
+
+          {getErrorsForPathPrefix(diagnostics, `rules[${effectiveRuleIndex}]`).length > 0 && (
+            <ul className="is-inline-errors" role="alert">
+              {getErrorsForPathPrefix(diagnostics, `rules[${effectiveRuleIndex}]`).map(
+                (err, idx) => (
+                  <li key={`${err.code}-${err.path}-${idx}`}>
+                    <code>{err.path}</code>: {err.message}
+                  </li>
+                ),
+              )}
+            </ul>
+          )}
+        </>
+      )}
+    </>
+  );
+}
+
+export function AssumptionsEditorContent({
+  editor,
+  showDraftBadge = false,
+}: {
+  readonly editor: InterlockEditorState;
+  readonly showDraftBadge?: boolean | undefined;
+}) {
+  const { model, diagnostics, resolvedAsmRowIds } = editor;
+  return (
+    <>
+      <div className="is-section-header">
+        <h3 className="is-section-title">
+          Declared Model Assumptions ({model.assumptions.length})
+        </h3>
+        <div className="is-inline-actions">
+          {showDraftBadge && (
+            <span className="is-badge" data-tone="warning">
+              <span aria-hidden="true">!</span> UNVERIFIED DRAFT
+            </span>
+          )}
+          <button
+            type="button"
+            className="is-btn is-btn-sm"
+            onClick={editor.handleAddAssumption}
+          >
+            + Add Assumption
+          </button>
+        </div>
+      </div>
+
+      <div>
+        {model.assumptions.map((asm, idx) => {
+          const rowId = resolvedAsmRowIds[idx]!;
+          const asmErrors = getErrorsForPathPrefix(diagnostics, `assumptions[${idx}]`);
+          return (
+            <div key={rowId} className="is-assumption-row">
+              <div className="is-row-grid">
+                <div className="is-field">
+                  <label htmlFor={`asm-id-${rowId}`}>Assumption ID</label>
+                  <input
+                    id={`asm-id-${rowId}`}
+                    type="text"
+                    className="is-input is-mono"
+                    value={asm.id}
+                    onChange={(e) =>
+                      editor.handleUpdateAssumption(idx, { ...asm, id: e.target.value })
+                    }
+                  />
+                </div>
+                <div className="is-field">
+                  <label htmlFor={`asm-category-${rowId}`}>Category</label>
+                  <input
+                    id={`asm-category-${rowId}`}
+                    type="text"
+                    className="is-input is-mono"
+                    value={asm.category}
+                    onChange={(e) =>
+                      editor.handleUpdateAssumption(idx, { ...asm, category: e.target.value })
+                    }
+                  />
+                </div>
+                <div>
+                  <button
+                    type="button"
+                    className="is-btn is-btn-sm is-btn-danger"
+                    disabled={model.assumptions.length <= 1}
+                    onClick={() => editor.handleRemoveAssumption(idx)}
+                  >
+                    Remove
+                  </button>
+                </div>
+              </div>
+
+              <div className="is-field">
+                <label htmlFor={`asm-statement-${rowId}`}>Captured Statement</label>
+                <textarea
+                  id={`asm-statement-${rowId}`}
+                  rows={2}
+                  className="is-textarea"
+                  value={asm.statement}
+                  onChange={(e) =>
+                    editor.handleUpdateAssumption(idx, { ...asm, statement: e.target.value })
+                  }
+                />
+              </div>
+
+              <div className="is-field">
+                <label htmlFor={`asm-not-modeled-${rowId}`}>Explicitly Not Modeled</label>
+                <textarea
+                  id={`asm-not-modeled-${rowId}`}
+                  rows={2}
+                  className="is-textarea"
+                  value={asm.notModeled}
+                  onChange={(e) =>
+                    editor.handleUpdateAssumption(idx, { ...asm, notModeled: e.target.value })
+                  }
+                />
+              </div>
+
+              {asmErrors.length > 0 && (
+                <ul className="is-inline-errors" role="alert">
+                  {asmErrors.map((err, errIdx) => (
+                    <li key={`${err.code}-${errIdx}`}>
+                      <code>{err.path}</code>: {err.message}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
+export function JsonModelContent({ editor }: { readonly editor: InterlockEditorState }) {
+  return (
+    <>
+      <div className="is-section-header">
+        <h3 className="is-section-title">Portable Model JSON Import &amp; Export</h3>
+        <div className="is-inline-actions">
+          <button
+            type="button"
+            className="is-btn is-btn-sm"
+            disabled={editor.exportBlocked}
+            onClick={editor.handleCopyJson}
+          >
+            Copy JSON
+          </button>
+          <button
+            type="button"
+            className="is-btn is-btn-sm"
+            disabled={editor.exportBlocked}
+            onClick={editor.handleDownloadJson}
+          >
+            Download JSON
+          </button>
+          <button
+            type="button"
+            className="is-btn is-btn-primary is-btn-sm"
+            onClick={editor.handleApplyJsonImport}
+          >
+            Import JSON
+          </button>
+        </div>
+      </div>
+
+      {editor.jsonNotice !== null && (
+        <div className="is-alert is-alert-info" role="status">
+          {editor.jsonNotice}
+        </div>
+      )}
+
+      {editor.exportError !== null && (
+        <div className="is-alert" role="alert">
+          <strong>JSON Export Failed</strong>
+          <ul>
+            <li>
+              <code>{editor.exportError.path}</code>: {editor.exportError.message} (
+              <code>{editor.exportError.code}</code>)
+            </li>
+          </ul>
+        </div>
+      )}
+
+      {editor.jsonErrors.length > 0 && (
+        <div className="is-alert" role="alert">
+          <strong>JSON Import Validation Failed ({editor.jsonErrors.length})</strong>
+          <ul>
+            {editor.jsonErrors.map((err, idx) => (
+              <li key={`${err.code}-${err.path}-${idx}`}>
+                <code>{err.path}</code>: {err.message} (<code>{err.code}</code>)
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <div className="is-field">
+        <label htmlFor="interlock-json-textarea">TransitionSystemModel JSON</label>
+        <textarea
+          id="interlock-json-textarea"
+          rows={18}
+          className="is-textarea is-textarea-mono"
+          spellCheck={false}
+          value={editor.jsonDraft}
+          onChange={(e) => editor.handleJsonDraftChange(e.target.value)}
+        />
+      </div>
+    </>
+  );
+}
+
+export function InterlockRuleEditor(props: InterlockRuleEditorProps) {
+  const tabRefs = useRef<Record<InspectorTabId, HTMLButtonElement | null>>({
+    guard: null,
+    assumptions: null,
+    json: null,
+  });
+  const [activeTab, setActiveTab] = useState<InspectorTabId>('guard');
+
+  const editor = useInterlockEditorState({
+    ...props,
+    isGuardTabActive: activeTab === 'guard',
+    onActivateGuardTab: () => setActiveTab('guard'),
+  });
+
+  const handleTabKeyDown = (e: KeyboardEvent<HTMLButtonElement>, currentIdx: number) => {
+    let targetIdx: number | null = null;
+    if (e.key === 'ArrowRight') {
+      targetIdx = (currentIdx + 1) % INSPECTOR_TABS.length;
+    } else if (e.key === 'ArrowLeft') {
+      targetIdx = (currentIdx - 1 + INSPECTOR_TABS.length) % INSPECTOR_TABS.length;
+    } else if (e.key === 'Home') {
+      targetIdx = 0;
+    } else if (e.key === 'End') {
+      targetIdx = INSPECTOR_TABS.length - 1;
+    }
+    if (targetIdx !== null) {
+      e.preventDefault();
+      const targetTab = INSPECTOR_TABS[targetIdx]!;
+      setActiveTab(targetTab.id);
+      tabRefs.current[targetTab.id]?.focus();
+    }
+  };
+
   return (
     <section
       className="is-pane"
@@ -319,7 +755,7 @@ export function InterlockRuleEditor({
     >
       <div className="is-pane-header">
         <h2 className="is-pane-title">Interlock Guard Inspector &amp; Model</h2>
-        <span className="is-meta-inline">{model.rules.length} rules</span>
+        <span className="is-meta-inline">{props.model.rules.length} rules</span>
       </div>
 
       <div className="is-tablist" role="tablist" aria-label="Interlock editor sections">
@@ -344,7 +780,6 @@ export function InterlockRuleEditor({
         ))}
       </div>
 
-      {/* Tab 1: Guard Inspector */}
       <div
         id="is-panel-guard"
         role="tabpanel"
@@ -353,104 +788,10 @@ export function InterlockRuleEditor({
         tabIndex={0}
         hidden={activeTab !== 'guard'}
       >
-        {repairableOpenInnerDoor && !openInnerDoorRepaired && (
-          <div className="is-repair-callout">
-            <div className="is-section-header">
-              <strong>Candidate Guard Repair Available for open_inner_door</strong>
-              <button
-                type="button"
-                className="is-btn is-btn-sm is-btn-primary"
-                onClick={handleApplyPrincipledRepair}
-              >
-                Apply Principled Repair
-              </button>
-            </div>
-            <p style={{ fontSize: 12, color: 'var(--color-ink-2)' }}>
-              Stages a candidate guard edit enforcing <code className="is-mono">pressure == negative</code>{' '}
-              unconditionally alongside closed outer door, UV-off, and occupancy so{' '}
-              <code className="is-mono">maintenanceOverride</code> bypasses only the HEPA purge
-              count. Run <strong>Verify Interlock Model</strong> afterward to confirm the verdict.
-            </p>
-          </div>
-        )}
-
-        <div className="is-field">
-          <label htmlFor="inspector-rule-select">Inspect / Edit Transition Rule</label>
-          <select
-            ref={ruleSelectRef}
-            id="inspector-rule-select"
-            className="is-select is-mono"
-            value={selectedRule?.id ?? ''}
-            onChange={(e) => handleSelectRule(e.target.value)}
-          >
-            {model.rules.map((rule) => (
-              <option key={rule.id} value={rule.id}>
-                {rule.id}: {rule.label}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        {selectedRule !== null && (
-          <>
-            <div className="is-code-strip">
-              <div>
-                <strong>guard:</strong> {formatBoolExpr(selectedRule.guard)}
-              </div>
-              <div style={{ marginTop: 4, color: 'var(--color-muted)' }}>
-                <strong>updates:</strong>{' '}
-                {selectedRule.updates.map((u) => formatUpdateAssignment(u)).join('; ')}
-              </div>
-            </div>
-
-            <div className="is-section-header">
-              <span className="is-section-title">Guard Expression AST</span>
-              <button
-                type="button"
-                className="is-btn is-btn-sm"
-                onClick={handleAppendPressureGuardClause}
-              >
-                + Add Conjunction Clause
-              </button>
-            </div>
-
-            <div
-              className="is-guard-tree-scroll"
-              tabIndex={0}
-              role="region"
-              aria-label="Guard expression AST editor"
-            >
-              <BoolExprEditor
-                key={`${resetKey}:${selectedRule.id}:${repairGen}`}
-                value={selectedRule.guard}
-                schema={model.schema}
-                schemaKeysOrder={schemaKeys}
-                ariaLabelPrefix={`Guard for ${selectedRule.id}`}
-                resetKey={`${resetKey}:${selectedRule.id}:${repairGen}`}
-                fieldPath={`rule:${selectedRule.id}.guard`}
-                intDraftStore={intDraftStore}
-                onChange={(nextGuard) =>
-                  onChangeModel(updateRuleGuard(model, selectedRule.id, nextGuard))
-                }
-              />
-            </div>
-
-            {getErrorsForPathPrefix(diagnostics, `rules[${effectiveRuleIndex}]`).length > 0 && (
-              <ul className="is-inline-errors" role="alert">
-                {getErrorsForPathPrefix(diagnostics, `rules[${effectiveRuleIndex}]`).map(
-                  (err, idx) => (
-                    <li key={`${err.code}-${err.path}-${idx}`}>
-                      <code>{err.path}</code>: {err.message}
-                    </li>
-                  ),
-                )}
-              </ul>
-            )}
-          </>
-        )}
+        <GuidedRepairCallout editor={editor} />
+        <GuardInspectorContent editor={editor} />
       </div>
 
-      {/* Tab 2: Assumptions */}
       <div
         id="is-panel-assumptions"
         role="tabpanel"
@@ -459,128 +800,9 @@ export function InterlockRuleEditor({
         tabIndex={0}
         hidden={activeTab !== 'assumptions'}
       >
-        <div className="is-section-header">
-          <h3 className="is-section-title">
-            Declared Model Assumptions ({model.assumptions.length})
-          </h3>
-          <button
-            type="button"
-            className="is-btn is-btn-sm"
-            onClick={() => {
-              const existingIds = new Set(model.assumptions.map((a) => a.id));
-              let counter = 1;
-              while (existingIds.has(`assumption_custom_${counter}`)) {
-                counter += 1;
-              }
-              setAsmRowIds([...resolvedAsmRowIds, allocRowId('asm')]);
-              onChangeModel(
-                addAssumption(model, {
-                  id: `assumption_custom_${counter}`,
-                  category: 'scope',
-                  statement: 'Discrete state abstraction assumption.',
-                  notModeled: 'Physical hardware degradation and continuous dynamics.',
-                }),
-              );
-            }}
-          >
-            + Add Assumption
-          </button>
-        </div>
-
-        <div>
-          {model.assumptions.map((asm, idx) => {
-            const rowId = resolvedAsmRowIds[idx]!;
-            const asmErrors = getErrorsForPathPrefix(diagnostics, `assumptions[${idx}]`);
-            return (
-              <div key={rowId} className="is-assumption-row">
-                <div className="is-row-grid">
-                  <div className="is-field">
-                    <label htmlFor={`asm-id-${rowId}`}>Assumption ID</label>
-                    <input
-                      id={`asm-id-${rowId}`}
-                      type="text"
-                      className="is-input is-mono"
-                      value={asm.id}
-                      onChange={(e) =>
-                        onChangeModel(updateAssumption(model, idx, { ...asm, id: e.target.value }))
-                      }
-                    />
-                  </div>
-                  <div className="is-field">
-                    <label htmlFor={`asm-category-${rowId}`}>Category</label>
-                    <input
-                      id={`asm-category-${rowId}`}
-                      type="text"
-                      className="is-input is-mono"
-                      value={asm.category}
-                      onChange={(e) =>
-                        onChangeModel(
-                          updateAssumption(model, idx, { ...asm, category: e.target.value }),
-                        )
-                      }
-                    />
-                  </div>
-                  <div>
-                    <button
-                      type="button"
-                      className="is-btn is-btn-sm is-btn-danger"
-                      disabled={model.assumptions.length <= 1}
-                      onClick={() => {
-                        setAsmRowIds(resolvedAsmRowIds.filter((_, i) => i !== idx));
-                        onChangeModel(removeAssumption(model, idx));
-                      }}
-                    >
-                      Remove
-                    </button>
-                  </div>
-                </div>
-
-                <div className="is-field">
-                  <label htmlFor={`asm-statement-${rowId}`}>Captured Statement</label>
-                  <textarea
-                    id={`asm-statement-${rowId}`}
-                    rows={2}
-                    className="is-textarea"
-                    value={asm.statement}
-                    onChange={(e) =>
-                      onChangeModel(
-                        updateAssumption(model, idx, { ...asm, statement: e.target.value }),
-                      )
-                    }
-                  />
-                </div>
-
-                <div className="is-field">
-                  <label htmlFor={`asm-not-modeled-${rowId}`}>Explicitly Not Modeled</label>
-                  <textarea
-                    id={`asm-not-modeled-${rowId}`}
-                    rows={2}
-                    className="is-textarea"
-                    value={asm.notModeled}
-                    onChange={(e) =>
-                      onChangeModel(
-                        updateAssumption(model, idx, { ...asm, notModeled: e.target.value }),
-                      )
-                    }
-                  />
-                </div>
-
-                {asmErrors.length > 0 && (
-                  <ul className="is-inline-errors" role="alert">
-                    {asmErrors.map((err, errIdx) => (
-                      <li key={`${err.code}-${errIdx}`}>
-                        <code>{err.path}</code>: {err.message}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            );
-          })}
-        </div>
+        <AssumptionsEditorContent editor={editor} />
       </div>
 
-      {/* Tab 3: JSON */}
       <div
         id="is-panel-json"
         role="tabpanel"
@@ -589,81 +811,7 @@ export function InterlockRuleEditor({
         tabIndex={0}
         hidden={activeTab !== 'json'}
       >
-        <div className="is-section-header">
-          <h3 className="is-section-title">Portable Model JSON Import &amp; Export</h3>
-          <div className="is-inline-actions">
-            <button
-              type="button"
-              className="is-btn is-btn-sm"
-              disabled={exportBlocked}
-              onClick={handleCopyJson}
-            >
-              Copy JSON
-            </button>
-            <button
-              type="button"
-              className="is-btn is-btn-sm"
-              disabled={exportBlocked}
-              onClick={handleDownloadJson}
-            >
-              Download JSON
-            </button>
-            <button
-              type="button"
-              className="is-btn is-btn-primary is-btn-sm"
-              onClick={handleApplyJsonImport}
-            >
-              Import JSON
-            </button>
-          </div>
-        </div>
-
-        {jsonNotice !== null && (
-          <div className="is-alert is-alert-info" role="status">
-            {jsonNotice}
-          </div>
-        )}
-
-        {exportError !== null && (
-          <div className="is-alert" role="alert">
-            <strong>JSON Export Failed</strong>
-            <ul>
-              <li>
-                <code>{exportError.path}</code>: {exportError.message} (
-                <code>{exportError.code}</code>)
-              </li>
-            </ul>
-          </div>
-        )}
-
-        {jsonErrors.length > 0 && (
-          <div className="is-alert" role="alert">
-            <strong>JSON Import Validation Failed ({jsonErrors.length})</strong>
-            <ul>
-              {jsonErrors.map((err, idx) => (
-                <li key={`${err.code}-${err.path}-${idx}`}>
-                  <code>{err.path}</code>: {err.message} (<code>{err.code}</code>)
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-
-        <div className="is-field">
-          <label htmlFor="interlock-json-textarea">TransitionSystemModel JSON</label>
-          <textarea
-            id="interlock-json-textarea"
-            rows={18}
-            className="is-textarea is-textarea-mono"
-            spellCheck={false}
-            value={jsonDraft}
-            onChange={(e) => {
-              const nextVal = e.target.value;
-              setJsonDraft(nextVal);
-              onJsonDraftDirtyChangeRef.current?.(nextVal !== committedJsonRef.current);
-            }}
-          />
-        </div>
+        <JsonModelContent editor={editor} />
       </div>
     </section>
   );

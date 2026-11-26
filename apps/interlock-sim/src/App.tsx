@@ -31,10 +31,7 @@ import {
 import { DEFAULT_VERIFY_OPTIONS, runInterlockPresetComparison } from './comparison.js';
 import { AirlockSchematic } from './components/AirlockSchematic.js';
 import { ComparisonPanel } from './components/ComparisonPanel.js';
-import {
-  InterlockRuleEditor,
-  type FocusedInterlockRuleRequest,
-} from './components/InterlockRuleEditor.js';
+import { type FocusedInterlockRuleRequest } from './components/InterlockRuleEditor.js';
 import { OperatorConsole } from './components/OperatorConsole.js';
 import { VerificationWorkbenchPane } from './components/VerificationWorkbenchPane.js';
 import { indexModelDiagnostics, parseStrictIntegerDraft } from './model-inspector.js';
@@ -553,14 +550,11 @@ export function App({
     <div className="is-shell">
       <header className="is-topbar">
         <div className="is-brand">
-          <span className="is-brand-suite">
+          <h1 className="is-brand-suite">
             <WorkbenchBrandMark className="is-brand-icon" />
             <span>RuleCanvasKit</span>
-            <span className="is-brand-sep" aria-hidden="true">
-              /
-            </span>
-          </span>
-          <h1 className="is-brand-title">InterlockSim</h1>
+            <span className="is-visually-hidden"> InterlockSim</span>
+          </h1>
           <WorkbenchNavigation
             current="interlock-sim"
             links={WORKBENCH_NAV_LINKS}
@@ -850,17 +844,15 @@ export function App({
             onVerifyNow={handleVerifyCurrent}
             onJumpToStep={handleJumpToStep}
             onInspectRule={handleInspectRule}
-          />
-
-          <InterlockRuleEditor
-            model={model}
-            diagnostics={diagnostics}
-            resetKey={editorResetKey}
-            focusedRuleRequest={focusedRuleRequest}
-            onChangeModel={handleChangeModel}
-            onImportModel={handleImportModel}
-            onDraftErrorChange={handleEditorDraftErrorChange}
-            onJsonDraftDirtyChange={setJsonDraftDirty}
+            editor={{
+              diagnostics,
+              resetKey: editorResetKey,
+              focusedRuleRequest,
+              onChangeModel: handleChangeModel,
+              onImportModel: handleImportModel,
+              onDraftErrorChange: handleEditorDraftErrorChange,
+              onJsonDraftDirtyChange: setJsonDraftDirty,
+            }}
           />
         </div>
       </main>

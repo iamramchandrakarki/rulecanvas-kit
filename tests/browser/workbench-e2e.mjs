@@ -186,6 +186,8 @@ try {
       );
       for (const el of els) {
         if (el.closest('.ag-table-wrap, .is-table-wrap')) continue;
+        const ruleNav = el.closest('.ag-rule-nav');
+        if (ruleNav && getComputedStyle(ruleNav).overflowX === 'auto') continue;
         const rect = el.getBoundingClientRect();
         if (rect.width === 0 || rect.height === 0) continue;
         if (rect.right > vw + 1 || rect.left < -1) {
@@ -453,6 +455,73 @@ try {
   );
   await page.getByRole('button', { name: 'System', exact: true }).click();
 
+  // Persistent desktop vertical rule navigator, single-rule mounting, & balanced pane alignment
+  const agEditorTablist = page.getByRole('tablist', { name: 'Policy editor sections' });
+  const agInspectorTablist = page.getByRole('tablist', { name: 'Verification inspector sections' });
+  const agRuleNavBtns = page.locator('.ag-rule-nav .ag-rule-nav-btn');
+  assert((await agRuleNavBtns.count()) >= 4, 'Expected persistent AgentGate rule navigator buttons');
+  const navBox0 = await agRuleNavBtns.nth(0).boundingBox();
+  const navBox1 = await agRuleNavBtns.nth(1).boundingBox();
+  assert(
+    navBox0 !== null && navBox1 !== null && navBox1.y >= navBox0.y + navBox0.height - 2,
+    'Expected vertical desktop layout in .ag-rule-nav',
+  );
+  assert(
+    (await page.locator('.ag-item-row.ag-rule-detail').count()) === 1,
+    'Expected only the single selected rule detail row mounted in DOM',
+  );
+  const editorPaneBox = await page.locator('#ag-editor-pane').boundingBox();
+  const verdictPaneBox = await page.locator('#ag-verdict-pane').boundingBox();
+  assert(
+    editorPaneBox !== null &&
+      verdictPaneBox !== null &&
+      Math.abs(editorPaneBox.y - verdictPaneBox.y) <= 2 &&
+      editorPaneBox.height < 1400,
+    `Expected aligned compact desktop panes without forced multi-rule vertical gap (editor=${JSON.stringify(editorPaneBox)}, verdict=${JSON.stringify(verdictPaneBox)})`,
+  );
+
+  // Switch active rule via persistent navigator and verify persistence across editor tabs
+  await page.locator('.ag-rule-nav-btn[data-rule-id="draft_public_notes"]').click();
+  assert(
+    (await page.locator('.ag-item-row.ag-rule-detail').count()) === 1 &&
+      (await page.locator('.ag-item-row.ag-rule-detail[data-rule-id="draft_public_notes"]').count()) === 1,
+    'Clicking .ag-rule-nav-btn did not switch single mounted rule detail to draft_public_notes',
+  );
+  assert(
+    (await page.locator('.ag-rule-nav-btn[data-rule-id="draft_public_notes"]').getAttribute('aria-pressed')) ===
+      'true',
+    'Selected .ag-rule-nav-btn missing aria-pressed="true"',
+  );
+  await agEditorTablist.getByRole('tab', { name: 'Schema & State' }).click();
+  assert(
+    await page.locator('.ag-rule-nav').isVisible(),
+    'Persistent .ag-rule-nav should remain visible when switching editor tabs on desktop',
+  );
+
+  // Candidate repair discoverability jumps to publish_release_notes and focuses Rule ID input
+  const publishRuleInputSelector =
+    '.ag-item-row.ag-rule-detail[data-rule-id="publish_release_notes"] input[id^="rule-id-"]';
+  const candidateRepairBtn = page.locator('.ag-verdict-repair').getByRole('button', {
+    name: 'Inspect candidate repair',
+  });
+  await candidateRepairBtn.waitFor({ state: 'visible' });
+  await candidateRepairBtn.click();
+  await waitForVisibleFocus(publishRuleInputSelector);
+  assert(
+    (await agEditorTablist.getByRole('tab', { name: 'Rules' }).getAttribute('aria-selected')) === 'true',
+    'Inspect candidate repair did not activate Rules tab',
+  );
+  const quickClauseControl = page.locator('.ag-quick-clause summary');
+  await quickClauseControl.focus();
+  await page.keyboard.press('Enter');
+  await page.getByRole('combobox', { name: 'Quick clause boolean variable' }).waitFor();
+  assert(
+    (await page.getByRole('button', { name: '+ Add !modifiedSinceApproval' }).count()) === 1 &&
+      (await page.getByRole('button', { name: '+ Append !modifiedSinceApproval' }).count()) === 0,
+    'Opening the quick-clause helper duplicated the candidate guard action',
+  );
+  await page.keyboard.press('Enter');
+
   // Cross-pane Inspect rule jump from counterexample trace step 5 -> publish_release_notes
   // Verify cross-tab focus & reduced-motion scrollIntoView, including repeated same-target jump
   const agStep5Item = page.locator('.ag-timeline .ag-timeline-item', {
@@ -460,22 +529,21 @@ try {
   });
   assert((await agStep5Item.count()) === 1, 'Expected unique AgentGate trace item for publish_release_notes');
   const step5JumpBtn = agStep5Item.getByRole('button', { name: 'Inspect rule' });
-  const publishDisclosure = '.ag-item-row[data-rule-id="publish_release_notes"] .ag-disclosure-btn';
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await installScrollSpy();
-  await page.getByRole('tab', { name: 'Schema & State' }).click();
+  await agEditorTablist.getByRole('tab', { name: 'Schema & State' }).click();
   await clearScrollSpy();
   await step5JumpBtn.click();
-  await waitForVisibleFocus(publishDisclosure);
+  await waitForVisibleFocus(publishRuleInputSelector);
   assert(
-    (await page.getByRole('tab', { name: 'Rules' }).getAttribute('aria-selected')) === 'true',
+    (await agEditorTablist.getByRole('tab', { name: 'Rules' }).getAttribute('aria-selected')) === 'true',
     'Cross-tab Inspect rule jump did not activate Rules tab',
   );
   assert(
     (await page
-      .locator('.ag-item-row[data-rule-id="publish_release_notes"] .ag-disclosure-btn')
-      .getAttribute('aria-expanded')) === 'true',
-    'Inspect rule on Step 5 did not expand publish_release_notes disclosure',
+      .locator('.ag-rule-nav-btn[data-rule-id="publish_release_notes"]')
+      .getAttribute('data-selected')) === 'true',
+    'Inspect rule on Step 5 did not select publish_release_notes in rule navigator',
   );
   const agFirstScrolls = await readScrollSpy();
   assert(
@@ -483,10 +551,10 @@ try {
     `Expected centered reduced-motion scroll on AgentGate jump, got ${JSON.stringify(agFirstScrolls)}`,
   );
   // Repeated same-target cross-tab jump
-  await page.getByRole('tab', { name: 'Schema & State' }).click();
+  await agEditorTablist.getByRole('tab', { name: 'Schema & State' }).click();
   await clearScrollSpy();
   await step5JumpBtn.click();
-  await waitForVisibleFocus(publishDisclosure);
+  await waitForVisibleFocus(publishRuleInputSelector);
   const agRepeatScrolls = await readScrollSpy();
   assert(
     agRepeatScrolls.some((c) => c.options?.behavior === 'auto' && c.options?.block === 'center'),
@@ -494,16 +562,39 @@ try {
   );
   await uninstallScrollSpy();
   await page.emulateMedia({ reducedMotion: 'no-preference' });
-  await page
-    .locator('.ag-item-row[data-rule-id="publish_release_notes"] .ag-disclosure-btn')
-    .click();
 
-  // AgentGate 5-step counterexample trace + violated invariants + assumptions + keyboard stepping
-  await page.getByText('Step 5 of 5').first().waitFor({ state: 'visible' });
+  // Inspector tabs default to Trace and use roving keyboard selection.
+  const traceInspectorTab = agInspectorTablist.getByRole('tab', { name: 'Trace' });
+  const stateInspectorTab = agInspectorTablist.getByRole('tab', { name: 'State & Diff' });
+  const checksInspectorTab = agInspectorTablist.getByRole('tab', { name: 'Invariants & Goal' });
+  const assumptionsInspectorTab = agInspectorTablist.getByRole('tab', { name: 'Assumptions' });
   assert(
-    (await agBrokenVerdict.innerText()).includes('inv_no_confidential_publish'),
-    'AgentGate broken verdict missing violated invariant inv_no_confidential_publish',
+    (await traceInspectorTab.getAttribute('aria-selected')) === 'true' &&
+      (await page.locator('#ag-inspector-panel-trace').isVisible()) &&
+      !(await page.locator('#ag-inspector-panel-state').isVisible()) &&
+      !(await page.locator('#ag-inspector-panel-checks').isVisible()) &&
+      !(await page.locator('#ag-inspector-panel-assumptions').isVisible()),
+    'Expected only Trace inspector panel visible by default',
   );
+  await focusViaKeyboard(traceInspectorTab, 'AgentGate inspector Trace tab');
+  await page.keyboard.press('ArrowRight');
+  assert(
+    (await stateInspectorTab.getAttribute('aria-selected')) === 'true',
+    'ArrowRight in inspector tablist did not activate State & Diff tab',
+  );
+  await checkAxeWcagAA('AgentGate State & Diff inspector tab');
+  await page.keyboard.press('ArrowRight');
+  assert(
+    (await checksInspectorTab.getAttribute('aria-selected')) === 'true',
+    'ArrowRight in inspector tablist did not activate Invariants & Goal tab',
+  );
+  await page.keyboard.press('End');
+  assert(
+    (await assumptionsInspectorTab.getAttribute('aria-selected')) === 'true',
+    'End key in inspector tablist did not activate Assumptions tab',
+  );
+
+  // AgentGate assumptions disclosure inside Assumptions inspector tab
   await page
     .getByText('Modeling Assumptions & Scope Disclosure (4)', { exact: true })
     .waitFor({ state: 'visible' });
@@ -512,6 +603,18 @@ try {
       'asm_synthetic_capability_abstraction',
     ),
     'AgentGate missing declared assumption asm_synthetic_capability_abstraction',
+  );
+  await page.keyboard.press('Home');
+  assert(
+    (await traceInspectorTab.getAttribute('aria-selected')) === 'true',
+    'Home key in inspector tablist did not return to Trace tab',
+  );
+
+  // AgentGate 5-step counterexample trace + violated invariants + keyboard stepping across tabs
+  await page.getByText('Step 5 of 5').first().waitFor({ state: 'visible' });
+  assert(
+    (await agBrokenVerdict.innerText()).includes('inv_no_confidential_publish'),
+    'AgentGate broken verdict missing violated invariant inv_no_confidential_publish',
   );
 
   const agPrevBtn = page.getByRole('button', { name: 'Previous', exact: true });
@@ -526,48 +629,53 @@ try {
   await agNextBtn.focus();
   await page.keyboard.press('Enter');
   await page.getByText('Step 1 of 5').first().waitFor({ state: 'visible' });
+  await stateInspectorTab.click();
   await assertBadgeHasIconAndText(
     page.locator('tr[data-var="stage"][data-changed="true"] .ag-badge'),
     'Modified',
     'AgentGate Step 1 modified stage variable',
   );
-  // Step forward to Step 5 via keyboard and verify violated invariant row
+  // Step forward to Step 5 via keyboard and verify violated invariant row under Invariants & Goal tab
+  await agNextBtn.focus();
   for (let step = 2; step <= 5; step += 1) {
     await page.keyboard.press('Enter');
     await page.getByText(`Step ${step} of 5`).first().waitFor({ state: 'visible' });
   }
+  await checksInspectorTab.click();
   await assertBadgeHasIconAndText(
     page.locator('tr[data-changed="true"] .ag-badge[data-tone="danger"]'),
     'VIOLATED',
     'AgentGate Step 5 invariant row',
   );
 
-  // Manual rule execution on AgentGate (from Step 0)
+  // Manual rule execution on AgentGate (from Step 0 under State & Diff tab)
+  await stateInspectorTab.click();
   await agResetBtn.click();
   await page.getByText('Step 0 of 5').first().waitFor({ state: 'visible' });
   await page.locator('.ag-transition-btn', { hasText: 'draft_public_notes' }).click();
-  await page.getByText('Mode: Manual').first().waitFor({ state: 'visible' });
+  await page.getByText('Manual simulation').first().waitFor({ state: 'visible' });
   await page.getByText('Step 1 of 1').first().waitFor({ state: 'visible' });
   await page.getByRole('button', { name: 'Restore Counterexample Trace' }).click();
   await page.getByText('Step 5 of 5').first().waitFor({ state: 'visible' });
+  await traceInspectorTab.click();
 
-  // Keyboard-only tablist navigation & disclosure toggle across PolicyEditorPane
-  const rulesTab = page.getByRole('tab', { name: 'Rules' });
+  // Keyboard-only tablist navigation & persistent rule navigator selection across PolicyEditorPane
+  const rulesTab = agEditorTablist.getByRole('tab', { name: 'Rules' });
   await focusViaKeyboard(rulesTab, 'AgentGate Rules tab');
   await page.keyboard.press('ArrowRight');
   assert(
-    (await page.getByRole('tab', { name: 'Invariants & Goal' }).getAttribute('aria-selected')) ===
+    (await agEditorTablist.getByRole('tab', { name: 'Invariants & Goal' }).getAttribute('aria-selected')) ===
       'true',
     'ArrowRight from Rules tab did not activate Invariants & Goal tab',
   );
   await page.keyboard.press('End');
   assert(
-    (await page.getByRole('tab', { name: 'JSON' }).getAttribute('aria-selected')) === 'true',
+    (await agEditorTablist.getByRole('tab', { name: 'JSON' }).getAttribute('aria-selected')) === 'true',
     'End key in tablist did not activate JSON tab',
   );
   await page.keyboard.press('Home');
   assert(
-    (await page.getByRole('tab', { name: 'Schema & State' }).getAttribute('aria-selected')) ===
+    (await agEditorTablist.getByRole('tab', { name: 'Schema & State' }).getAttribute('aria-selected')) ===
       'true',
     'Home key in tablist did not activate Schema & State tab',
   );
@@ -578,18 +686,23 @@ try {
     'ArrowRight from Schema & State did not activate Rules tab',
   );
 
-  // Keyboard disclosure toggle on Rules tab
-  const firstDisclosure = page
-    .locator('.ag-disclosure-btn', { hasText: 'Edit rule definition, guard AST, and atomic updates' })
-    .first();
-  const initialExpanded = await firstDisclosure.getAttribute('aria-expanded');
-  await firstDisclosure.focus();
+  // Keyboard selection in persistent rule navigator
+  const draftNavBtn = page.locator('.ag-rule-nav-btn[data-rule-id="draft_public_notes"]');
+  await draftNavBtn.focus();
   await page.keyboard.press('Enter');
   assert(
-    (await firstDisclosure.getAttribute('aria-expanded')) !== initialExpanded,
-    'Keyboard Enter did not toggle rule disclosure state',
+    (await draftNavBtn.getAttribute('data-selected')) === 'true' &&
+      (await page.locator('.ag-item-row.ag-rule-detail[data-rule-id="draft_public_notes"]').count()) === 1,
+    'Keyboard Enter on .ag-rule-nav-btn did not select draft_public_notes',
   );
+  const publishNavBtn = page.locator('.ag-rule-nav-btn[data-rule-id="publish_release_notes"]');
+  await publishNavBtn.focus();
   await page.keyboard.press('Enter');
+  assert(
+    (await publishNavBtn.getAttribute('data-selected')) === 'true' &&
+      (await page.locator('.ag-item-row.ag-rule-detail[data-rule-id="publish_release_notes"]').count()) === 1,
+    'Keyboard Enter on .ag-rule-nav-btn did not restore publish_release_notes',
+  );
 
   // Stale AgentGate removes step tags, shows snapshot guard on active step with distinct draft action,
   // and removing a snapshot rule disables the misleading jump
@@ -611,10 +724,6 @@ try {
     (await agEditDraftRuleBtn.getAttribute('aria-label')) === 'Edit draft rule publish_release_notes in editor',
     'Stale AgentGate trace jump aria-label missing exact Edit draft rule + ruleId',
   );
-  const pubDisclosure = page.locator('.ag-item-row[data-rule-id="publish_release_notes"] .ag-disclosure-btn');
-  if ((await pubDisclosure.getAttribute('aria-expanded')) !== 'true') {
-    await pubDisclosure.click();
-  }
   await page.getByRole('button', { name: 'Remove rule publish_release_notes' }).click();
   assert(
     (await agStep5Item.getByRole('button', { name: /Edit draft rule|Inspect rule/ }).count()) === 0,
@@ -809,15 +918,57 @@ try {
   await checkAxeWcagAA('InterlockSim broken 1280x800');
   await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'interlock-sim-desktop-1280.png') });
 
-  // InterlockSim 6-step override violation trace stepping + manual airlock transitions
+  // InterlockSim 6-step override violation trace stepping + manual airlock transitions + unified tabs
   assert(
     (await isBrokenVerdict.innerText()).includes('inv_containment_seal'),
     'InterlockSim broken verdict missing inv_containment_seal',
   );
+  const isTablist = page.getByRole('tablist', { name: 'Verification and interlock inspector sections' });
+  const traceGuardTab = isTablist.getByRole('tab', { name: 'Counterexample & Guard' });
+  const stateInvariantsTab = isTablist.getByRole('tab', { name: 'State & Invariants' });
+  const isAssumptionsTab = isTablist.getByRole('tab', { name: 'Assumptions' });
+  const isJsonTab = isTablist.getByRole('tab', { name: 'JSON' });
   assert(
-    (await page.locator('body').innerText()).includes('assumption_educational_scope'),
+    (await traceGuardTab.getAttribute('aria-selected')) === 'true' &&
+      (await page.locator('#is-panel-trace-guard').isVisible()) &&
+      !(await page.locator('#is-panel-state-invariants').isVisible()) &&
+      !(await page.locator('#is-panel-assumptions').isVisible()) &&
+      !(await page.locator('#is-panel-json').isVisible()),
+    'Expected only Counterexample & Guard panel visible by default in InterlockSim',
+  );
+
+  // Keyboard tablist navigation in unified InterlockSim inspector
+  await focusViaKeyboard(traceGuardTab, 'InterlockSim Counterexample & Guard tab');
+  await page.keyboard.press('ArrowRight');
+  assert(
+    (await stateInvariantsTab.getAttribute('aria-selected')) === 'true',
+    'ArrowRight from Counterexample & Guard tab did not activate State & Invariants tab',
+  );
+  assert(
+    (await page.locator('#is-panel-state-invariants').innerText()).includes('inv_containment_seal'),
+    'InterlockSim State & Invariants tab missing inv_containment_seal row',
+  );
+  await page.keyboard.press('ArrowRight');
+  assert(
+    (await isAssumptionsTab.getAttribute('aria-selected')) === 'true',
+    'ArrowRight from State & Invariants tab did not activate Assumptions tab',
+  );
+  assert(
+    (await page.locator('#is-panel-assumptions').innerText()).includes('assumption_educational_scope'),
     'InterlockSim missing assumption_educational_scope disclosure',
   );
+  await checkAxeWcagAA('InterlockSim Assumptions inspector tab');
+  await page.keyboard.press('End');
+  assert(
+    (await isJsonTab.getAttribute('aria-selected')) === 'true',
+    'End in InterlockSim tablist did not activate JSON tab',
+  );
+  await page.keyboard.press('Home');
+  assert(
+    (await traceGuardTab.getAttribute('aria-selected')) === 'true',
+    'Home in InterlockSim tablist did not activate Counterexample & Guard tab',
+  );
+
   const isStepBackBtn = page.getByRole('button', { name: 'Step Back', exact: true });
   await focusViaKeyboard(isStepBackBtn, 'InterlockSim Step Back button');
   await page.keyboard.press('Enter');
@@ -848,27 +999,17 @@ try {
   await page.getByRole('button', { name: 'Restore Counterexample' }).click();
   await page.getByText('Step 6 of 6').first().waitFor({ state: 'visible' });
 
-  // Keyboard tablist navigation in InterlockRuleEditor
-  const guardTab = page.getByRole('tab', { name: 'Guard Inspector' });
-  await focusViaKeyboard(guardTab, 'InterlockSim Guard Inspector tab');
-  await page.keyboard.press('ArrowRight');
-  assert(
-    (await page.getByRole('tab', { name: 'Assumptions' }).getAttribute('aria-selected')) === 'true',
-    'ArrowRight from Guard Inspector tab did not activate Assumptions tab',
-  );
-  await page.keyboard.press('End');
-  assert(
-    (await page.getByRole('tab', { name: 'JSON' }).getAttribute('aria-selected')) === 'true',
-    'End in InterlockSim tablist did not activate JSON tab',
-  );
-  await page.keyboard.press('Home');
-  assert(
-    (await guardTab.getAttribute('aria-selected')) === 'true',
-    'Home in InterlockSim tablist did not activate Guard Inspector tab',
-  );
-
   // Guided repair -> VERIFIED (29 states, Goal reachable: Yes)
-  await page.getByRole('button', { name: 'Apply Principled Repair' }).click();
+  const guidedRepairBtn = page.getByRole('button', { name: 'Apply Principled Repair' });
+  const jsonBeforeRepair = page.locator('#interlock-json-textarea');
+  await isJsonTab.click();
+  const savedJsonBeforeRepair = await jsonBeforeRepair.inputValue();
+  await jsonBeforeRepair.fill(`${savedJsonBeforeRepair}\n `);
+  assert(await guidedRepairBtn.isDisabled(), 'Candidate repair could overwrite an unsaved JSON draft');
+  await jsonBeforeRepair.fill(savedJsonBeforeRepair);
+  await traceGuardTab.click();
+  await guidedRepairBtn.click();
+  await waitForVisibleFocus('#inspector-rule-select');
   await page.getByText('OUTDATED: VIOLATED').first().waitFor({ state: 'visible' });
   await page
     .locator('.is-schematic-status-strip .is-badge', { hasText: 'OUTDATED SNAPSHOT' })
@@ -885,7 +1026,7 @@ try {
     'Stale InterlockSim trace jump aria-label missing exact Edit draft guard + ruleId',
   );
 
-  // Unsaved numeric draft in Guard Inspector is preserved across cross-tab guard jump under reduced motion,
+  // Unsaved numeric draft in Guard Inspector is preserved across tab switches and guard jump under reduced motion,
   // including repeated same-target jumps, and restores the existing valid number
   const guardIntInput = page.locator('.is-guard-tree-scroll input[inputmode="numeric"]').first();
   const originalGuardInt = await guardIntInput.inputValue();
@@ -894,15 +1035,21 @@ try {
     (await guardIntInput.getAttribute('aria-invalid')) === 'true',
     'Invalid numeric guard draft missing aria-invalid before jump',
   );
+  await isAssumptionsTab.click();
+  await traceGuardTab.click();
+  assert(
+    (await guardIntInput.inputValue()) === '1x' &&
+      (await guardIntInput.getAttribute('aria-invalid')) === 'true',
+    'Switching tabs wiped unsaved invalid numeric draft',
+  );
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await installScrollSpy();
-  await page.getByRole('tab', { name: 'Assumptions' }).click();
   await clearScrollSpy();
   await editDraftGuardBtn.click();
   await waitForVisibleFocus('#inspector-rule-select');
   assert(
-    (await page.getByRole('tab', { name: 'Guard Inspector' }).getAttribute('aria-selected')) === 'true',
-    'Cross-tab Edit draft guard jump did not activate Guard Inspector tab',
+    (await traceGuardTab.getAttribute('aria-selected')) === 'true',
+    'Edit draft guard jump did not keep Counterexample & Guard tab active',
   );
   const isFirstScrolls = await readScrollSpy();
   assert(
@@ -914,8 +1061,8 @@ try {
       (await guardIntInput.getAttribute('aria-invalid')) === 'true',
     'Guard jump wiped unsaved invalid numeric draft',
   );
-  // Repeated same-target cross-tab jump
-  await page.getByRole('tab', { name: 'Assumptions' }).click();
+  // Repeated same-target jump
+  await page.locator('#is-verdict-pane').focus();
   await clearScrollSpy();
   await editDraftGuardBtn.click();
   await waitForVisibleFocus('#inspector-rule-select');
@@ -923,6 +1070,18 @@ try {
   assert(
     isRepeatScrolls.some((c) => c.options?.behavior === 'auto' && c.options?.block === 'center'),
     `Expected reduced-motion scrollIntoView on repeated InterlockSim jump, got ${JSON.stringify(isRepeatScrolls)}`,
+  );
+  await page.getByRole('button', { name: 'Edit draft guard for equalize_pressure', exact: true }).click();
+  await waitForVisibleFocus('#inspector-rule-select');
+  assert(
+    (await page.locator('#inspector-rule-select').inputValue()) === 'equalize_pressure',
+    'Jumping to a different guard did not update the inspector selection',
+  );
+  await editDraftGuardBtn.click();
+  await waitForVisibleFocus('#inspector-rule-select');
+  assert(
+    (await guardIntInput.inputValue()) === '1x',
+    'Jumping to a different guard discarded the original numeric draft',
   );
   await uninstallScrollSpy();
   await page.emulateMedia({ reducedMotion: 'no-preference' });

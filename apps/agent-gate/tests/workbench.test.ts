@@ -906,7 +906,7 @@ describe('AgentGate workbench domain modules and UI', () => {
     expect(compHtml).not.toContain('—');
   });
 
-  it('associates every visible label with an explicit matching control id, uses accessible rule disclosures, and ships an inline SVG favicon', () => {
+  it('associates every visible label with an explicit matching control id, renders persistent rule navigator selection, and ships an inline SVG favicon', () => {
     const broken = loadPresetModel('broken');
     const html = renderToStaticMarkup(
       createElement(PolicyEditorPane, {
@@ -927,9 +927,10 @@ describe('AgentGate workbench domain modules and UI', () => {
       expect(html).toContain(`id="${targetId}"`);
     }
 
-    // Controlled rule disclosure button starts expanded for publish_release_notes
-    expect(html).toContain('aria-expanded="true"');
-    expect(html).toContain('aria-expanded="false"');
+    // Persistent rule navigator marks publish_release_notes selected and mounts only that detail row
+    expect(html).toContain('data-rule-id="publish_release_notes" data-selected="true" aria-pressed="true"');
+    expect(html).toContain('aria-pressed="false"');
+    expect((html.match(/class="ag-item-row ag-rule-detail"/g) ?? []).length).toBe(1);
 
     // index.html includes inline SVG favicon and clean copy without em-dash or middle dot
     const indexHtml = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
@@ -986,7 +987,9 @@ describe('AgentGate workbench domain modules and UI', () => {
     );
 
     // Primary section strictly renders verified snapshot assumptions with snapshot label
-    expect(staleWithEditedAssumptionsHtml).toContain('Scope of verified snapshot: Broken Policy');
+    expect(staleWithEditedAssumptionsHtml).toContain(
+      'Scope of verified snapshot: <strong>Broken Policy</strong>',
+    );
     expect(staleWithEditedAssumptionsHtml).toContain('asm_synthetic_capability_abstraction');
     // Separate clearly labeled secondary block renders pending edited assumptions
     expect(staleWithEditedAssumptionsHtml).toContain('Pending Edited Assumptions (Unverified)');
@@ -1018,7 +1021,9 @@ describe('AgentGate workbench domain modules and UI', () => {
         onRestoreVerdictTrace: () => {},
       }),
     );
-    expect(staleSameAssumptionsHtml).toContain('Scope of verified snapshot: Broken Policy');
+    expect(staleSameAssumptionsHtml).toContain(
+      'Scope of verified snapshot: <strong>Broken Policy</strong>',
+    );
     expect(staleSameAssumptionsHtml).not.toContain('Pending Edited Assumptions (Unverified)');
 
     // When verifiedSnapshot is null or INVALID, render Draft Model Assumptions (Unverified)
@@ -1116,7 +1121,7 @@ describe('AgentGate workbench domain modules and UI', () => {
     expect(matchesDraftPrefix(fieldKey, 'rule:rule-row-2.update:upd-row-6')).toBe(false);
     expect(matchesDraftPrefix(fieldKey, 'rule:rule-row-20')).toBe(false);
 
-    // Collapsed rule bodies and inactive tabs remain mounted in DOM with hidden attribute
+    // Single selected rule detail mounts alongside persistent rule nav and hidden inactive tabs
     const broken = loadPresetModel('broken');
     const editorHtml = renderToStaticMarkup(
       createElement(PolicyEditorPane, {
@@ -1126,9 +1131,9 @@ describe('AgentGate workbench domain modules and UI', () => {
         onImportModel: () => {},
       }),
     );
-    // Non-expanded rules still have their rule-id inputs mounted inside hidden disclosure bodies
-    expect(editorHtml).toContain('value="draft_public_notes"');
-    expect(editorHtml).toContain('class="ag-disclosure-body" hidden=""');
+    expect(editorHtml).toContain('data-rule-id="draft_public_notes" data-selected="false" aria-pressed="false"');
+    expect(editorHtml).not.toContain('value="draft_public_notes"');
+    expect(editorHtml).toContain('value="publish_release_notes"');
     expect(editorHtml).toContain('id="panel-schema" role="tabpanel"');
     expect(editorHtml).toContain('id="panel-json" role="tabpanel"');
   });
@@ -1326,7 +1331,7 @@ describe('AgentGate workbench domain modules and UI', () => {
     expect(getterInvocations).toBe(0);
   });
 
-  it('pairs every rendered form control bidirectionally with a visible label and renders all 5 tabpanels with WCAG control borders (Findings 7 & 8)', () => {
+  it('pairs every rendered form control bidirectionally with a visible label and renders all editor + inspector tabpanels with WCAG control borders (Findings 7 & 8)', () => {
     const richModel: TransitionSystemModel = {
       ...loadPresetModel('broken'),
       invariants: [
@@ -1378,7 +1383,7 @@ describe('AgentGate workbench domain modules and UI', () => {
       }),
     );
 
-    const assertBidirectionalLabelsAndTabs = (html: string) => {
+    const assertBidirectionalLabelsAndTabs = (html: string, expectedTabCount: number) => {
       const labelTargets = new Set<string>();
       for (const match of html.matchAll(/<label\b([^>]*)>/g)) {
         const attrs = match[1] ?? '';
@@ -1413,10 +1418,10 @@ describe('AgentGate workbench domain modules and UI', () => {
         expect(idMatch).not.toBeNull();
         panelIds.add(idMatch![1]!);
       }
-      expect(panelIds.size).toBe(5);
+      expect(panelIds.size).toBe(expectedTabCount);
 
       const tabMatches = [...html.matchAll(/<button\b([^>]*\brole="tab"[^>]*)>/g)];
-      expect(tabMatches).toHaveLength(5);
+      expect(tabMatches).toHaveLength(expectedTabCount);
       for (const match of tabMatches) {
         const attrs = match[1] ?? '';
         const controlsMatch = attrs.match(/\baria-controls="([^"]+)"/);
@@ -1425,8 +1430,12 @@ describe('AgentGate workbench domain modules and UI', () => {
       }
     };
 
-    assertBidirectionalLabelsAndTabs(appHtml);
-    assertBidirectionalLabelsAndTabs(richEditorHtml);
+    assertBidirectionalLabelsAndTabs(appHtml, 9);
+    assertBidirectionalLabelsAndTabs(richEditorHtml, 5);
+    expect(appHtml).toContain('id="ag-inspector-tab-trace" aria-controls="ag-inspector-panel-trace" aria-selected="true"');
+    expect(appHtml).toContain('id="ag-inspector-panel-state" role="tabpanel" aria-labelledby="ag-inspector-tab-state" hidden=""');
+    expect(appHtml).toContain('id="ag-inspector-panel-checks" role="tabpanel" aria-labelledby="ag-inspector-tab-checks" hidden=""');
+    expect(appHtml).toContain('id="ag-inspector-panel-assumptions" role="tabpanel" aria-labelledby="ag-inspector-tab-assumptions" hidden=""');
 
     // Finding 8: WCAG 2.2 >= 3:1 unfocused control border token
     const tokensCss = readFileSync(new URL('../src/styles/tokens.css', import.meta.url), 'utf8');
@@ -1570,7 +1579,7 @@ describe('AgentGate workbench domain modules and UI', () => {
       }),
     );
     expect(depth31Html).not.toContain('JSON Export Failed');
-    expect(depth31Html).toContain('Edit rule definition, guard AST, and atomic updates');
+    expect(depth31Html).toContain('Guard Expression');
 
     // Over-budget AST (> 64 nested levels) returns structured export failure and leaves editor mounted
     const overBudgetModel = buildNestedAndModel(66);
@@ -1591,7 +1600,7 @@ describe('AgentGate workbench domain modules and UI', () => {
     );
     expect(overBudgetHtml).toContain('JSON Export Failed (1)');
     expect(overBudgetHtml).toContain('JSON_EXPORT_ERROR');
-    expect(overBudgetHtml).toContain('Edit rule definition, guard AST, and atomic updates');
+    expect(overBudgetHtml).toContain('Guard Expression');
   });
 
   it('pre-validates raw JSON number tokens before JSON.parse and rejects malformed syntax via JSON_PARSE_ERROR', () => {
@@ -1772,18 +1781,21 @@ describe('AgentGate workbench domain modules and UI', () => {
     expect(intEnumEditorHtml).not.toContain('+ Append');
 
     // Broken preset: VIOLATED verdict shows non-competing witness note, no duplicate Violated Invariants line,
-    // rule-specific disclosure labels, trace-to-rule jump action, and no duplicate !modifiedSinceApproval button
+    // candidate repair action, persistent rule navigator selection, trace-to-rule jump action, and no duplicate !modifiedSinceApproval button
     const brokenAppHtml = renderToStaticMarkup(createElement(App, { initialVariant: 'broken' }));
     expect(brokenAppHtml).toContain('Goal witnessed on valid prefix');
     expect(brokenAppHtml).not.toContain('Violated Invariants:</strong>');
     expect(brokenAppHtml).toContain('Violated invariants: inv_no_confidential_publish.');
-    const publishRowStart = brokenAppHtml.indexOf('data-rule-id="publish_release_notes"');
+    expect(brokenAppHtml).toContain('Inspect candidate repair');
+    const publishRowStart = brokenAppHtml.indexOf(
+      'class="ag-item-row ag-rule-detail" data-rule-id="publish_release_notes"',
+    );
     expect(publishRowStart).toBeGreaterThan(-1);
     const publishRowSlice = brokenAppHtml.slice(publishRowStart);
     expect(publishRowSlice).toContain('+ Add !modifiedSinceApproval');
     expect(publishRowSlice).not.toContain('+ Append !modifiedSinceApproval');
     expect(brokenAppHtml).toContain(
-      'aria-label="Edit rule definition, guard AST, and atomic updates for publish_release_notes"',
+      'data-rule-id="publish_release_notes" data-selected="true" aria-pressed="true"',
     );
     expect(brokenAppHtml).toContain('aria-label="Inspect rule publish_release_notes in editor"');
     expect(brokenAppHtml).toContain('aria-label="Color theme"');

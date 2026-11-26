@@ -10,7 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - A shared workbench shell, persistent System, Light, and Dark themes, and self-hosted IBM Plex fonts for AgentGate and InterlockSim.
-- A rule navigator and verification dock in AgentGate, plus a discrete airlock schematic and operator console in InterlockSim.
+- A three-pane AgentGate workspace with a persistent rule navigator, focused guard and update editor, and tabbed verification inspector.
+- An InterlockSim workspace that pairs the discrete airlock schematic and operator console with tabbed trace, state, and guard inspection.
 - Browser screenshots and illustrative walkthroughs for both workbenches.
 
 ### Fixed

@@ -206,11 +206,11 @@ RuleCanvasKit powers two domain-separated React 19 + Vite workbenches built on t
 
 ### AgentGate (`apps/agent-gate`)
 
-AgentGate is the primary policy-modeling workbench in RuleCanvasKit for verifying AI agent permissions, security policies, and approval workflows before rollout. `@rulecanvas/agent-gate` exports executable TypeScript policy models (`broken`, `naive-patch-a`, `naive-patch-b`, `principled-fix`, and `vacuous-fix`) alongside the browser workbench featuring Master-Detail rule navigation, cross-pane trace-to-rule jump, a structured schema/AST editor, strict integer draft validation, counterexample replay, and a 5-preset comparison matrix.
+AgentGate is the policy-modeling workbench for checking agent permissions and approval workflows before rollout. Its desktop workspace places a persistent rule navigator, the selected rule editor, and the verification inspector side by side. The inspector groups the counterexample trace, state changes, invariant and goal evaluations, and assumptions into keyboard-accessible tabs. Trace steps link directly to their rules. The workbench also supports structured schema and AST editing, strict integer draft validation, manual simulation, and a five-preset comparison. The `@rulecanvas/agent-gate` package exports executable TypeScript models for all five presets.
 
 ### InterlockSim (`apps/interlock-sim`)
 
-InterlockSim is an educational browser workbench for exploring discrete BSL-3 airlock interlocks (`broken`, `fixed`, and `vacuous` presets). It pairs a discrete CAD/P&ID airlock schematic and operator console with shortest counterexample replay, predicate-level guard explanations, a guided candidate repair for the built-in broken preset with explicit `OUTDATED SNAPSHOT` / candidate-repair distinction prior to re-verification, a 3-preset comparison matrix, strict 512,000-character export (allowing clean zero-invariant drafts), and legacy duplicate-key import compatibility. See the [v0.4.0 release notes](docs/releases/v0.4.0.md) for a walkthrough.
+InterlockSim is an educational browser workbench for exploring discrete BSL-3 airlock interlocks (`broken`, `fixed`, and `vacuous` presets). The desktop workspace pairs the CAD/P&ID schematic and operator console with a single inspector for trace and guard editing, state and invariant results, assumptions, and JSON. The guided repair stages a candidate edit for the broken preset and marks the prior snapshot outdated until you verify again. The app also supports three-preset comparison, predicate-level guard explanations, strict 512,000-character export with zero-invariant drafts, and legacy duplicate-key imports. See the [v0.4.0 release notes](docs/releases/v0.4.0.md) for a walkthrough.
 
 ## Build another workbench on this foundation
 
@@ -223,9 +223,9 @@ InterlockSim is an educational browser workbench for exploring discrete BSL-3 ai
 
 These screenshots show both locally served production builds at `1440×900` CSS pixels.
 
-**AgentGate.** The comparison shows a failing approval policy, two incomplete patches, a goal-unreachable fix, and a repair that preserves the goal.
+**AgentGate.** The rule navigator and counterexample inspector both point to the publish rule that violates the approval policy. The editor shows its guard, update, and candidate repair.
 
-![AgentGate comparison table showing five presets with verdicts, states explored, and goal reachability](docs/screenshots/agent-gate.png)
+![AgentGate with a vertical rule navigator, the selected publish rule editor, and a five-step counterexample inspector](docs/screenshots/agent-gate.png)
 
 **InterlockSim.** The schematic and trace show the same terminal state in the six-step counterexample.
 

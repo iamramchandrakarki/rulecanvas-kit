@@ -562,14 +562,11 @@ export function App({
     <div className="ag-shell">
       <header className="ag-topbar">
         <div className="ag-brand">
-          <span className="ag-brand-suite">
+          <h1 className="ag-brand-suite">
             <WorkbenchBrandMark className="ag-brand-icon" />
             <span>RuleCanvasKit</span>
-            <span className="ag-brand-sep" aria-hidden="true">
-              /
-            </span>
-          </span>
-          <h1 className="ag-brand-mark">AgentGate</h1>
+            <span className="ag-visually-hidden"> AgentGate</span>
+          </h1>
           <WorkbenchNavigation
             current="agent-gate"
             links={WORKBENCH_NAV_LINKS}
@@ -801,6 +798,11 @@ export function App({
           onApplyManualStep={handleApplyManualStep}
           onRestoreVerdictTrace={handleRestoreVerdictTrace}
           onInspectRule={handleInspectRule}
+          candidateRepairRuleId={
+            activePreset === 'broken' && verifiedSnapshot?.result.status === 'VIOLATED'
+              ? 'publish_release_notes'
+              : undefined
+          }
         />
       </main>
     </div>

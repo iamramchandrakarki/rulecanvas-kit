@@ -892,7 +892,7 @@ describe('InterlockSim workbench architecture, semantics, security, and UI', () 
     ).toBe(true);
   });
 
-  it('renders accessible schematic, operator console, disclaimers, 3 tabs, and bidirectional form labels', () => {
+  it('renders accessible schematic, operator console, disclaimers, 4 unified tabs, and bidirectional form labels', () => {
     const brokenHtml = renderToStaticMarkup(createElement(App, { initialVariant: 'broken' }));
     expect(brokenHtml).toContain('InterlockSim');
     expect(brokenHtml).toContain('Not IEC 61508 / SIL Certified');
@@ -910,9 +910,13 @@ describe('InterlockSim workbench architecture, semantics, security, and UI', () 
     expect(brokenHtml).toContain('purgeCycles');
     expect(brokenHtml).toContain('maintenanceOverride');
 
-    // All 3 role="tabpanel" sections remain mounted with tabIndex="0"
-    expect((brokenHtml.match(/role="tabpanel"/g) ?? []).length).toBe(3);
-    expect((brokenHtml.match(/role="tabpanel"[^>]*tabindex="0"/g) ?? []).length).toBe(3);
+    // All 4 unified role="tabpanel" sections remain mounted with tabIndex="0"
+    expect((brokenHtml.match(/role="tabpanel"/g) ?? []).length).toBe(4);
+    expect((brokenHtml.match(/role="tabpanel"[^>]*tabindex="0"/g) ?? []).length).toBe(4);
+    expect(brokenHtml).toContain('id="is-tab-trace-guard"');
+    expect(brokenHtml).toContain('id="is-tab-state-invariants"');
+    expect(brokenHtml).toContain('id="is-tab-assumptions"');
+    expect(brokenHtml).toContain('id="is-tab-json"');
 
     // Incompatible Boolean-only model shows UNAVAILABLE schematic, UNEVALUATED PREVIEW, and no bogus Guided Repair
     const booleanOnlyModel: TransitionSystemModel = {
@@ -1079,6 +1083,7 @@ describe('InterlockSim workbench architecture, semantics, security, and UI', () 
         onImportModel: () => {},
       }),
     );
+    expect((editorHtml.match(/role="tabpanel"/g) ?? []).length).toBe(3);
     assertBidirectionalLabels(editorHtml);
 
     const draftStore: LiftedIntDraftStore = {

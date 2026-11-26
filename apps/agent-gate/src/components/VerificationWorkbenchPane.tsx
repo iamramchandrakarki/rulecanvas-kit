@@ -13,6 +13,7 @@ import {
   formatStateValue,
   type ReplaySession,
 } from '@rulecanvas/ui';
+import { useRef, useState, type KeyboardEvent } from 'react';
 import { isWebWorkerSupported, type VerifyExecutionMode } from '../verify-client.js';
 
 export interface VerifiedSnapshot {
@@ -45,7 +46,17 @@ export interface VerificationWorkbenchPaneProps {
   readonly onApplyManualStep: (ruleId: string) => void;
   readonly onRestoreVerdictTrace: () => void;
   readonly onInspectRule?: ((ruleId: string) => void) | undefined;
+  readonly candidateRepairRuleId?: string | undefined;
 }
+
+const INSPECTOR_TABS = [
+  { id: 'trace', label: 'Trace' },
+  { id: 'state', label: 'State & Diff' },
+  { id: 'checks', label: 'Invariants & Goal' },
+  { id: 'assumptions', label: 'Assumptions' },
+] as const;
+
+type InspectorTab = (typeof INSPECTOR_TABS)[number]['id'];
 
 function describeExecutionMode(mode: VerifyExecutionMode): string {
   if (mode === 'worker') {
@@ -98,9 +109,37 @@ export function VerificationWorkbenchPane({
   onApplyManualStep,
   onRestoreVerdictTrace,
   onInspectRule,
+  candidateRepairRuleId,
 }: VerificationWorkbenchPaneProps) {
+  const [activeTab, setActiveTab] = useState<InspectorTab>('trace');
+  const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const result = verifiedSnapshot?.result ?? null;
   const verdictView = result !== null ? buildVerdictSummaryView(result) : null;
+  const canInspectReplay = !isRunning && verifiedSnapshot !== null && replaySession !== null;
+
+  const handleTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
+    const lastIndex = INSPECTOR_TABS.length - 1;
+    let targetIndex: number;
+    switch (event.key) {
+      case 'ArrowLeft':
+        targetIndex = index === 0 ? lastIndex : index - 1;
+        break;
+      case 'ArrowRight':
+        targetIndex = index === lastIndex ? 0 : index + 1;
+        break;
+      case 'Home':
+        targetIndex = 0;
+        break;
+      case 'End':
+        targetIndex = lastIndex;
+        break;
+      default:
+        return;
+    }
+    event.preventDefault();
+    setActiveTab(INSPECTOR_TABS[targetIndex]!.id);
+    tabRefs.current[targetIndex]?.focus();
+  };
 
   const combinedInputErrors: readonly ValidationError[] = [
     ...optionErrors,
@@ -155,14 +194,7 @@ export function VerificationWorkbenchPane({
       aria-label="Verification results and counterexample workbench"
     >
       <div className="ag-pane-header">
-        <h2 className="ag-pane-title">Verification &amp; Counterexample Workbench</h2>
-        {isStale && !isRunning ? (
-          <button type="button" className="ag-btn ag-btn-sm ag-btn-active" onClick={onVerifyNow}>
-            Re-verify Now
-          </button>
-        ) : (
-          <span className="ag-meta-inline">Bounded BFS &amp; shortest trace</span>
-        )}
+        <h2 className="ag-pane-title">Verification inspector</h2>
       </div>
 
       <div className="ag-workbench-body">
@@ -332,6 +364,19 @@ export function VerificationWorkbenchPane({
             <p className="ag-verdict-headline">{verdictView.headline}</p>
             <p className="ag-verdict-detail">{verdictView.detail}</p>
 
+            {candidateRepairRuleId !== undefined && onInspectRule !== undefined && !isStale && (
+              <div className="ag-verdict-repair">
+                <span>Require a fresh approval after draft edits.</span>
+                <button
+                  type="button"
+                  className="ag-btn ag-btn-sm ag-btn-active"
+                  onClick={() => onInspectRule(candidateRepairRuleId)}
+                >
+                  Inspect candidate repair
+                </button>
+              </div>
+            )}
+
             <div className="ag-verdict-meta ag-mono ag-tabular">
               <span>Snapshot: {verifiedSnapshot.modelLabel}</span>
               <span>
@@ -378,28 +423,38 @@ export function VerificationWorkbenchPane({
           </section>
         )}
 
-        {/* Interactive Counterexample Replay & Manual Simulation */}
-        {!isRunning && verifiedSnapshot !== null && replaySession !== null && (
-          <div className="ag-section">
-            <div className="ag-section-header">
-              <div>
-                <h3 className="ag-section-title">
-                  {replaySession.mode === 'trace'
-                    ? 'Counterexample Trace Replay'
-                    : 'Manual Simulation Session'}
-                </h3>
-                <p className="ag-pane-subtitle">
-                  {isStale
-                    ? `Outdated snapshot "${verifiedSnapshot.modelLabel}" (maxStates=${verifiedSnapshot.options.maxStates}, maxDepth=${verifiedSnapshot.options.maxDepth}).`
-                    : `Verified snapshot "${verifiedSnapshot.modelLabel}" (maxStates=${verifiedSnapshot.options.maxStates}, maxDepth=${verifiedSnapshot.options.maxDepth}).`}
-                </p>
-              </div>
-              <span className="ag-meta-inline">
-                {replaySession.mode === 'trace' ? 'Mode: Counterexample' : 'Mode: Manual'}
-              </span>
-            </div>
+        <div
+          className="ag-tablist ag-inspector-tabs"
+          role="tablist"
+          aria-label="Verification inspector sections"
+        >
+          {INSPECTOR_TABS.map((tab, index) => (
+            <button
+              key={tab.id}
+              ref={(element) => {
+                tabRefs.current[index] = element;
+              }}
+              type="button"
+              role="tab"
+              id={`ag-inspector-tab-${tab.id}`}
+              aria-controls={`ag-inspector-panel-${tab.id}`}
+              aria-selected={activeTab === tab.id}
+              tabIndex={activeTab === tab.id ? 0 : -1}
+              className="ag-tab"
+              onClick={() => setActiveTab(tab.id)}
+              onKeyDown={(event) => handleTabKeyDown(event, index)}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
 
+        {canInspectReplay && activeTab !== 'assumptions' && (
+          <div className="ag-inspector-replay">
             <div className="ag-replay-toolbar">
+              <span className="ag-pane-subtitle">
+                {replaySession.mode === 'trace' ? 'Counterexample replay' : 'Manual simulation'}
+              </span>
               <div className="ag-inline-actions">
                 <button
                   type="button"
@@ -446,8 +501,18 @@ export function VerificationWorkbenchPane({
                 {replayError}
               </div>
             )}
+          </div>
+        )}
 
-            {/* Step Timeline List */}
+        <div
+          id="ag-inspector-panel-trace"
+          role="tabpanel"
+          aria-labelledby="ag-inspector-tab-trace"
+          hidden={activeTab !== 'trace'}
+          className="ag-inspector-panel"
+          tabIndex={0}
+        >
+          {canInspectReplay ? (
             <ol className="ag-timeline" aria-label="Execution trace steps">
               <li
                 className="ag-timeline-item"
@@ -488,7 +553,7 @@ export function VerificationWorkbenchPane({
                       <div className="ag-timeline-head">
                         <span>
                           <strong className="ag-mono">{step.ruleId}</strong>
-                          {label !== undefined && (
+                          {isActive && label !== undefined && (
                             <span style={{ color: 'var(--color-ink-secondary)' }}>: {label}</span>
                           )}
                         </span>
@@ -511,9 +576,11 @@ export function VerificationWorkbenchPane({
                         </div>
                       )}
 
-                      {isStale && isActive && snapshotRule !== undefined && (
+                      {isActive && snapshotRule !== undefined && (
                         <div className="ag-code-strip" style={{ marginTop: 4 }}>
-                          <span className="ag-code-muted">Snapshot guard: </span>
+                          <span className="ag-code-muted">
+                            {isStale ? 'Snapshot guard: ' : 'Guard: '}
+                          </span>
                           {formatBoolExpr(snapshotRule.guard)}
                         </div>
                       )}
@@ -540,282 +607,317 @@ export function VerificationWorkbenchPane({
                 );
               })}
             </ol>
+          ) : (
+            <p className="ag-pane-subtitle">Verify the model to inspect its execution trace.</p>
+          )}
+        </div>
 
-            {/* Live State Variable Table built via @rulecanvas/ui buildStateTableView */}
-            {stateTableView !== null && (
-              <div className="ag-section" style={{ paddingTop: 8, borderTop: 'none' }}>
-                <div className="ag-section-header">
-                  <h4 className="ag-section-title">State Variables at Step {replaySession.cursor}</h4>
-                  <span className="ag-meta-inline">
-                    {stateTableView.changedCount} modified on active step
-                  </span>
-                </div>
-
-                <div
-                  className="ag-table-wrap"
-                  tabIndex={0}
-                  role="region"
-                  aria-label={`State variables table for ${stateTableView.modelName}`}
-                >
-                  <table
-                    className="ag-table"
-                    aria-label={`State variables for ${stateTableView.modelName}`}
-                  >
-                    <thead>
-                      <tr>
-                        <th scope="col">Variable</th>
-                        <th scope="col">Domain</th>
-                        <th scope="col">Value</th>
-                        <th scope="col">Change</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {stateTableView.rows.map((row) => (
-                        <tr
-                          key={row.name}
-                          data-var={row.name}
-                          data-changed={row.changed ? 'true' : 'false'}
-                        >
-                          <td className="ag-mono">{row.name}</td>
-                          <td className="ag-mono" style={{ color: 'var(--color-ink-muted)' }}>
-                            {row.domainText}
-                          </td>
-                          <td className="ag-mono" style={{ fontWeight: 600 }}>
-                            {row.valueText}
-                          </td>
-                          <td>
-                            <span
-                              className="ag-badge"
-                              data-tone={row.changed ? 'running' : undefined}
-                            >
-                              <span aria-hidden="true">{row.changed ? '*' : '-'}</span>{' '}
-                              {row.changeLabel}
-                            </span>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-
-            {/* Invariants & Goal Status Panel built via @rulecanvas/ui buildInvariantsPanelView */}
-            {invariantsPanelView !== null && invariantsPanelView.status === 'VALID' && (
-              <div className="ag-section">
-                <h4 className="ag-section-title">Invariants &amp; Goal at Step {replaySession.cursor}</h4>
-                <div
-                  className="ag-table-wrap"
-                  tabIndex={0}
-                  role="region"
-                  aria-label="Invariants and goal evaluation table"
-                >
-                  <table className="ag-table" aria-label="Invariant and goal evaluation">
-                    <thead>
-                      <tr>
-                        <th scope="col">Predicate</th>
-                        <th scope="col">Expression</th>
-                        <th scope="col">Status</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {invariantsPanelView.invariants.map((inv) => (
-                        <tr key={inv.id} data-changed={inv.violated ? 'true' : 'false'}>
-                          <td>
-                            <div className="ag-mono" style={{ fontWeight: 600 }}>
-                              {inv.id}
-                            </div>
-                            <div style={{ fontSize: 11.5, color: 'var(--color-ink-muted)' }}>
-                              {inv.label}
-                            </div>
-                          </td>
-                          <td className="ag-mono" style={{ fontSize: 11.5 }}>
-                            {inv.expressionText}
-                          </td>
-                          <td>
-                            <span
-                              className="ag-badge"
-                              data-tone={inv.violated ? 'danger' : 'success'}
-                            >
-                              <span aria-hidden="true">{inv.violated ? '✗' : '✓'}</span> {inv.status}
-                            </span>
-                          </td>
-                        </tr>
-                      ))}
-                      {invariantsPanelView.goal !== undefined && (
-                        <tr>
-                          <td>
-                            <div className="ag-mono" style={{ fontWeight: 600 }}>
-                              {invariantsPanelView.goal.id}
-                            </div>
-                            <div style={{ fontSize: 11.5, color: 'var(--color-ink-muted)' }}>
-                              {invariantsPanelView.goal.label}
-                            </div>
-                          </td>
-                          <td className="ag-mono" style={{ fontSize: 11.5 }}>
-                            {invariantsPanelView.goal.expressionText}
-                          </td>
-                          <td>
-                            <span
-                              className="ag-badge"
-                              data-tone={
-                                invariantsPanelView.goal.reached === true ? 'success' : undefined
-                              }
-                            >
-                              <span aria-hidden="true">
-                                {invariantsPanelView.goal.reached === true ? '✓' : '-'}
-                              </span>{' '}
-                              {invariantsPanelView.goal.status}
-                            </span>
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-
-            {/* Manual Rule Execution Controls */}
-            <div className="ag-section">
-              <div className="ag-section-header">
-                <h4 className="ag-section-title">Manual Rule Execution</h4>
-                <span className="ag-meta-inline">
-                  {replaySession.enabledTransitions.filter((t) => t.enabled).length} of{' '}
-                  {replaySession.enabledTransitions.length} enabled
-                </span>
-              </div>
-
-              <div className="ag-transition-grid">
-                {replaySession.enabledTransitions.map((transition) => (
-                  <button
-                    key={transition.ruleId}
-                    type="button"
-                    className="ag-transition-btn"
-                    disabled={!transition.enabled}
-                    onClick={() => onApplyManualStep(transition.ruleId)}
-                  >
-                    <span className="ag-transition-id">{transition.ruleId}</span>
-                    <span className="ag-transition-label">{transition.label}</span>
-                    <span
-                      className="ag-mono"
-                      style={{
-                        fontSize: 11,
-                        color: transition.enabled
-                          ? 'var(--color-accent)'
-                          : 'var(--color-ink-muted)',
-                      }}
-                    >
-                      {transition.enabled ? 'Enabled: Step' : 'Guard disabled'}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Explicit Modeling Assumptions & Scope Disclosure */}
-        <div className="ag-section">
-          {hasVerifiedAssumptions ? (
+        <div
+          id="ag-inspector-panel-state"
+          role="tabpanel"
+          aria-labelledby="ag-inspector-tab-state"
+          hidden={activeTab !== 'state'}
+          className="ag-inspector-panel"
+          tabIndex={0}
+        >
+          {canInspectReplay ? (
             <>
-              <div className="ag-section-header">
-                <h3 className="ag-section-title">
-                  Modeling Assumptions &amp; Scope Disclosure ({verifiedAssumptions.length})
-                </h3>
-                <span className="ag-meta-inline">
-                  Scope of verified snapshot: {verifiedSnapshot.modelLabel}
-                </span>
-              </div>
-              <p className="ag-scope-note">
-                Scope of verified snapshot: <strong>{verifiedSnapshot.modelLabel}</strong>.
-                Verdicts hold strictly within the declared discrete finite-state model and its
-                explicit assumptions below. AgentGate is a design-time policy verification
-                workbench, not a live runtime enforcement proxy or external production security
-                audit.
-              </p>
-              <div className="ag-assumptions-list">
-                {verifiedAssumptions.map((asm, idx) => (
-                  <div key={`${asm.id}-${idx}`} className="ag-assumption-item">
-                    <div className="ag-section-header">
-                      <strong className="ag-mono">{asm.id}</strong>
-                      <span className="ag-assumption-category">{asm.category}</span>
-                    </div>
-                    <p>{asm.statement}</p>
-                    <p className="ag-assumption-not-modeled">
-                      <strong>Not modeled:</strong> {asm.notModeled}
-                    </p>
-                  </div>
-                ))}
-              </div>
-
-              {hasPendingEditedAssumptions && (
-                <div
-                  className="ag-pending-assumptions"
-                  role="region"
-                  aria-label="Pending edited assumptions"
-                >
+              {stateTableView !== null && (
+                <div className="ag-section">
                   <div className="ag-section-header">
-                    <h4 className="ag-section-title">
-                      Pending Edited Assumptions (Unverified) ({model.assumptions.length})
-                    </h4>
-                    <span className="ag-badge" data-tone="warning">
-                      <span aria-hidden="true">!</span> UNVERIFIED DRAFT
+                    <h4 className="ag-section-title">State Variables at Step {replaySession.cursor}</h4>
+                    <span className="ag-meta-inline">
+                      {stateTableView.changedCount} modified on active step
                     </span>
                   </div>
-                  <p className="ag-pane-subtitle">
-                    These edited assumptions belong to the unverified policy draft and do not apply
-                    to the verified snapshot above until you re-verify.
-                  </p>
-                  <div className="ag-assumptions-list">
-                    {model.assumptions.map((asm, idx) => (
-                      <div key={`pending-${asm.id}-${idx}`} className="ag-assumption-item">
-                        <div className="ag-section-header">
-                          <strong className="ag-mono">{asm.id}</strong>
-                          <span className="ag-assumption-category">{asm.category}</span>
-                        </div>
-                        <p>{asm.statement}</p>
-                        <p className="ag-assumption-not-modeled">
-                          <strong>Not modeled:</strong> {asm.notModeled}
-                        </p>
-                      </div>
-                    ))}
+
+                  <div
+                    className="ag-table-wrap"
+                    tabIndex={0}
+                    role="region"
+                    aria-label={`State variables table for ${stateTableView.modelName}`}
+                  >
+                    <table
+                      className="ag-table"
+                      aria-label={`State variables for ${stateTableView.modelName}`}
+                    >
+                      <thead>
+                        <tr>
+                          <th scope="col">Variable</th>
+                          <th scope="col">Domain</th>
+                          <th scope="col">Value</th>
+                          <th scope="col">Change</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {stateTableView.rows.map((row) => {
+                          const before = replaySession.activeStep?.stateBefore[row.name];
+                          return (
+                            <tr
+                              key={row.name}
+                              data-var={row.name}
+                              data-changed={row.changed ? 'true' : 'false'}
+                            >
+                              <td className="ag-mono">{row.name}</td>
+                              <td className="ag-mono" style={{ color: 'var(--color-ink-muted)' }}>
+                                {row.domainText}
+                              </td>
+                              <td className="ag-mono">
+                                {row.changed && before !== undefined && (
+                                  <span className="ag-state-before">{formatStateValue(before)} → </span>
+                                )}
+                                <strong>{row.valueText}</strong>
+                              </td>
+                              <td>
+                                <span
+                                  className="ag-badge"
+                                  data-tone={row.changed ? 'running' : undefined}
+                                >
+                                  <span aria-hidden="true">{row.changed ? '*' : '-'}</span>{' '}
+                                  {row.changeLabel}
+                                </span>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
                   </div>
                 </div>
               )}
+              <div className="ag-section">
+                <div className="ag-section-header">
+                  <h4 className="ag-section-title">Manual Rule Execution</h4>
+                  <span className="ag-meta-inline">
+                    {replaySession.enabledTransitions.filter((t) => t.enabled).length} of{' '}
+                    {replaySession.enabledTransitions.length} enabled
+                  </span>
+                </div>
+
+                <div className="ag-transition-grid">
+                  {replaySession.enabledTransitions.map((transition) => (
+                    <button
+                      key={transition.ruleId}
+                      type="button"
+                      className="ag-transition-btn"
+                      disabled={!transition.enabled}
+                      onClick={() => onApplyManualStep(transition.ruleId)}
+                    >
+                      <span className="ag-transition-id">{transition.ruleId}</span>
+                      <span className="ag-transition-label">{transition.label}</span>
+                      <span
+                        className="ag-mono"
+                        style={{
+                          fontSize: 11,
+                          color: transition.enabled
+                            ? 'var(--color-accent)'
+                            : 'var(--color-ink-muted)',
+                        }}
+                      >
+                        {transition.enabled ? 'Enabled: Step' : 'Guard disabled'}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
             </>
           ) : (
-            <>
-              <div className="ag-section-header">
-                <h3 className="ag-section-title">
-                  Draft Model Assumptions (Unverified) ({model.assumptions.length})
-                </h3>
-                <span className="ag-badge" data-tone="warning">
-                  <span aria-hidden="true">!</span> UNVERIFIED DRAFT
-                </span>
-              </div>
-              <p className="ag-scope-note">
-                Modeling Assumptions &amp; Scope Disclosure: no valid verified snapshot is active.
-                The assumptions below belong to the current unverified draft model. AgentGate is a
-                design-time finite-state verification workbench, not a live runtime enforcement
-                proxy or external production security audit.
-              </p>
-              <div className="ag-assumptions-list">
-                {model.assumptions.map((asm, idx) => (
-                  <div key={`draft-${asm.id}-${idx}`} className="ag-assumption-item">
-                    <div className="ag-section-header">
-                      <strong className="ag-mono">{asm.id}</strong>
-                      <span className="ag-assumption-category">{asm.category}</span>
-                    </div>
-                    <p>{asm.statement}</p>
-                    <p className="ag-assumption-not-modeled">
-                      <strong>Not modeled:</strong> {asm.notModeled}
-                    </p>
-                  </div>
-                ))}
-              </div>
-            </>
+            <p className="ag-pane-subtitle">Verify the model to inspect state variables and changes.</p>
           )}
+        </div>
+
+        <div
+          id="ag-inspector-panel-checks"
+          role="tabpanel"
+          aria-labelledby="ag-inspector-tab-checks"
+          hidden={activeTab !== 'checks'}
+          className="ag-inspector-panel"
+          tabIndex={0}
+        >
+          {canInspectReplay && invariantsPanelView !== null && invariantsPanelView.status === 'VALID' ? (
+            <div className="ag-section">
+              <h4 className="ag-section-title">Invariants &amp; Goal at Step {replaySession.cursor}</h4>
+              <div
+                className="ag-table-wrap"
+                tabIndex={0}
+                role="region"
+                aria-label="Invariants and goal evaluation table"
+              >
+                <table className="ag-table" aria-label="Invariant and goal evaluation">
+                  <thead>
+                    <tr>
+                      <th scope="col">Predicate</th>
+                      <th scope="col">Expression</th>
+                      <th scope="col">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {invariantsPanelView.invariants.map((inv) => (
+                      <tr key={inv.id} data-changed={inv.violated ? 'true' : 'false'}>
+                        <td>
+                          <div className="ag-mono" style={{ fontWeight: 600 }}>
+                            {inv.id}
+                          </div>
+                          <div style={{ fontSize: 11.5, color: 'var(--color-ink-muted)' }}>
+                            {inv.label}
+                          </div>
+                        </td>
+                        <td className="ag-mono" style={{ fontSize: 11.5 }}>
+                          {inv.expressionText}
+                        </td>
+                        <td>
+                          <span
+                            className="ag-badge"
+                            data-tone={inv.violated ? 'danger' : 'success'}
+                          >
+                            <span aria-hidden="true">{inv.violated ? '✗' : '✓'}</span> {inv.status}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                    {invariantsPanelView.goal !== undefined && (
+                      <tr>
+                        <td>
+                          <div className="ag-mono" style={{ fontWeight: 600 }}>
+                            {invariantsPanelView.goal.id}
+                          </div>
+                          <div style={{ fontSize: 11.5, color: 'var(--color-ink-muted)' }}>
+                            {invariantsPanelView.goal.label}
+                          </div>
+                        </td>
+                        <td className="ag-mono" style={{ fontSize: 11.5 }}>
+                          {invariantsPanelView.goal.expressionText}
+                        </td>
+                        <td>
+                          <span
+                            className="ag-badge"
+                            data-tone={
+                              invariantsPanelView.goal.reached === true ? 'success' : undefined
+                            }
+                          >
+                            <span aria-hidden="true">
+                              {invariantsPanelView.goal.reached === true ? '✓' : '-'}
+                            </span>{' '}
+                            {invariantsPanelView.goal.status}
+                          </span>
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            ) : (
+            <p className="ag-pane-subtitle">Verify the model to inspect invariant and goal evaluations.</p>
+          )}
+        </div>
+
+        <div
+          id="ag-inspector-panel-assumptions"
+          role="tabpanel"
+          aria-labelledby="ag-inspector-tab-assumptions"
+          hidden={activeTab !== 'assumptions'}
+          className="ag-inspector-panel"
+          tabIndex={0}
+        >
+          <div className="ag-section">
+            {hasVerifiedAssumptions ? (
+              <>
+                <div className="ag-section-header">
+                  <h3 className="ag-section-title">
+                    Modeling Assumptions &amp; Scope Disclosure ({verifiedAssumptions.length})
+                  </h3>
+                </div>
+                <p className="ag-scope-note">
+                  Scope of verified snapshot: <strong>{verifiedSnapshot.modelLabel}</strong>.
+                  Verdicts hold strictly within the declared discrete finite-state model and its
+                  explicit assumptions below. AgentGate is a design-time policy verification
+                  workbench, not a live runtime enforcement proxy or external production security
+                  audit.
+                </p>
+                <div className="ag-assumptions-list">
+                  {verifiedAssumptions.map((asm, idx) => (
+                    <div key={`${asm.id}-${idx}`} className="ag-assumption-item">
+                      <div className="ag-section-header">
+                        <strong className="ag-mono">{asm.id}</strong>
+                        <span className="ag-assumption-category">{asm.category}</span>
+                      </div>
+                      <p>{asm.statement}</p>
+                      <p className="ag-assumption-not-modeled">
+                        <strong>Not modeled:</strong> {asm.notModeled}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+
+                {hasPendingEditedAssumptions && (
+                  <div
+                    className="ag-pending-assumptions"
+                    role="region"
+                    aria-label="Pending edited assumptions"
+                  >
+                    <div className="ag-section-header">
+                      <h4 className="ag-section-title">
+                        Pending Edited Assumptions (Unverified) ({model.assumptions.length})
+                      </h4>
+                      <span className="ag-badge" data-tone="warning">
+                        <span aria-hidden="true">!</span> UNVERIFIED DRAFT
+                      </span>
+                    </div>
+                    <p className="ag-pane-subtitle">
+                      These edited assumptions belong to the unverified policy draft and do not apply
+                      to the verified snapshot above until you re-verify.
+                    </p>
+                    <div className="ag-assumptions-list">
+                      {model.assumptions.map((asm, idx) => (
+                        <div key={`pending-${asm.id}-${idx}`} className="ag-assumption-item">
+                          <div className="ag-section-header">
+                            <strong className="ag-mono">{asm.id}</strong>
+                            <span className="ag-assumption-category">{asm.category}</span>
+                          </div>
+                          <p>{asm.statement}</p>
+                          <p className="ag-assumption-not-modeled">
+                            <strong>Not modeled:</strong> {asm.notModeled}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                <div className="ag-section-header">
+                  <h3 className="ag-section-title">
+                    Draft Model Assumptions (Unverified) ({model.assumptions.length})
+                  </h3>
+                  <span className="ag-badge" data-tone="warning">
+                    <span aria-hidden="true">!</span> UNVERIFIED DRAFT
+                  </span>
+                </div>
+                <p className="ag-scope-note">
+                  Modeling Assumptions &amp; Scope Disclosure: no valid verified snapshot is active.
+                  The assumptions below belong to the current unverified draft model. AgentGate is a
+                  design-time finite-state verification workbench, not a live runtime enforcement
+                  proxy or external production security audit.
+                </p>
+                <div className="ag-assumptions-list">
+                  {model.assumptions.map((asm, idx) => (
+                    <div key={`draft-${asm.id}-${idx}`} className="ag-assumption-item">
+                      <div className="ag-section-header">
+                        <strong className="ag-mono">{asm.id}</strong>
+                        <span className="ag-assumption-category">{asm.category}</span>
+                      </div>
+                      <p>{asm.statement}</p>
+                      <p className="ag-assumption-not-modeled">
+                        <strong>Not modeled:</strong> {asm.notModeled}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
         </div>
       </div>
     </section>
