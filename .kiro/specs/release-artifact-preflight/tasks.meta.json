@@ -1,0 +1,70 @@
+{
+  "pbtResults": {},
+  "executionHistory": {
+    "1. Write the regression tests first and record the red run": [
+      {
+        "executionId": "03479637-003c-4379-b66d-795fcfd48236",
+        "chatSessionId": "sess_26c44c8d-eadb-4537-af06-03e41ba688f8",
+        "timestamp": 1795676370214
+      },
+      {
+        "executionId": "03479637-003c-4379-b66d-795fcfd48236",
+        "chatSessionId": "sess_26c44c8d-eadb-4537-af06-03e41ba688f8",
+        "timestamp": 1795676377954
+      },
+      {
+        "executionId": "03479637-003c-4379-b66d-795fcfd48236",
+        "chatSessionId": "sess_26c44c8d-eadb-4537-af06-03e41ba688f8",
+        "timestamp": 1795676577530
+      }
+    ],
+    "2.1 Create `scripts/release-preflight-archive.py` (bounded validate and extract with `gzip` and `tarfile`)": [
+      {
+        "executionId": "03479637-003c-4379-b66d-795fcfd48236",
+        "chatSessionId": "sess_26c44c8d-eadb-4537-af06-03e41ba688f8",
+        "timestamp": 1795676370216
+      },
+      {
+        "executionId": "03479637-003c-4379-b66d-795fcfd48236",
+        "chatSessionId": "sess_26c44c8d-eadb-4537-af06-03e41ba688f8",
+        "timestamp": 1795676583219
+      },
+      {
+        "executionId": "03479637-003c-4379-b66d-795fcfd48236",
+        "chatSessionId": "sess_26c44c8d-eadb-4537-af06-03e41ba688f8",
+        "timestamp": 1795676753382
+      }
+    ],
+    "2.2 Create `scripts/release-preflight.mjs` (arguments, directory and manifest checks, staging, publication, cleanup) and add `verify:release:preflight` to `package.json`": [
+      {
+        "executionId": "03479637-003c-4379-b66d-795fcfd48236",
+        "chatSessionId": "sess_26c44c8d-eadb-4537-af06-03e41ba688f8",
+        "timestamp": 1795676370218
+      },
+      {
+        "executionId": "03479637-003c-4379-b66d-795fcfd48236",
+        "chatSessionId": "sess_26c44c8d-eadb-4537-af06-03e41ba688f8",
+        "timestamp": 1795676760465
+      },
+      {
+        "executionId": "bfcf3f75-e689-433a-a5dd-82e462203653",
+        "chatSessionId": "sess_98773121-1463-489c-9f31-1490914ff2ab",
+        "timestamp": 1795677382843
+      }
+    ],
+    "3. Implement the browser helper": [
+      {
+        "executionId": "03479637-003c-4379-b66d-795fcfd48236",
+        "chatSessionId": "sess_26c44c8d-eadb-4537-af06-03e41ba688f8",
+        "timestamp": 1795676370220
+      }
+    ],
+    "4. Run the Test_Suite green and run the real CI baseline": [
+      {
+        "executionId": "03479637-003c-4379-b66d-795fcfd48236",
+        "chatSessionId": "sess_26c44c8d-eadb-4537-af06-03e41ba688f8",
+        "timestamp": 1795676370221
+      }
+    ]
+  }
+}

@@ -4,17 +4,36 @@
 
 **Tagline** · Find where rules fail together, replay the shortest counterexample, and check that a repair preserves the intended workflow.
 
-RuleCanvasKit is a TypeScript foundation for checking how rules interact over multiple steps. Give it a finite state schema, guarded transitions, invariants, a goal, and explicit assumptions. It exhaustively explores reachable states within the declared bounds, reports when exploration is incomplete, and replays the shortest counterexample it finds.
+Approval and safety rules can each look reasonable in isolation and still combine into a failure. RuleCanvasKit helps engineers and workflow reviewers find those failures before rollout. Describe a finite state model, the rules that change it, the invariants that must hold, the goal, and the assumptions. The verifier explores reachable states deterministically. It replays the shortest counterexample it finds and reports an inconclusive result when exploration stops at a bound.
 
-The same foundation powers two browser workbenches in separate folders. [AgentGate](../apps/agent-gate/) compares approval-policy models and shows when a repair preserves a legitimate release workflow. [InterlockSim](../apps/interlock-sim/) is an educational airlock model with a schematic, an operator console, guard explanations, and a guided repair. Both workbenches support preset links, model JSON, and interactive replay.
+One TypeScript foundation powers two browser workbenches in separate folders. [AgentGate](../apps/agent-gate/) replays a five-step approval-policy failure and compares candidate fixes. The comparison makes it clear when a fix blocks legitimate releases along with the violation. [InterlockSim](../apps/interlock-sim/) shows a six-step violation in an educational airlock model. You can inspect the schematic, try a guided repair, and verify that the modeled goal remains reachable. Both workbenches support preset links, model JSON, and interactive replay.
 
 The verification core uses exact integer arithmetic and atomic transitions. Shared packages provide replay, model transport, and React bindings. A clean consumer built from the project tarballs verifies a third domain, a booking model. Model verdicts apply within the declared assumptions and exploration bounds.
 
 ## How we built it
 
-The root [Kiro workspace](../.kiro/) tracks architectural steering, engine rules, and a save-hook definition for core checks. Kiro reviewed the shared workbench integration and caught a compatibility defect in the legacy worker protocol. We fixed it and added a regression check. A separate Kiro CLI session loaded the tracked architecture steering and explained the design boundary it enforces. The [tooling disclosure](./TOOL_ATTRIBUTION.md) describes the recorded activities and how the checks were run.
+The root [Kiro workspace](../.kiro/) tracks architectural steering, engine rules, a save-hook definition for core checks, and the [release artifact preflight spec](../.kiro/specs/release-artifact-preflight/requirements.md). Kiro reviewed the shared workbench integration and caught a compatibility defect in the legacy worker protocol, which we fixed with a regression test. A separate Kiro CLI session loaded the tracked architecture steering and explained the design boundary it enforces, and Kiro Spec mode generated and executed the release artifact preflight specification. The [tooling disclosure](./TOOL_ATTRIBUTION.md) describes all recorded activities and how checks were run.
 
 The core uses differential property-based tests against an independent reference evaluator. The package and browser gates check the exported packages and both workbenches outside the development server.
+
+## YouTube upload copy
+
+**Title** · RuleCanvasKit | One Verifier, Two Workbenches | Kiroween 2026
+
+**Description**
+
+RuleCanvasKit finds sequences of rule changes that violate a model's invariants and replays the shortest counterexample. This 64-second demo follows an approval-policy failure in AgentGate, compares fixes that behave differently, and verifies a guided repair in the educational InterlockSim workbench.
+
+- 0:00 AgentGate and the broken approval policy
+- 0:09 Replay the shortest counterexample
+- 0:19 Compare repairs and goal reachability
+- 0:32 InterlockSim and the airlock trace
+- 0:43 Apply the guided repair and verify again
+- 0:54 The shared TypeScript foundation
+
+Try AgentGate at `[approved AgentGate URL]`. Try InterlockSim at `[approved InterlockSim URL]`.
+
+Submitted for Skeleton Crew at Kiroween 2026. Model verdicts apply to the declared models and assumptions. [Source, install instructions, and Kiro usage write-up](https://github.com/iamramchandrakarki/rulecanvas-kit)
 
 ## Demo video script
 
@@ -35,6 +54,7 @@ The timestamps follow the captioned recording. Both workbenches can be run from 
 - [ ] Provide both functional app URLs. Confirm that judges can access them without logging in and that hosting remains available through January 29, 2027.
 - [ ] Link the public MIT-licensed [GitHub repository](https://github.com/iamramchandrakarki/rulecanvas-kit). Confirm that both app folders and the root `.kiro/` directory are visible at the reviewed revision.
 - [ ] Include the English project description, select Skeleton Crew, and attach a factual Kiro usage write-up.
+- [ ] Replace the app URL placeholders in the video description. Verify signed-out access and ensure the public apps match the source revision linked from Devpost.
 - [ ] Upload the demo to YouTube with public visibility. Use English captions and original or authorized media. Keep the runtime under three minutes and test the URL signed out.
 - [ ] Obtain maintainer approval and submit by December 4, 2026 at 2:00 p.m. Pacific time.
 

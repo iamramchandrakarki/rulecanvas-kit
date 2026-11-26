@@ -2,6 +2,15 @@
 
 RuleCanvasKit now shares a portable model codec, verification transport, React snapshot controls, and preset navigation across AgentGate and InterlockSim. The verifier remains a pure ES2022 library. Each workbench still has its own model, production bundle, and module worker.
 
+## Release highlights
+
+- **AgentGate** replays the shortest modeled approval-policy failure and compares repairs against both invariants and the legitimate release goal.
+- **InterlockSim** uses the same verifier for an educational airlock scenario. Inspect the schematic, step through the counterexample, and verify the guided repair.
+- **Compatibility and accessibility** cover legacy worker replies, preset history and dirty drafts, portable JSON limits, and text and keyboard access to verification controls.
+- **Verification** covers four packed libraries and a third-domain booking consumer. The candidate passed 161 unit and integration tests and Chromium tests across desktop, tablet, and mobile viewport widths.
+
+Verdicts apply to the finite model and its declared assumptions. See the [Kiroween release plan](kiroween-2026.md) for the source revision, static hosting steps, and publication approvals.
+
 ## Preview the static builds
 
 Install the locked workspace with the Node and pnpm versions listed in the [README](../../README.md).

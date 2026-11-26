@@ -1,6 +1,6 @@
 # Specifications Directory
 
-This directory (`.kiro/specs/`) holds Kiro IDE specification artifacts generated during spec-driven development sessions.
+This directory (`.kiro/specs/`) holds specification artifacts generated and executed in Kiro Spec mode through the IDE or CLI.
 
 Specification execution history and task checklists are never fabricated or pre-populated here.
 

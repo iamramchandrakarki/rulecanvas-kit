@@ -52,6 +52,7 @@ scripts/
   verify-exports.mjs     # Pure Node ESM export check across all 4 libraries (6 entry points) + SSR app imports
   verify-pack.mjs        # Map-free tarball packaging, allowlist check, & offline third-app consumer verification
   check-test-hygiene.mjs # Anti-skip / anti-focus AST check across all test files
+  release-preflight.mjs  # Local CI archive manifest, bounded tar/gzip, and Chromium worker preflight
 tests/
   browser/               # Playwright headless Chromium regression suite across desktop, tablet, and mobile
 docs/
