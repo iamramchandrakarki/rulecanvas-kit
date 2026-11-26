@@ -407,6 +407,22 @@ export function AirlockSchematic({
           aria-label={ariaSummary}
         >
           <title>BSL-3 Bio-Containment Airlock P&amp;ID State Diagram</title>
+          <defs>
+            <pattern
+              id="is-cad-grid"
+              width="20"
+              height="20"
+              patternUnits="userSpaceOnUse"
+            >
+              <path
+                d="M 20 0 L 0 0 0 20"
+                fill="none"
+                stroke="var(--schematic-grid-line)"
+                strokeWidth="1"
+              />
+            </pattern>
+          </defs>
+          <rect x="0" y="0" width="740" height="220" fill="url(#is-cad-grid)" />
 
           {/* Corridor / Exterior Zone */}
           <rect

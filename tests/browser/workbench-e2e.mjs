@@ -159,11 +159,18 @@ try {
   const consoleErrors = [];
   const pageErrors = [];
   const httpErrors = [];
+  const externalRequests = [];
   const axeAudits = [];
   context.on('console', (msg) => {
     if (msg.type() === 'error') consoleErrors.push(msg.text());
   });
   context.on('weberror', (error) => pageErrors.push(error.error().message));
+  context.on('request', (req) => {
+    const url = req.url();
+    if (!url.startsWith(baseUrl) && !url.startsWith('data:') && !url.startsWith('blob:')) {
+      externalRequests.push(url);
+    }
+  });
   context.on('response', (res) => {
     if (res.status() >= 400) httpErrors.push(`${res.status()} ${res.url()}`);
   });
@@ -314,7 +321,52 @@ try {
   );
   await checkNoOverflow('AgentGate desktop 1280x800');
   await checkAxeWcagAA('AgentGate broken 1280x800');
+  const agFontsLoaded = await page.evaluate(async () => {
+    await document.fonts.ready;
+    return {
+      count: document.fonts.size,
+      sans: document.fonts.check('500 13px "IBM Plex Sans"'),
+      mono: document.fonts.check('500 12px "IBM Plex Mono"'),
+    };
+  });
+  assert(
+    agFontsLoaded.count >= 6 && agFontsLoaded.sans && agFontsLoaded.mono,
+    `Self-hosted IBM Plex fonts failed to load on AgentGate: ${JSON.stringify(agFontsLoaded)}`,
+  );
   await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'agent-gate-desktop-1280.png') });
+
+  // Theme switching (Light / Dark / System) + WCAG AA in Dark theme
+  await page.getByRole('button', { name: 'Dark', exact: true }).click();
+  assert(
+    (await page.evaluate(() => document.documentElement.dataset.theme)) === 'dark',
+    'AgentGate Dark theme button did not set data-theme="dark"',
+  );
+  assert(
+    (await page.evaluate(() => localStorage.getItem('rulecanvas-theme'))) === 'dark',
+    'AgentGate Dark theme preference not persisted in localStorage',
+  );
+  await checkAxeWcagAA('AgentGate broken Dark 1280x800');
+  await page.getByRole('button', { name: 'Light', exact: true }).click();
+  assert(
+    (await page.evaluate(() => document.documentElement.dataset.theme)) === 'light',
+    'AgentGate Light theme button did not set data-theme="light"',
+  );
+  await page.getByRole('button', { name: 'System', exact: true }).click();
+
+  // Cross-pane Inspect rule jump from counterexample trace step 5 -> publish_release_notes
+  const step5JumpBtn = page
+    .locator('.ag-timeline-item', { hasText: 'publish_release_notes' })
+    .getByRole('button', { name: 'Inspect rule' });
+  await step5JumpBtn.click();
+  assert(
+    (await page
+      .locator('.ag-item-row[data-rule-id="publish_release_notes"] .ag-disclosure-btn')
+      .getAttribute('aria-expanded')) === 'true',
+    'Inspect rule on Step 5 did not expand publish_release_notes disclosure',
+  );
+  await page
+    .locator('.ag-item-row[data-rule-id="publish_release_notes"] .ag-disclosure-btn')
+    .click();
 
   // AgentGate 5-step counterexample trace + violated invariants + assumptions + keyboard stepping
   await page.getByText('Step 5 of 5').first().waitFor({ state: 'visible' });
@@ -536,9 +588,14 @@ try {
   await checkNoOverflow('AgentGate mobile 375x812 (Rules tab)');
   await checkAxeWcagAA('AgentGate mobile 375x812');
   await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'agent-gate-mobile-375.png') });
+  await page.setViewportSize({ width: 360, height: 800 });
+  await checkNoOverflow('AgentGate mobile 360x800');
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await checkNoOverflow('AgentGate desktop 1440x900');
 
-  // Reciprocal cross-workbench navigation from AgentGate -> InterlockSim (with dirty prompt approval)
+  // Persist Dark theme before navigating AgentGate -> InterlockSim
   await page.setViewportSize({ width: 1280, height: 800 });
+  await page.getByRole('button', { name: 'Dark', exact: true }).click();
   await page.locator('nav a', { hasText: 'InterlockSim' }).click();
   await page.getByRole('alertdialog').waitFor({ state: 'visible' });
   await page.getByRole('button', { name: 'Discard & Continue' }).click();
@@ -547,6 +604,12 @@ try {
   // --- 2. InterlockSim under /suite/interlock-sim/ ---
   const isBrokenVerdict = page.locator('section.is-verdict[data-status="VIOLATED"]');
   await isBrokenVerdict.waitFor({ state: 'visible' });
+  assert(
+    (await page.evaluate(() => document.documentElement.dataset.theme)) === 'dark',
+    'Dark theme preference did not persist across AgentGate -> InterlockSim navigation',
+  );
+  await checkAxeWcagAA('InterlockSim broken Dark 1280x800');
+  await page.getByRole('button', { name: 'System', exact: true }).click();
   assert(
     (await isBrokenVerdict.getAttribute('aria-live')) === 'polite',
     'InterlockSim verdict panel missing aria-live="polite"',
@@ -626,6 +689,9 @@ try {
   // Guided repair -> VERIFIED (29 states, Goal reachable: Yes)
   await page.getByRole('button', { name: 'Apply Principled Repair' }).click();
   await page.getByText('OUTDATED: VIOLATED').first().waitFor({ state: 'visible' });
+  await page
+    .locator('.is-schematic-status-strip .is-badge', { hasText: 'OUTDATED SNAPSHOT' })
+    .waitFor({ state: 'visible' });
   await assertBadgeHasIconAndText(
     page.locator('header .is-badge[data-tone="warning"]'),
     'OUTDATED: VIOLATED',
@@ -744,6 +810,10 @@ try {
   await checkNoOverflow('InterlockSim mobile 375x812');
   await checkAxeWcagAA('InterlockSim mobile 375x812');
   await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'interlock-sim-mobile-375.png') });
+  await page.setViewportSize({ width: 360, height: 800 });
+  await checkNoOverflow('InterlockSim mobile 360x800');
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await checkNoOverflow('InterlockSim desktop 1440x900');
 
   // Clean reciprocal link back to AgentGate
   await page.setViewportSize({ width: 1280, height: 800 });
@@ -947,6 +1017,10 @@ try {
   assert(consoleErrors.length === 0, `Console errors: ${consoleErrors.join('; ')}`);
   assert(pageErrors.length === 0, `Page errors: ${pageErrors.join('; ')}`);
   assert(httpErrors.length === 0, `HTTP errors: ${httpErrors.join('; ')}`);
+  assert(
+    externalRequests.length === 0,
+    `Unexpected external network/CDN requests: ${externalRequests.join('; ')}`,
+  );
 
   console.log(
     JSON.stringify(

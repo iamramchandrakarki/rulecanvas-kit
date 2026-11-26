@@ -81,9 +81,33 @@ export function applyDocumentTheme(
     doc !== undefined ? doc : typeof document !== 'undefined' ? document : null;
   if (targetDoc === null || targetDoc.documentElement === null) return;
   const root = targetDoc.documentElement;
+  const previousTheme =
+    typeof root.getAttribute === 'function' ? root.getAttribute('data-theme') : null;
+  const switching = previousTheme !== null && previousTheme !== resolved;
+  let suppressor: HTMLStyleElement | null = null;
+  if (
+    switching &&
+    typeof targetDoc.createElement === 'function' &&
+    targetDoc.head &&
+    typeof targetDoc.head.appendChild === 'function'
+  ) {
+    suppressor = targetDoc.createElement('style');
+    suppressor.textContent = '*,*::before,*::after{transition:none!important}';
+    targetDoc.head.appendChild(suppressor);
+  }
   root.setAttribute('data-theme', resolved);
   root.setAttribute('data-theme-preference', preference);
-  root.style.colorScheme = resolved;
+  if (root.style) {
+    root.style.colorScheme = resolved;
+  }
+  if (suppressor !== null) {
+    if (typeof root.getBoundingClientRect === 'function') {
+      void root.getBoundingClientRect();
+    }
+    if (typeof suppressor.remove === 'function') {
+      suppressor.remove();
+    }
+  }
 }
 
 export interface UseWorkbenchThemeOptions {
