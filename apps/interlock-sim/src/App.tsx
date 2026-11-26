@@ -221,9 +221,7 @@ export function App({
       maxDepth: maxDepthParsed.ok ? maxDepthParsed.value : DEFAULT_VERIFY_OPTIONS.maxDepth,
     });
     for (const err of coreCheck) {
-      if (err.path === 'options.maxStates' && !maxStatesParsed.ok) continue;
-      if (err.path === 'options.maxDepth' && !maxDepthParsed.ok) continue;
-      errs.push(err);
+      errs.push({ ...err, path: err.path ? 'options.' + err.path : 'options' });
     }
     return errs;
   }, [maxStatesParsed, maxDepthParsed]);

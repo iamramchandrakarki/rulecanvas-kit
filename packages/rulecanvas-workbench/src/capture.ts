@@ -1,5 +1,6 @@
 import {
   validateModel,
+  validateOptions,
   type ModelAssumption,
   type StateSnapshot,
   type TraceStep,
@@ -236,34 +237,17 @@ export function captureVerificationRequest(
       new Set<object>(),
       false,
     );
-    if (typeof detachedOpts !== 'object' || detachedOpts === null || Array.isArray(detachedOpts)) {
-      return { ok: false, code: 'CAPTURE_ERROR', message: 'Verification options must be a plain object.' };
-    }
-    const optsRec = detachedOpts as Record<string, unknown>;
-    const maxStates = optsRec['maxStates'];
-    const maxDepth = optsRec['maxDepth'];
-    if (
-      typeof maxStates !== 'number' ||
-      !Number.isSafeInteger(maxStates) ||
-      maxStates < 1
-    ) {
+    const optionErrors = validateOptions(detachedOpts);
+    if (optionErrors.length > 0) {
       return {
         ok: false,
         code: 'CAPTURE_ERROR',
-        message: 'Verification option maxStates must be a safe integer >= 1.',
+        message: optionErrors[0]?.message ?? 'Verification options failed validation.',
+        errors: deepFreeze([...optionErrors]),
       };
     }
-    if (typeof maxDepth !== 'number' || !Number.isSafeInteger(maxDepth) || maxDepth < 0) {
-      return {
-        ok: false,
-        code: 'CAPTURE_ERROR',
-        message: 'Verification option maxDepth must be a safe integer >= 0.',
-      };
-    }
-    const cleanOptions: VerifyOptions = deepFreeze({
-      maxStates: normalizeNumber(maxStates),
-      maxDepth: normalizeNumber(maxDepth),
-    });
+    const { maxStates, maxDepth } = detachedOpts as VerifyOptions;
+    const cleanOptions: VerifyOptions = deepFreeze({ maxStates, maxDepth });
 
     const modelBudget: CaptureBudget = { visited: 0, maxNodes: MAX_MODEL_CAPTURE_NODES };
     const detachedModel = detachOwnedValue(

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { resolveSameOriginNavigationHref } from './navigation-href.js';
 
 export interface HistoryStamp {
   readonly __rulecanvasRoute: true;
@@ -109,25 +110,6 @@ function allocateControllerNonce(existingStamp: HistoryStamp | null): string {
   const prevMatch = existingStamp?.sessionId.match(/^rc-sess-g(\d+)-/);
   const nextGen = prevMatch !== null && prevMatch !== undefined ? Number(prevMatch[1]) + 1 : 1;
   return `g${nextGen}-${seq}`;
-}
-
-function isSafeControllerNavigationHref(href: string, baseHref: string): boolean {
-  const trimmed = href.trim();
-  if (trimmed.length === 0) return false;
-  if (/[\u0000-\u001f\u007f]/.test(trimmed)) return false;
-  if (trimmed.startsWith('//') || trimmed.startsWith('\\')) return false;
-  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(trimmed)) return false;
-
-  try {
-    const base = new URL(baseHref);
-    if (base.protocol !== 'http:' && base.protocol !== 'https:') return false;
-    const resolved = new URL(trimmed, base);
-    if (resolved.origin !== base.origin) return false;
-    if (resolved.protocol !== base.protocol) return false;
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function isHistoryStamp(value: unknown): value is HistoryStamp {
@@ -331,7 +313,11 @@ export function createWorkbenchHistoryController<TPreset extends string>(
         // An aborted traversal can reject both promises. Recover once through finished.
         void navResult?.committed?.catch(() => {});
         const settle = () => settleRestoration(token);
-        void navResult?.finished?.then(settle, settle);
+        if (navResult?.finished === undefined) {
+          settle();
+        } else {
+          void navResult.finished.then(settle, settle);
+        }
       } catch {
         applyFreshSessionReplaceRecovery();
       }
@@ -546,7 +532,7 @@ export function createWorkbenchHistoryController<TPreset extends string>(
     requestLinkNavigation(href: string, label: string) {
       if (disposed) return;
       const trimmedHref = href.trim();
-      if (!isSafeControllerNavigationHref(trimmedHref, host.location.href)) {
+      if (resolveSameOriginNavigationHref(trimmedHref, host.location.href) === null) {
         return;
       }
       approvedUnloadHref = null;
@@ -559,6 +545,7 @@ export function createWorkbenchHistoryController<TPreset extends string>(
         });
         return;
       }
+      clearRestoration();
       host.location.assign(trimmedHref);
     },
 
@@ -575,9 +562,10 @@ export function createWorkbenchHistoryController<TPreset extends string>(
 
       if (prompt.kind === 'link' && prompt.targetHref !== undefined) {
         const targetHref = prompt.targetHref;
-        if (!isSafeControllerNavigationHref(targetHref, host.location.href)) {
+        if (resolveSameOriginNavigationHref(targetHref, host.location.href) === null) {
           return;
         }
+        clearRestoration();
         approvedUnloadHref = targetHref;
         try {
           host.location.assign(targetHref);

@@ -185,6 +185,8 @@ describe('@rulecanvas/workbench-react components, navigation, and race-safe hist
     expect(isSafeSameOriginNavigationHref('/other/', '/app/')).toBe(false);
     expect(isSafeSameOriginNavigationHref('https://evil.example/')).toBe(false);
     expect(isSafeSameOriginNavigationHref('//evil.example/')).toBe(false);
+    expect(isSafeSameOriginNavigationHref('\\interlock-sim/')).toBe(false);
+    expect(isSafeSameOriginNavigationHref('/interlock-\tsim/')).toBe(false);
     expect(isSafeSameOriginNavigationHref('javascript:alert(1)')).toBe(false);
 
     const navHtml = renderToStaticMarkup(
@@ -691,6 +693,63 @@ describe('@rulecanvas/workbench-react components, navigation, and race-safe hist
     await Promise.resolve();
     expect(ctrl.getAcceptedStamp().preset).toBe('b');
     expect(onCommitPreset).toHaveBeenCalledExactlyOnceWith('b');
+    ctrl.dispose();
+  });
+
+  it('ignores an aborted restoration after confirming navigation to the other workbench', async () => {
+    const fake = createFakeHistoryHost('https://example.org/app/?preset=a', true);
+    const baseNav = fake.host.navigation!;
+    let abortRestoration!: () => void;
+    const finished = new Promise<void>((_, reject) => {
+      abortRestoration = () => reject(new DOMException('Traversal aborted', 'AbortError'));
+    });
+    const host: HistoryHostLike = {
+      ...fake.host,
+      navigation: {
+        get currentEntry() { return baseNav.currentEntry; },
+        entries: () => baseNav.entries!(),
+        traverseTo: () => ({ finished }),
+      },
+    };
+    let dirty = false;
+    const ctrl = createWorkbenchHistoryController<TestPreset>({
+      host, allowedPresets: ['a', 'b', 'c'], defaultPreset: 'a',
+      isDirty: () => dirty, onCommitPreset: () => {}, onPromptChange: () => {},
+    });
+    ctrl.selectPreset('b');
+    dirty = true;
+    fake.navigateToIndex(0);
+    ctrl.declinePrompt();
+    ctrl.requestLinkNavigation('/interlock-sim/', 'InterlockSim');
+    ctrl.acceptPrompt();
+    abortRestoration();
+    await Promise.resolve();
+    expect(fake.assignedUrls).toEqual(['/interlock-sim/']);
+    expect(host.location.search).toBe('?preset=a');
+    ctrl.dispose();
+  });
+
+  it('recovers the accepted URL when the host provides no finished promise', () => {
+    const fake = createFakeHistoryHost('https://example.org/app/?preset=a', true);
+    const baseNav = fake.host.navigation!;
+    const host: HistoryHostLike = {
+      ...fake.host,
+      navigation: {
+        get currentEntry() { return baseNav.currentEntry; },
+        entries: () => baseNav.entries!(),
+        traverseTo: () => ({}),
+      },
+    };
+    let dirty = false;
+    const ctrl = createWorkbenchHistoryController<TestPreset>({
+      host, allowedPresets: ['a', 'b', 'c'], defaultPreset: 'a',
+      isDirty: () => dirty, onCommitPreset: () => {}, onPromptChange: () => {},
+    });
+    ctrl.selectPreset('b');
+    dirty = true;
+    fake.navigateToIndex(0);
+    ctrl.declinePrompt();
+    expect(host.location.search).toBe('?preset=b');
     ctrl.dispose();
   });
 

@@ -35,6 +35,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Legacy browser worker adapters now preserve caller request IDs while exchanging valid versioned envelopes. Result validation rejects inconsistent depth and goal metadata.
 - Preset routing preserves drafts during fragment visits, distinguishes browser history from previous document loads, and dismisses stale prompts when the routing controller is replaced.
+- Cross-workbench links share the same URL validation as preset history controls. A confirmed switch supersedes pending history restoration.
+- Both workbenches mark out-of-range verification fields as invalid for assistive technology. The verification client returns core option diagnostics before dispatch.
+- AgentGate applies its JSON export size limit to invalid drafts.
 - Both workbenches expose keyboard-focusable scroll regions and support Escape on discard prompts. Narrow layouts keep controls and long diagnostics within the viewport.
 
 ## [0.4.0] - 2026-11-25

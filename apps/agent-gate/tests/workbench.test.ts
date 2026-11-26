@@ -82,6 +82,14 @@ import {
 } from '../src/index.js';
 
 describe('AgentGate workbench domain modules and UI', () => {
+  it('applies the export size limit to invalid drafts', () => {
+    const broken = approvalLaunderingBrokenModel;
+    const smallDraft = { ...broken, invariants: [] };
+    expect(JSON.parse(exportModelToJson(smallDraft)).invariants).toEqual([]);
+    const oversizedDraft = { ...smallDraft, name: 'x'.repeat(512_000) };
+    expect(() => exportModelToJson(oversizedDraft)).toThrow(/512000/);
+  });
+
   it('fixes the broken approval-laundering model by appending !modifiedSinceApproval to publish_release_notes', () => {
     const broken = loadPresetModel('broken');
     const patched = appendRuleGuardClause(broken, 'publish_release_notes', {

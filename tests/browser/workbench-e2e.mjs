@@ -477,6 +477,10 @@ try {
   await agVerifyBtn.click();
   const agTopInvalidBadge = page.locator('header .ag-badge[data-status="INVALID"]');
   await assertBadgeHasIconAndText(agTopInvalidBadge, 'INVALID', 'AgentGate topbar INVALID badge');
+  assert(
+    (await page.locator('#max-states-input').getAttribute('aria-invalid')) === 'true',
+    'AgentGate maxStates range error missing aria-invalid',
+  );
   await checkAxeWcagAA('AgentGate INVALID');
   await page.fill('#max-states-input', '10000');
 
@@ -654,6 +658,10 @@ try {
     'InterlockSim topbar INVALID badge',
   );
   await checkAxeWcagAA('InterlockSim INVALID');
+  assert(
+    (await page.locator('#max-states-input').getAttribute('aria-invalid')) === 'true',
+    'InterlockSim maxStates range error missing aria-invalid',
+  );
   await page.fill('#max-states-input', '10000');
   await isVerifyHeaderBtn.click();
   await page.getByText('Goal reachable: Yes').first().waitFor({ state: 'visible' });

@@ -1,4 +1,5 @@
 import type { MouseEvent } from 'react';
+import { resolveSameOriginNavigationHref } from './navigation-href.js';
 
 export interface WorkbenchNavLink {
   readonly id: string;
@@ -25,35 +26,16 @@ export interface WorkbenchNavigationProps {
  * and paths outside an optional configured deployment prefix).
  */
 export function isSafeSameOriginNavigationHref(href: string, allowedPrefix?: string): boolean {
-  const trimmed = href.trim();
-  if (trimmed.length === 0) return false;
-  if (trimmed.startsWith('//')) return false;
-  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(trimmed)) return false;
-
-  try {
-    const baseHref =
-      typeof window !== 'undefined' && typeof window.location?.href === 'string'
-        ? window.location.href
-        : 'https://rulecanvas.local/app/';
-    const base = new URL(baseHref);
-    const resolved = new URL(trimmed, base);
-    if (resolved.origin !== base.origin) return false;
-    if (allowedPrefix !== undefined && allowedPrefix.length > 0) {
-      const withLeadingSlash = allowedPrefix.startsWith('/') ? allowedPrefix : `/${allowedPrefix}`;
-      const normalizedPrefix = withLeadingSlash.replace(/\/+$/, '');
-      if (normalizedPrefix.length > 0) {
-        if (
-          resolved.pathname !== normalizedPrefix &&
-          !resolved.pathname.startsWith(`${normalizedPrefix}/`)
-        ) {
-          return false;
-        }
-      }
-    }
-    return true;
-  } catch {
-    return false;
-  }
+  const baseHref =
+    typeof window !== 'undefined' && typeof window.location?.href === 'string'
+      ? window.location.href
+      : 'https://rulecanvas.local/app/';
+  const resolved = resolveSameOriginNavigationHref(href, baseHref);
+  if (resolved === null) return false;
+  if (!allowedPrefix) return true;
+  const withLeadingSlash = allowedPrefix.startsWith('/') ? allowedPrefix : `/${allowedPrefix}`;
+  const normalizedPrefix = withLeadingSlash.replace(/\/+$/, '');
+  return resolved.pathname === normalizedPrefix || resolved.pathname.startsWith(`${normalizedPrefix}/`);
 }
 
 export function WorkbenchNavigation({
@@ -80,7 +62,7 @@ export function WorkbenchNavigation({
           return (
             <li key={link.id}>
               <a
-                href={link.href}
+                href={link.href.trim()}
                 aria-current={isActive ? 'page' : undefined}
                 title={link.description}
                 className={combinedClass || undefined}

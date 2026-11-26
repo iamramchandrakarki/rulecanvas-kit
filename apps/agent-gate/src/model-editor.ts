@@ -2011,7 +2011,13 @@ export function exportModelToJson(model: TransitionSystemModel): string {
     return common.text;
   }
   const pretty = JSON.stringify(canonical, null, 2);
-  return pretty.length <= DEFAULT_MODEL_JSON_LIMITS.maxChars ? pretty : JSON.stringify(canonical);
+  const maxChars = DEFAULT_MODEL_JSON_LIMITS.maxChars;
+  if (pretty.length <= maxChars) return pretty;
+  const compact = JSON.stringify(canonical);
+  if (compact.length > maxChars) {
+    throw new TypeError('Model JSON exceeds the ' + maxChars + '-character export limit.');
+  }
+  return compact;
 }
 
 const RFC8259_JSON_NUMBER_RE = /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$/;

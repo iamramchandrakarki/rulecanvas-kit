@@ -1,5 +1,5 @@
 import { verifyModel, type TransitionSystemModel, type VerifyOptions } from '@rulecanvas/core';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   VERIFY_PROTOCOL_VERSION,
   createLegacyWorkerAdapter,
@@ -80,6 +80,22 @@ function createPairedWorker(): {
 }
 
 describe('@rulecanvas/workbench verification transport and ownership contracts', () => {
+  it('returns structured diagnostics for out-of-range options before dispatch', async () => {
+    const createWorker = vi.fn(() => createPairedWorker().worker);
+    const client = createVerifyClient({
+      execution: { kind: 'app-worker', createWorker, asyncStartupError: 'fallback' },
+    });
+    for (const maxStates of [0, 100_001]) {
+      await expect(client.verify(counterModel, { maxStates, maxDepth: 10 })).resolves.toMatchObject({
+        kind: 'error',
+        code: 'CAPTURE_ERROR',
+        errors: [{ code: 'INVALID_OPTIONS', path: 'maxStates' }],
+      });
+    }
+    expect(createWorker).not.toHaveBeenCalled();
+    client.dispose();
+  });
+
   it('rejects inconsistent goal and trace metadata while keeping core verdicts admissible', () => {
     const model: TransitionSystemModel = {
       ...counterModel,
