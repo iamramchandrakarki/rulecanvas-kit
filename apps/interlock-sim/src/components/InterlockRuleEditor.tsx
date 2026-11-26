@@ -33,10 +33,16 @@ const INSPECTOR_TABS: readonly { readonly id: InspectorTabId; readonly label: st
   { id: 'json', label: 'JSON' },
 ];
 
+export interface FocusedInterlockRuleRequest {
+  readonly ruleId: string;
+  readonly seq: number;
+}
+
 export interface InterlockRuleEditorProps {
   readonly model: TransitionSystemModel;
   readonly diagnostics: ModelDiagnosticsIndex;
   readonly resetKey?: string | number | undefined;
+  readonly focusedRuleRequest?: FocusedInterlockRuleRequest | null | undefined;
   readonly onChangeModel: (next: TransitionSystemModel) => void;
   readonly onImportModel: (imported: TransitionSystemModel) => void;
   readonly onDraftErrorChange?: ((fieldKey: string, errorMessage: string | null) => void) | undefined;
@@ -75,6 +81,7 @@ export function InterlockRuleEditor({
   model,
   diagnostics,
   resetKey = 0,
+  focusedRuleRequest = null,
   onChangeModel,
   onImportModel,
   onDraftErrorChange,
@@ -82,6 +89,8 @@ export function InterlockRuleEditor({
 }: InterlockRuleEditorProps) {
   const nextRowIdRef = useRef<number>(0);
   const prevResetKeyRef = useRef<string | number>(resetKey);
+  const prevFocusSeqRef = useRef<number>(0);
+  const sectionRef = useRef<HTMLElement | null>(null);
   const preserveNextNoticeRef = useRef<boolean>(false);
   const onDraftErrorChangeRef = useRef(onDraftErrorChange);
   onDraftErrorChangeRef.current = onDraftErrorChange;
@@ -157,6 +166,21 @@ export function InterlockRuleEditor({
       setAsmRowIds(model.assumptions.map(() => allocRowId('asm')));
     }
   }, [resetKey, model]);
+
+  useEffect(() => {
+    if (focusedRuleRequest === null || focusedRuleRequest.seq === prevFocusSeqRef.current) {
+      return;
+    }
+    prevFocusSeqRef.current = focusedRuleRequest.seq;
+    if (model.rules.some((r) => r.id === focusedRuleRequest.ruleId)) {
+      pruneDraftsByPrefix('rule');
+      setActiveTab('guard');
+      setSelectedRuleId(focusedRuleRequest.ruleId);
+      queueMicrotask(() => {
+        sectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      });
+    }
+  }, [focusedRuleRequest, model.rules, pruneDraftsByPrefix]);
 
   const resolvedAsmRowIds = alignRowIds(asmRowIds, model.assumptions.length, 'asm');
 
@@ -274,14 +298,14 @@ export function InterlockRuleEditor({
   };
 
   return (
-    <section className="is-pane" aria-label="Interlock guard inspector and model editor">
+    <section
+      ref={sectionRef}
+      className="is-pane"
+      aria-label="Interlock guard inspector and model editor"
+    >
       <div className="is-pane-header">
-        <div>
-          <h2 className="is-pane-title">Interlock Guard Inspector &amp; Model</h2>
-          <p className="is-pane-subtitle">
-            Inspect transition guards, test repairs to open_inner_door, edit assumptions, or import/export JSON.
-          </p>
-        </div>
+        <h2 className="is-pane-title">Interlock Guard Inspector &amp; Model</h2>
+        <span className="is-meta-inline">{model.rules.length} rules</span>
       </div>
 
       <div className="is-tablist" role="tablist" aria-label="Interlock editor sections">
@@ -318,7 +342,7 @@ export function InterlockRuleEditor({
         {repairableOpenInnerDoor && !openInnerDoorRepaired && (
           <div className="is-repair-callout">
             <div className="is-section-header">
-              <strong>Guided Repair Available for open_inner_door</strong>
+              <strong>Candidate Guard Repair Available for open_inner_door</strong>
               <button
                 type="button"
                 className="is-btn is-btn-sm is-btn-primary"
@@ -327,8 +351,11 @@ export function InterlockRuleEditor({
                 Apply Principled Repair
               </button>
             </div>
-            <p style={{ fontSize: 'var(--text-xs)', color: 'var(--color-ink-2)' }}>
-              Enforces <code className="is-mono">pressure == negative</code> unconditionally alongside closed outer door, UV-off, and occupancy, letting <code className="is-mono">maintenanceOverride</code> bypass only the purge cycle count.
+            <p style={{ fontSize: 12, color: 'var(--color-ink-2)' }}>
+              Stages a candidate guard edit enforcing <code className="is-mono">pressure == negative</code>{' '}
+              unconditionally alongside closed outer door, UV-off, and occupancy so{' '}
+              <code className="is-mono">maintenanceOverride</code> bypasses only the HEPA purge
+              count. Run <strong>Verify Interlock Model</strong> afterward to confirm the verdict.
             </p>
           </div>
         )}

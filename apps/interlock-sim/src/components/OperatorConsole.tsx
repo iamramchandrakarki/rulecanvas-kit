@@ -14,25 +14,29 @@ export interface OperatorConsoleProps {
   readonly onStepForward: () => void;
   readonly onApplyManualStep: (ruleId: string) => void;
   readonly onRestoreVerdictTrace: () => void;
+  readonly onInspectRule?: ((ruleId: string) => void) | undefined;
 }
 
-function renderClauseNodes(clause: {
-  readonly op: string;
-  readonly expressionText: string;
-  readonly actualValue: boolean;
-  readonly expectedValue: boolean;
-  readonly satisfied: boolean;
-  readonly summary: string;
-  readonly children: readonly {
+function renderClauseNodes(
+  clause: {
     readonly op: string;
     readonly expressionText: string;
     readonly actualValue: boolean;
     readonly expectedValue: boolean;
     readonly satisfied: boolean;
     readonly summary: string;
-    readonly children: readonly unknown[];
-  }[];
-}, keyPrefix: string) {
+    readonly children: readonly {
+      readonly op: string;
+      readonly expressionText: string;
+      readonly actualValue: boolean;
+      readonly expectedValue: boolean;
+      readonly satisfied: boolean;
+      readonly summary: string;
+      readonly children: readonly unknown[];
+    }[];
+  },
+  keyPrefix: string,
+) {
   return (
     <li key={keyPrefix}>
       <span>
@@ -42,10 +46,7 @@ function renderClauseNodes(clause: {
       {clause.children.length > 0 && (
         <ul className="is-clause-tree">
           {clause.children.map((child, idx) =>
-            renderClauseNodes(
-              child as typeof clause,
-              `${keyPrefix}-${idx}`,
-            ),
+            renderClauseNodes(child as typeof clause, `${keyPrefix}-${idx}`),
           )}
         </ul>
       )}
@@ -65,6 +66,7 @@ export function OperatorConsole({
   onStepForward,
   onApplyManualStep,
   onRestoreVerdictTrace,
+  onInspectRule,
 }: OperatorConsoleProps) {
   const explained = explainRuleGuards(snapshotModel, replaySession.currentState);
   const rulesById = new Map(snapshotModel.rules.map((r) => [r.id, r]));
@@ -79,10 +81,11 @@ export function OperatorConsole({
         <div>
           <h2 className="is-pane-title">Operator Simulation Console</h2>
           <p className="is-pane-subtitle">
-            Trigger enabled interlock actions or inspect why locked actions are blocked in the active state.
+            Execute enabled interlock transitions or inspect blocking guard predicates at the active
+            cursor step.
           </p>
         </div>
-        <span className="is-badge">
+        <span className="is-meta-inline">
           {replaySession.mode === 'trace' ? 'Mode: Trace Replay' : 'Mode: Manual Simulation'}
         </span>
       </div>
@@ -91,7 +94,8 @@ export function OperatorConsole({
         <div className="is-alert is-alert-warning" role="status">
           <strong>Stepping Against Last Verified Snapshot ({modelLabel})</strong>
           <p>
-            You have unverified edits in the Guard Inspector or Bounds. Click Verify Interlock Model to simulate and verify your latest edits.
+            Unverified edits exist in the Guard Inspector or Bounds. Click Verify Interlock Model to
+            verify and simulate your updated configuration.
           </p>
         </div>
       )}
@@ -163,9 +167,7 @@ export function OperatorConsole({
           <h3 className="is-section-title">
             Enabled Actions ({enabledExplanations.length} of {explanations.length})
           </h3>
-          <span className="is-badge" data-tone="info">
-            Engine-authorized actuators
-          </span>
+          <span className="is-meta-inline">Engine-authorized actuators</span>
         </div>
 
         {enabledExplanations.length === 0 ? (
@@ -212,25 +214,33 @@ export function OperatorConsole({
           <h3 className="is-section-title">
             Locked / Interlocked Actions ({blockedExplanations.length})
           </h3>
-          <span className="is-badge" data-tone="warning">
-            Guard blocking explanations
-          </span>
+          <span className="is-meta-inline">Guard blocking explanations</span>
         </div>
 
         <div className="is-blocked-list">
           {blockedExplanations.map((item) => (
             <div key={item.ruleId} className="is-blocked-row" data-blocked-rule-id={item.ruleId}>
               <div className="is-actuator-head">
-                <span className="is-mono" style={{ fontSize: 'var(--text-xs)', color: 'var(--color-ink)' }}>
+                <span className="is-mono" style={{ fontSize: 12, fontWeight: 600 }}>
                   {item.ruleId}
                 </span>
-                <span className="is-badge" data-tone="warning">
-                  <span aria-hidden="true">×</span> LOCKED
-                </span>
+                <div className="is-inline-actions">
+                  {onInspectRule !== undefined && (
+                    <button
+                      type="button"
+                      className="is-btn is-btn-sm"
+                      aria-label={`Edit guard for ${item.ruleId} in Guard Inspector`}
+                      onClick={() => onInspectRule(item.ruleId)}
+                    >
+                      Edit guard
+                    </button>
+                  )}
+                  <span className="is-badge" data-tone="warning">
+                    <span aria-hidden="true">×</span> LOCKED
+                  </span>
+                </div>
               </div>
-              <span className="is-actuator-label" style={{ fontSize: 'var(--text-xs)' }}>
-                {item.label}
-              </span>
+              <span className="is-actuator-label">{item.label}</span>
               {item.blockingReasons.length > 0 && (
                 <ul className="is-blocked-reasons">
                   {item.blockingReasons.map((reason, idx) => (
@@ -240,7 +250,7 @@ export function OperatorConsole({
               )}
               {item.rootClause !== null && (
                 <details className="is-clause-details">
-                  <summary>Inspect guard clause tree</summary>
+                  <summary>Inspect guard clauses for {item.ruleId}</summary>
                   <ul className="is-clause-tree">
                     {renderClauseNodes(item.rootClause, item.ruleId)}
                   </ul>

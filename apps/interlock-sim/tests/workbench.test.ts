@@ -1481,4 +1481,47 @@ describe('InterlockSim workbench architecture, semantics, security, and UI', () 
       expect(content).not.toMatch(/@rulecanvas\/agent-gate|apps\/agent-gate/);
     }
   });
+
+  it('surfaces snapshot freshness on AirlockSchematic, removes ASCII/boolean leaks, and ships Light/Dark WOFF2 tokens', () => {
+    const staleSchematicHtml = renderToStaticMarkup(
+      createElement(AirlockSchematic, {
+        schema: bsl3AirlockFixedModel.schema,
+        state: bsl3AirlockFixedModel.initialState,
+        changedVars: [],
+        violatedInvariantIds: [],
+        evaluatedInvariantIds: bsl3AirlockFixedModel.invariants.map((i) => i.id),
+        invariants: bsl3AirlockFixedModel.invariants,
+        goal: bsl3AirlockFixedModel.goal,
+        isEvaluated: true,
+        isStale: true,
+        snapshotLabel: 'Principled Fix',
+        goalReached: false,
+        stepNumber: 0,
+        modeLabel: 'Trace Replay',
+      }),
+    );
+    expect(staleSchematicHtml).toContain('OUTDATED SNAPSHOT');
+    expect(staleSchematicHtml).toContain('Outdated snapshot &quot;Principled Fix&quot; at Step 0');
+    expect(staleSchematicHtml).not.toContain('Live vessel state');
+    expect(staleSchematicHtml).toContain('INVARIANTS HOLD AT STEP 0');
+    expect(staleSchematicHtml).toContain('GOAL AT STEP 0: NOT REACHED');
+    expect(staleSchematicHtml).not.toContain('OCCUPIED (true)');
+    expect(staleSchematicHtml).not.toContain('EMPTY (false)');
+    expect(staleSchematicHtml).not.toContain('[||]');
+    expect(staleSchematicHtml).toContain('is-schematic-compact');
+
+    const appHtml = renderToStaticMarkup(createElement(App, { initialVariant: 'broken' }));
+    expect(appHtml).toContain('Inspect guard clauses for');
+    expect(appHtml).toContain('Candidate Guard Repair Available for open_inner_door');
+    expect(appHtml).toContain('aria-label="Color theme"');
+
+    const appDir = path.resolve(import.meta.dirname, '..');
+    const tokensCss = readFileSync(path.join(appDir, 'src/styles/tokens.css'), 'utf8');
+    expect(tokensCss).toContain("font-family: 'IBM Plex Sans'");
+    expect(tokensCss).toContain("font-family: 'IBM Plex Mono'");
+    expect(tokensCss).toContain('.woff2');
+    expect(tokensCss).not.toMatch(/https?:\/\//i);
+    expect(tokensCss).toContain('color-scheme: light;');
+    expect(tokensCss).toContain('color-scheme: dark;');
+  });
 });

@@ -18,20 +18,25 @@ import {
   type ReplaySession,
 } from '@rulecanvas/ui';
 import {
+  WorkbenchBrandMark,
+  WorkbenchDiscardDialog,
   WorkbenchNavigation,
+  WorkbenchThemeSwitch,
   readPresetFromSearch,
   useVerificationSnapshot,
   useWorkbenchRoute,
+  useWorkbenchTheme,
   type WorkbenchNavLink,
 } from '@rulecanvas/workbench-react';
 import { DEFAULT_VERIFY_OPTIONS, runInterlockPresetComparison } from './comparison.js';
 import { AirlockSchematic } from './components/AirlockSchematic.js';
 import { ComparisonPanel } from './components/ComparisonPanel.js';
-import { InterlockRuleEditor } from './components/InterlockRuleEditor.js';
-import { OperatorConsole } from './components/OperatorConsole.js';
 import {
-  VerificationWorkbenchPane,
-} from './components/VerificationWorkbenchPane.js';
+  InterlockRuleEditor,
+  type FocusedInterlockRuleRequest,
+} from './components/InterlockRuleEditor.js';
+import { OperatorConsole } from './components/OperatorConsole.js';
+import { VerificationWorkbenchPane } from './components/VerificationWorkbenchPane.js';
 import { indexModelDiagnostics, parseStrictIntegerDraft } from './model-inspector.js';
 import {
   INTERLOCK_SIM_PRESETS,
@@ -102,8 +107,9 @@ const WORKBENCH_NAV_LINKS: readonly WorkbenchNavLink[] = [
     label: 'AgentGate',
     href:
       typeof import.meta !== 'undefined' &&
-      typeof (import.meta as { env?: Record<string, string | undefined> }).env?.['VITE_AGENT_GATE_URL'] ===
-        'string'
+      typeof (import.meta as { env?: Record<string, string | undefined> }).env?.[
+        'VITE_AGENT_GATE_URL'
+      ] === 'string'
         ? (import.meta as { env: Record<string, string> }).env['VITE_AGENT_GATE_URL']!
         : '../agent-gate/',
     description: 'Open AgentGate policy verification workbench',
@@ -121,6 +127,8 @@ export function App({
   initialShowComparison = false,
   workerFactory,
 }: AppProps) {
+  const theme = useWorkbenchTheme();
+
   const resolvedInitialVariant: InterlockPresetVariant =
     initialVariant ??
     (typeof window !== 'undefined'
@@ -144,6 +152,10 @@ export function App({
   const [editorDraftErrorMap, setEditorDraftErrorMap] = useState<Readonly<Record<string, string>>>(
     {},
   );
+  const [focusedRuleRequest, setFocusedRuleRequest] = useState<FocusedInterlockRuleRequest | null>(
+    null,
+  );
+  const focusSeqRef = useRef<number>(0);
 
   const modelRevisionRef = useRef(0);
   const createClient = useCallback(() => createAppVerifyClient(workerFactory), [workerFactory]);
@@ -279,10 +291,12 @@ export function App({
     setCancelledNotice(null);
     setReplayError(null);
 
-    if (targetOptions === null ||
+    if (
+      targetOptions === null ||
       targetOptionErrors.length > 0 ||
       targetDraftErrors.length > 0 ||
-      validateModel(targetModel).length > 0) {
+      validateModel(targetModel).length > 0
+    ) {
       clearVerification();
       return;
     }
@@ -304,6 +318,7 @@ export function App({
     latestEditorDraftErrorMapRef.current = {};
     setEditorDraftErrorMap({});
     setJsonDraftDirty(false);
+    setFocusedRuleRequest(null);
     setEditorResetKey((prev) => prev + 1);
 
     latestActivePresetRef.current = variant;
@@ -334,6 +349,7 @@ export function App({
     latestEditorDraftErrorMapRef.current = {};
     setEditorDraftErrorMap({});
     setJsonDraftDirty(false);
+    setFocusedRuleRequest(null);
     setEditorResetKey((prev) => prev + 1);
 
     latestActivePresetRef.current = null;
@@ -387,7 +403,8 @@ export function App({
     setCancelledNotice('Verification run cancelled before completion.');
   };
 
-  const handleVerifyCurrent = () => {
+  const handleVerifyCurrent = useCallback(() => {
+    if (isPending()) return;
     const syncModel = latestModelRef.current;
     const syncPreset = latestActivePresetRef.current;
     const syncDraftErrors: ValidationError[] = Object.entries(
@@ -404,7 +421,12 @@ export function App({
       optionErrors,
       syncDraftErrors,
     );
-  };
+  }, [isPending, optionErrors, parsedOptions]);
+
+  const handleInspectRule = useCallback((ruleId: string) => {
+    focusSeqRef.current += 1;
+    setFocusedRuleRequest({ ruleId, seq: focusSeqRef.current });
+  }, []);
 
   const handleResetReplay = () => {
     if (replaySession === null) return;
@@ -501,17 +523,35 @@ export function App({
     }
   }, [pendingPrompt !== null]);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handleGlobalShortcut = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && pendingPrompt === null) {
+        event.preventDefault();
+        handleVerifyCurrent();
+      }
+    };
+    window.addEventListener('keydown', handleGlobalShortcut);
+    return () => window.removeEventListener('keydown', handleGlobalShortcut);
+  }, [handleVerifyCurrent, pendingPrompt]);
+
+  const scrollToSection = (elementId: string) => {
+    if (typeof document === 'undefined') return;
+    document.getElementById(elementId)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
   return (
     <div className="is-shell">
       <header className="is-topbar">
         <div className="is-brand">
-          <h1 className="is-brand-title">
-            <span className="is-brand-mark" aria-hidden="true" />
-            InterlockSim
-          </h1>
-          <span className="is-brand-subtitle">
-            Discrete BSL-3 airlock interlock simulation &amp; bounded verification workbench
+          <span className="is-brand-suite">
+            <WorkbenchBrandMark className="is-brand-icon" />
+            <span>RuleCanvasKit</span>
+            <span className="is-brand-sep" aria-hidden="true">
+              /
+            </span>
           </span>
+          <h1 className="is-brand-title">InterlockSim</h1>
           <WorkbenchNavigation
             current="interlock-sim"
             links={WORKBENCH_NAV_LINKS}
@@ -619,7 +659,14 @@ export function App({
             </span>
           )}
 
-          <button type="button" className="is-btn is-btn-primary" onClick={handleVerifyCurrent}>
+          <button
+            type="button"
+            className="is-btn is-btn-primary"
+            disabled={isRunning}
+            aria-busy={isRunning ? 'true' : undefined}
+            title="Run bounded BFS verification (Ctrl/Cmd+Enter)"
+            onClick={handleVerifyCurrent}
+          >
             Verify Interlock Model
           </button>
 
@@ -631,51 +678,40 @@ export function App({
           >
             Compare Presets (3)
           </button>
+
+          <WorkbenchThemeSwitch
+            value={theme.preference}
+            onChange={theme.setPreference}
+            className="is-theme-switch"
+            buttonClassName="is-theme-btn"
+            activeButtonClassName="is-theme-btn-active"
+          />
         </div>
       </header>
 
-      {/* Unsaved-changes discard confirmation dialog */}
       {pendingPrompt !== null && (
-        <div
-          className="is-discard-banner"
-          role="alertdialog"
-          aria-labelledby="is-discard-title"
-          aria-describedby="is-discard-desc"
-          onKeyDown={(e) => {
-            if (e.key === 'Escape') {
-              e.preventDefault();
-              declinePrompt();
-            }
-          }}
-        >
-          <div>
-            <strong id="is-discard-title">Unsaved Custom Edits</strong>
-            <p id="is-discard-desc">
-              {pendingPrompt.label} will discard your current unsaved custom edits.
-            </p>
-          </div>
-          <div className="is-inline-actions">
-            <button
-              ref={stayHereButtonRef}
-              type="button"
-              className="is-btn is-btn-sm"
-              onClick={declinePrompt}
-            >
-              Stay Here
-            </button>
-            <button
-              type="button"
-              className="is-btn is-btn-sm is-btn-primary"
-              onClick={acceptPrompt}
-            >
-              Discard &amp; Continue
-            </button>
-          </div>
-        </div>
+        <WorkbenchDiscardDialog
+          ref={stayHereButtonRef}
+          idPrefix="is"
+          actionLabel={pendingPrompt.label}
+          onDecline={declinePrompt}
+          onAccept={acceptPrompt}
+          backdropClassName="is-dialog-backdrop"
+          dialogClassName="is-discard-dialog"
+          titleClassName="is-discard-title"
+          descriptionClassName="is-discard-desc"
+          actionsClassName="is-discard-actions"
+          stayButtonClassName="is-btn is-btn-sm"
+          acceptButtonClassName="is-btn is-btn-sm is-btn-primary"
+        />
       )}
 
       {/* Permanent Educational & Non-Certification Disclaimer Bar */}
-      <div className="is-safety-strip" role="note" aria-label="Simulation scope and non-certification notice">
+      <div
+        className="is-safety-strip"
+        role="note"
+        aria-label="Simulation scope and non-certification notice"
+      >
         <span>
           <strong>{activePresetInfo !== null ? activePresetInfo.title : model.name}</strong>
           {activePresetInfo !== null
@@ -683,10 +719,29 @@ export function App({
             : ': Custom edited discrete interlock configuration.'}
         </span>
 
-        <div className="is-disclaimer-callout">
-          <strong>Educational Simulation Only (Not IEC 61508 / SIL Certified):</strong> Excludes
-          continuous pressure decay, HVAC airflow turbulence, sensor faults, mechanical seal failure,
-          and physical containment certification.
+        <div className="is-inline-actions">
+          <div className="is-disclaimer-callout">
+            <strong>Educational Simulation Only (Not IEC 61508 / SIL Certified):</strong> Excludes
+            continuous pressure decay, HVAC airflow turbulence, sensor faults, mechanical seal
+            failure, and physical containment certification.
+          </div>
+
+          <div className="is-mobile-jump" role="navigation" aria-label="Workspace pane jump">
+            <button
+              type="button"
+              className="is-btn is-btn-sm"
+              onClick={() => scrollToSection('is-verdict-pane')}
+            >
+              Jump to Verdict &amp; Guard
+            </button>
+            <button
+              type="button"
+              className="is-btn is-btn-sm"
+              onClick={() => scrollToSection('is-schematic-pane')}
+            >
+              Jump to Schematic
+            </button>
+          </div>
         </div>
       </div>
 
@@ -702,7 +757,7 @@ export function App({
       )}
 
       <main className="is-workspace">
-        <div className="is-column is-column-left">
+        <div id="is-schematic-pane" className="is-column is-column-left">
           <AirlockSchematic
             schema={replaySession?.model.schema ?? model.schema}
             state={replaySession?.currentState ?? model.initialState}
@@ -714,6 +769,9 @@ export function App({
             invariants={replaySession !== null ? replaySession.model.invariants : model.invariants}
             goal={replaySession !== null ? replaySession.model.goal : model.goal}
             isEvaluated={replaySession !== null}
+            isStale={isStale}
+            isRunning={isRunning}
+            snapshotLabel={verifiedSnapshot?.modelLabel}
             goalReached={replaySession?.goalReached}
             stepNumber={replaySession?.cursor ?? 0}
             modeLabel={
@@ -738,6 +796,7 @@ export function App({
               onStepForward={handleStepForward}
               onApplyManualStep={handleApplyManualStep}
               onRestoreVerdictTrace={handleRestoreVerdictTrace}
+              onInspectRule={handleInspectRule}
             />
           ) : (
             <section className="is-pane" aria-label="Operator simulation console">
@@ -745,7 +804,9 @@ export function App({
                 <div>
                   <h2 className="is-pane-title">Operator Simulation Console</h2>
                   <p className="is-pane-subtitle">
-                    Run Verify Interlock Model to activate engine-authorized transition actuators and blocked-guard explanations.
+                    {isRunning
+                      ? 'Verification in progress. Transition actuators unlock once the snapshot settles.'
+                      : 'Run Verify Interlock Model to activate transition actuators and blocked-guard explanations.'}
                   </p>
                 </div>
                 {!isRunning && (
@@ -762,7 +823,7 @@ export function App({
           )}
         </div>
 
-        <div className="is-column">
+        <div id="is-verdict-pane" className="is-column">
           <VerificationWorkbenchPane
             model={model}
             isRunning={isRunning}
@@ -778,12 +839,14 @@ export function App({
             onCancelRun={handleCancelRun}
             onVerifyNow={handleVerifyCurrent}
             onJumpToStep={handleJumpToStep}
+            onInspectRule={handleInspectRule}
           />
 
           <InterlockRuleEditor
             model={model}
             diagnostics={diagnostics}
             resetKey={editorResetKey}
+            focusedRuleRequest={focusedRuleRequest}
             onChangeModel={handleChangeModel}
             onImportModel={handleImportModel}
             onDraftErrorChange={handleEditorDraftErrorChange}

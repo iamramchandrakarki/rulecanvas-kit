@@ -38,6 +38,7 @@ export interface VerificationWorkbenchPaneProps {
   readonly onCancelRun: () => void;
   readonly onVerifyNow: () => void;
   readonly onJumpToStep: (stepIndex: number) => void;
+  readonly onInspectRule?: ((ruleId: string) => void) | undefined;
 }
 
 function describeExecutionMode(mode: VerifyExecutionMode): string {
@@ -84,6 +85,7 @@ export function VerificationWorkbenchPane({
   onCancelRun,
   onVerifyNow,
   onJumpToStep,
+  onInspectRule,
 }: VerificationWorkbenchPaneProps) {
   const result = verifiedSnapshot?.result ?? null;
   const verdictView = result !== null ? buildVerdictSummaryView(result) : null;
@@ -135,16 +137,13 @@ export function VerificationWorkbenchPane({
   return (
     <section className="is-pane" aria-label="Bounded model checking verdict and trace">
       <div className="is-pane-header">
-        <div>
-          <h2 className="is-pane-title">Verification Verdict &amp; Trace Analysis</h2>
-          <p className="is-pane-subtitle">
-            Snapshot-bound BFS state exploration, shortest violation trace, and explicit modeling scope.
-          </p>
-        </div>
-        {isStale && !isRunning && (
+        <h2 className="is-pane-title">Verification Verdict &amp; Trace Analysis</h2>
+        {isStale && !isRunning ? (
           <button type="button" className="is-btn is-btn-sm is-btn-active" onClick={onVerifyNow}>
             Verify Now
           </button>
+        ) : (
+          <span className="is-meta-inline">Snapshot BFS &amp; shortest trace</span>
         )}
       </div>
 
@@ -167,8 +166,8 @@ export function VerificationWorkbenchPane({
         </div>
       )}
 
-      {/* 2. Cancelled */}
-      {!isRunning && cancelledNotice !== null && (
+      {/* 2. Cancelled (when previous snapshot remains present) */}
+      {!isRunning && cancelledNotice !== null && verifiedSnapshot !== null && (
         <div className="is-alert is-alert-warning" role="status">
           <div className="is-section-header">
             <strong>Verification Cancelled</strong>
@@ -221,19 +220,24 @@ export function VerificationWorkbenchPane({
                   ? 'INVALID'
                   : 'NOT YET VERIFIED'}
             </span>
-            <button
-              type="button"
-              className="is-btn is-btn-sm is-btn-primary"
-              onClick={onVerifyNow}
-            >
-              Verify Interlock Model
-            </button>
+            {activeErrors.length === 0 && (
+              <button
+                type="button"
+                className="is-btn is-btn-sm is-btn-primary"
+                onClick={onVerifyNow}
+              >
+                Verify Interlock Model
+              </button>
+            )}
           </div>
           <p className="is-verdict-headline">
-            {activeErrors.length > 0
-              ? 'Verification blocked until errors are resolved'
-              : 'No active verification snapshot'}
+            {cancelledNotice !== null
+              ? 'Verification Cancelled'
+              : activeErrors.length > 0
+                ? 'Verification blocked until errors are resolved'
+                : 'No active verification snapshot'}
           </p>
+          {cancelledNotice !== null && <p className="is-verdict-detail">{cancelledNotice}</p>}
         </section>
       )}
 
@@ -249,7 +253,8 @@ export function VerificationWorkbenchPane({
           <p>
             Results below belong to snapshot <strong>{verifiedSnapshot.modelLabel}</strong> (
             <code>maxStates={verifiedSnapshot.options.maxStates}</code>,{' '}
-            <code>maxDepth={verifiedSnapshot.options.maxDepth}</code>) and do not reflect current unverified edits.
+            <code>maxDepth={verifiedSnapshot.options.maxDepth}</code>) and do not reflect current
+            unverified edits.
           </p>
         </div>
       )}
@@ -282,15 +287,18 @@ export function VerificationWorkbenchPane({
               )}
             </span>
 
-            {verdictView.goalReachable !== undefined && (
-              <span
-                className="is-badge"
-                data-tone={verdictView.goalReachable ? 'success' : 'warning'}
-              >
-                <span aria-hidden="true">{verdictView.goalReachable ? '✓' : '○'}</span>{' '}
-                {verdictView.goalReachable ? 'Goal reachable: Yes' : 'Goal reachable: No'}
-              </span>
-            )}
+            {verdictView.goalReachable !== undefined &&
+              (verdictView.status === 'VERIFIED' ? (
+                <span
+                  className="is-badge"
+                  data-tone={verdictView.goalReachable ? 'success' : 'warning'}
+                >
+                  <span aria-hidden="true">{verdictView.goalReachable ? '✓' : '○'}</span>{' '}
+                  {verdictView.goalReachable ? 'Goal reachable: Yes' : 'Goal reachable: No'}
+                </span>
+              ) : verdictView.goalReachable ? (
+                <span className="is-verdict-witness">Goal witnessed on valid prefix</span>
+              ) : null)}
           </div>
 
           <p className="is-verdict-headline">{verdictView.headline}</p>
@@ -312,18 +320,16 @@ export function VerificationWorkbenchPane({
                 <p>
                   Safety invariants hold trivially because lab entry (
                   <code className="is-mono">open_inner_door</code>) has guard{' '}
-                  <code className="is-mono">false</code> and is never enabled. A functional
-                  BSL-3 interlock must preserve containment while letting{' '}
+                  <code className="is-mono">false</code> and is never enabled. A functional BSL-3
+                  interlock must preserve containment while letting{' '}
                   <code className="is-mono">goal_safe_lab_entry</code> remain reachable.
                 </p>
               ) : (
                 <p>
                   Every reachable state satisfies the declared invariants, but the declared goal (
-                  <code className="is-mono">
-                    {verifiedSnapshot.model.goal?.id ?? 'goal'}
-                  </code>
-                  ) is unreachable within this model. Verify that both transition guards and the
-                  goal predicate permit intended progress.
+                  <code className="is-mono">{verifiedSnapshot.model.goal?.id ?? 'goal'}</code>) is
+                  unreachable within this model. Verify that both transition guards and the goal
+                  predicate permit intended progress.
                 </p>
               )}
             </div>
@@ -333,9 +339,11 @@ export function VerificationWorkbenchPane({
             <div className="is-alert is-alert-warning" role="status">
               <strong>Bounded Exploration Incomplete ({verdictView.inconclusiveReason})</strong>
               <p>
-                Completed depth: <code className="is-tabular">{verdictView.completedDepth ?? 0}</code> |
-                Frontier remaining:{' '}
-                <code className="is-tabular">{verdictView.frontierRemaining ?? 0}</code>. Bounded search is incomplete and not an exhaustive proof.
+                Completed depth:{' '}
+                <code className="is-tabular">{verdictView.completedDepth ?? 0}</code> | Frontier
+                remaining:{' '}
+                <code className="is-tabular">{verdictView.frontierRemaining ?? 0}</code>. Bounded
+                search is incomplete and not an exhaustive proof.
               </p>
             </div>
           )}
@@ -368,7 +376,10 @@ export function VerificationWorkbenchPane({
           </div>
 
           <ol className="is-timeline" aria-label="Execution trace steps">
-            <li className="is-timeline-item">
+            <li
+              className="is-timeline-item"
+              data-active={replaySession.cursor === 0 ? 'true' : 'false'}
+            >
               <button
                 type="button"
                 className="is-timeline-btn"
@@ -388,7 +399,11 @@ export function VerificationWorkbenchPane({
               const label = ruleLabels.get(step.ruleId);
 
               return (
-                <li key={`${step.ruleId}-${stepNum}`} className="is-timeline-item">
+                <li
+                  key={`${step.ruleId}-${stepNum}`}
+                  className="is-timeline-item"
+                  data-active={isActive ? 'true' : 'false'}
+                >
                   <button
                     type="button"
                     className="is-timeline-btn"
@@ -421,6 +436,17 @@ export function VerificationWorkbenchPane({
                       </div>
                     )}
                   </button>
+
+                  {onInspectRule !== undefined && (
+                    <button
+                      type="button"
+                      className="is-btn is-btn-sm is-timeline-jump"
+                      aria-label={`Inspect guard for ${step.ruleId}`}
+                      onClick={() => onInspectRule(step.ruleId)}
+                    >
+                      Inspect guard
+                    </button>
+                  )}
                 </li>
               );
             })}
@@ -429,10 +455,8 @@ export function VerificationWorkbenchPane({
           {stateTableView !== null && (
             <div className="is-section">
               <div className="is-section-header">
-                <h4 className="is-section-title">
-                  State Table at Step {replaySession.cursor}
-                </h4>
-                <span className="is-step-counter">
+                <h4 className="is-section-title">State Table at Step {replaySession.cursor}</h4>
+                <span className="is-meta-inline">
                   {stateTableView.changedCount} modified on active step
                 </span>
               </div>
@@ -465,7 +489,9 @@ export function VerificationWorkbenchPane({
                         <td className="is-mono" style={{ color: 'var(--color-muted)' }}>
                           {row.domainText}
                         </td>
-                        <td className="is-mono">{row.valueText}</td>
+                        <td className="is-mono" style={{ fontWeight: 600 }}>
+                          {row.valueText}
+                        </td>
                         <td>
                           <span
                             className="is-badge"
@@ -506,10 +532,16 @@ export function VerificationWorkbenchPane({
                     {invariantsPanelView.invariants.map((inv) => (
                       <tr key={inv.id} data-changed={inv.violated ? 'true' : 'false'}>
                         <td>
-                          <div className="is-mono">{inv.id}</div>
-                          <div style={{ color: 'var(--color-muted)' }}>{inv.label}</div>
+                          <div className="is-mono" style={{ fontWeight: 600 }}>
+                            {inv.id}
+                          </div>
+                          <div style={{ color: 'var(--color-muted)', fontSize: 11.5 }}>
+                            {inv.label}
+                          </div>
                         </td>
-                        <td className="is-mono">{inv.expressionText}</td>
+                        <td className="is-mono" style={{ fontSize: 11.5 }}>
+                          {inv.expressionText}
+                        </td>
                         <td>
                           <span
                             className="is-badge"
@@ -524,12 +556,16 @@ export function VerificationWorkbenchPane({
                     {invariantsPanelView.goal !== undefined && (
                       <tr>
                         <td>
-                          <div className="is-mono">{invariantsPanelView.goal.id}</div>
-                          <div style={{ color: 'var(--color-muted)' }}>
+                          <div className="is-mono" style={{ fontWeight: 600 }}>
+                            {invariantsPanelView.goal.id}
+                          </div>
+                          <div style={{ color: 'var(--color-muted)', fontSize: 11.5 }}>
                             {invariantsPanelView.goal.label}
                           </div>
                         </td>
-                        <td className="is-mono">{invariantsPanelView.goal.expressionText}</td>
+                        <td className="is-mono" style={{ fontSize: 11.5 }}>
+                          {invariantsPanelView.goal.expressionText}
+                        </td>
                         <td>
                           <span
                             className="is-badge"
@@ -561,7 +597,7 @@ export function VerificationWorkbenchPane({
               <h3 className="is-section-title">
                 Snapshot Assumptions &amp; Scope Exclusions ({verifiedAssumptions.length})
               </h3>
-              <span className="is-badge">Snapshot: {verifiedSnapshot.modelLabel}</span>
+              <span className="is-meta-inline">Snapshot: {verifiedSnapshot.modelLabel}</span>
             </div>
 
             {verifiedAssumptions.map((asm, idx) => (
@@ -570,10 +606,10 @@ export function VerificationWorkbenchPane({
                   <strong className="is-mono" style={{ fontSize: 'var(--text-xs)' }}>
                     {asm.id}
                   </strong>
-                  <span className="is-badge">{asm.category}</span>
+                  <span className="is-assumption-category">{asm.category}</span>
                 </div>
-                <p style={{ fontSize: 'var(--text-xs)' }}>{asm.statement}</p>
-                <p style={{ fontSize: 'var(--text-xs)', color: 'var(--color-muted)' }}>
+                <p style={{ fontSize: 12.5 }}>{asm.statement}</p>
+                <p style={{ fontSize: 12, color: 'var(--color-muted)' }}>
                   <strong>Not modeled:</strong> {asm.notModeled}
                 </p>
               </div>
@@ -590,7 +626,7 @@ export function VerificationWorkbenchPane({
                     Pending Edited Assumptions (Unverified) ({model.assumptions.length})
                   </h4>
                   <span className="is-badge" data-tone="warning">
-                    UNVERIFIED DRAFT
+                    <span aria-hidden="true">!</span> UNVERIFIED DRAFT
                   </span>
                 </div>
                 {model.assumptions.map((asm, idx) => (
@@ -599,10 +635,10 @@ export function VerificationWorkbenchPane({
                       <strong className="is-mono" style={{ fontSize: 'var(--text-xs)' }}>
                         {asm.id}
                       </strong>
-                      <span className="is-badge">{asm.category}</span>
+                      <span className="is-assumption-category">{asm.category}</span>
                     </div>
-                    <p style={{ fontSize: 'var(--text-xs)' }}>{asm.statement}</p>
-                    <p style={{ fontSize: 'var(--text-xs)', color: 'var(--color-muted)' }}>
+                    <p style={{ fontSize: 12.5 }}>{asm.statement}</p>
+                    <p style={{ fontSize: 12, color: 'var(--color-muted)' }}>
                       <strong>Not modeled:</strong> {asm.notModeled}
                     </p>
                   </div>
@@ -617,7 +653,7 @@ export function VerificationWorkbenchPane({
                 Draft Model Assumptions (Unverified) ({model.assumptions.length})
               </h3>
               <span className="is-badge" data-tone="warning">
-                UNVERIFIED DRAFT
+                <span aria-hidden="true">!</span> UNVERIFIED DRAFT
               </span>
             </div>
             {model.assumptions.map((asm, idx) => (
@@ -626,10 +662,10 @@ export function VerificationWorkbenchPane({
                   <strong className="is-mono" style={{ fontSize: 'var(--text-xs)' }}>
                     {asm.id}
                   </strong>
-                  <span className="is-badge">{asm.category}</span>
+                  <span className="is-assumption-category">{asm.category}</span>
                 </div>
-                <p style={{ fontSize: 'var(--text-xs)' }}>{asm.statement}</p>
-                <p style={{ fontSize: 'var(--text-xs)', color: 'var(--color-muted)' }}>
+                <p style={{ fontSize: 12.5 }}>{asm.statement}</p>
+                <p style={{ fontSize: 12, color: 'var(--color-muted)' }}>
                   <strong>Not modeled:</strong> {asm.notModeled}
                 </p>
               </div>
