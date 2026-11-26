@@ -19,6 +19,7 @@ import {
   stepReplayForward,
 } from '@rulecanvas/ui';
 import { describe, expect, it, vi } from 'vitest';
+import { installVerifyWorker, type VerifyWorkerPort } from '@rulecanvas/workbench/verify-worker';
 import { App } from '../src/App.js';
 import { ComparisonPanel } from '../src/components/ComparisonPanel.js';
 import {
@@ -51,6 +52,7 @@ import {
   appendRuleGuardClause,
   approvalLaunderingBrokenModel,
   createDefaultRule,
+  createBrowserVerifyWorker,
   createSynchronousWorkerFactory,
   exportModelToJson,
   getErrorsForPathPrefix,
@@ -80,6 +82,14 @@ import {
 } from '../src/index.js';
 
 describe('AgentGate workbench domain modules and UI', () => {
+  it('applies the export size limit to invalid drafts', () => {
+    const broken = approvalLaunderingBrokenModel;
+    const smallDraft = { ...broken, invariants: [] };
+    expect(JSON.parse(exportModelToJson(smallDraft)).invariants).toEqual([]);
+    const oversizedDraft = { ...smallDraft, name: 'x'.repeat(512_000) };
+    expect(() => exportModelToJson(oversizedDraft)).toThrow(/512000/);
+  });
+
   it('fixes the broken approval-laundering model by appending !modifiedSinceApproval to publish_release_notes', () => {
     const broken = loadPresetModel('broken');
     const patched = appendRuleGuardClause(broken, 'publish_release_notes', {
@@ -284,6 +294,51 @@ describe('AgentGate workbench domain modules and UI', () => {
 
     expect(imported.model).toEqual(model);
     expect(validateModel(imported.model)).toEqual([]);
+  });
+
+  it('round-trips the legacy browser worker through the shared protocol', () => {
+    class LoopbackWorker {
+      onmessage: ((event: { data: unknown }) => void) | null = null;
+      readonly port: VerifyWorkerPort = {
+        onmessage: null,
+        postMessage: (data) => this.onmessage?.({ data }),
+      };
+
+      constructor() {
+        installVerifyWorker(this.port);
+      }
+
+      postMessage(data: unknown) {
+        this.port.onmessage?.({ data });
+      }
+
+      terminate() {
+        this.port.onmessage = null;
+      }
+    }
+
+    vi.stubGlobal('Worker', LoopbackWorker);
+    try {
+      const worker = createBrowserVerifyWorker();
+      const onmessage = vi.fn();
+      worker.onmessage = onmessage;
+      worker.postMessage({
+        type: 'verify',
+        requestId: 0,
+        model: approvalLaunderingBrokenModel,
+        options: DEFAULT_VERIFY_OPTIONS,
+      });
+      expect(onmessage).toHaveBeenCalledExactlyOnceWith({
+        data: {
+          type: 'result',
+          requestId: 0,
+          result: verifyModel(approvalLaunderingBrokenModel, DEFAULT_VERIFY_OPTIONS),
+        },
+      });
+      worker.terminate();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('handles VerifyWorkerClient request IDs, stale-response suppression, cancellation, and error recovery', async () => {
@@ -1595,6 +1650,60 @@ describe('AgentGate workbench domain modules and UI', () => {
       }
     } finally {
       parseSpy.mockRestore();
+    }
+
+    // Legacy import wrapper preserves last-value duplicate-key compatibility while core-valid exports enforce 512k common envelope
+    const dupNameJson = validJson.replace(
+      `"name": ${JSON.stringify(broken.name)},`,
+      `"name": "Legacy First",\n  "name": "Legacy Second",`,
+    );
+    const dupImport = importModelFromJson(dupNameJson);
+    expect(dupImport.ok).toBe(true);
+    if (dupImport.ok) {
+      expect(dupImport.model.name).toBe('Legacy Second');
+    }
+
+    const oversizedCommonValidModel: TransitionSystemModel = {
+      ...broken,
+      assumptions: [
+        {
+          id: 'asm_oversized',
+          category: 'scope',
+          statement: 'X'.repeat(540_000),
+          notModeled: 'Timing',
+        },
+      ],
+    };
+    expect(validateModel(oversizedCommonValidModel)).toEqual([]);
+    const commonExportFail = tryExportModelJson(oversizedCommonValidModel);
+    expect(commonExportFail.ok).toBe(false);
+    if (!commonExportFail.ok) {
+      expect(commonExportFail.error.code).toBe('JSON_EXPORT_ERROR');
+    }
+
+    // Exact v0.4.0 legacy compatibility:
+    // 1. Non-enumerable dense rule slot on an object candidate is accepted
+    const rulesWithNonEnumSlot = [...broken.rules];
+    Object.defineProperty(rulesWithNonEnumSlot, 0, {
+      value: structuredClone(broken.rules[0]!),
+      enumerable: false,
+      writable: true,
+      configurable: true,
+    });
+    const nonEnumSlotCandidate: TransitionSystemModel = {
+      ...broken,
+      rules: rulesWithNonEnumSlot,
+    };
+    const nonEnumValueRes = validateImportedModelValue(nonEnumSlotCandidate);
+    expect(nonEnumValueRes.ok).toBe(true);
+    const nonEnumImportRes = importModelFromJson(nonEnumSlotCandidate);
+    expect(nonEnumImportRes.ok).toBe(true);
+
+    // 2. Malformed trailing comma with non-integer number reports NON_INTEGER_JSON_NUMBER first (pre-JSON.parse precedence)
+    const nonIntWithTrailingComma = importModelFromJson('{"x": 1.5,}');
+    expect(nonIntWithTrailingComma.ok).toBe(false);
+    if (!nonIntWithTrailingComma.ok) {
+      expect(nonIntWithTrailingComma.errors[0]?.code).toBe('NON_INTEGER_JSON_NUMBER');
     }
   });
 });

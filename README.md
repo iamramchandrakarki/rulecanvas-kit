@@ -4,7 +4,9 @@ Verify your rules before deployment.
 
 ## Project Overview
 
-RuleCanvasKit is a TypeScript finite-state verification toolkit for Guarded Transition Systems (GTS). You declare a bounded state schema, guarded transition rules, invariants, an optional goal predicate, and explicit modeling assumptions (`ModelAssumption[]`). The core engine explores the reachable state space deterministically via breadth-first search, returning either the shortest counterexample trace to an invariant violation or confirmation that every reachable state within the declared model satisfies all invariants.
+RuleCanvasKit is a TypeScript finite-state verification toolkit for Guarded Transition Systems (GTS). You declare a bounded state schema, guarded transition rules, invariants, an optional goal predicate, and explicit modeling assumptions (`ModelAssumption[]`). The core engine explores reachable states in deterministic breadth-first order. It reports the shortest counterexample it finds, verifies the invariants after complete exploration, or returns an inconclusive verdict when a bound stops exploration. Invalid models and transitions produce structured diagnostics.
+
+The monorepo pairs four acyclic library packages (`@rulecanvas/core`, `@rulecanvas/ui`, `@rulecanvas/workbench`, and `@rulecanvas/workbench-react`) with two integrated browser workbenches (`apps/agent-gate` and `apps/interlock-sim`) connected by reciprocal same-origin navigation and shareable preset URL routing.
 
 ## Real-World Problems Solved
 
@@ -27,40 +29,82 @@ RuleCanvasKit surfaces shortest-path multi-step counterexamples before deploymen
   - `INCONCLUSIVE`: Returned when `maxStates` or `maxDepth` limits are reached, with exact `completedDepth` and `frontierRemaining` counts.
   - `INVALID`: Returned with structured `ValidationError` diagnostics for malformed inputs, invalid options, or reachable out-of-domain transitions.
 - **Deterministic step and trace replay**: `getInitialState`, `getEnabledTransitions`, `stepModel`, and `replayTrace` share the exact validator, compiler, and evaluator used by `verifyModel`.
-- **Shared domain-agnostic UI foundation (`@rulecanvas/ui`)**: Pure ES2022 deterministic AST expression and rule formatters, an immutable counterexample replay and manual step-simulation controller backed by `@rulecanvas/core`, and accessible, XSS-safe view models and semantic HTML renderers with zero external npm runtime dependencies.
+- **Shared domain-agnostic UI foundation (`@rulecanvas/ui`)**: Pure ES2022 deterministic AST expression and rule formatters, an immutable counterexample replay and manual step-simulation controller backed by `@rulecanvas/core`, accessible XSS-safe view models and semantic HTML renderers, and strict integer draft / null-prototype diagnostic indexing helpers (`parseStrictIntegerDraft`, `indexModelDiagnostics`, `getErrorsForPathPrefix`).
+- **Framework-independent worker transport & portable JSON codec (`@rulecanvas/workbench`)**: Pure ES2022 verification client and worker protocol (`/verify`, `/verify-worker`) with detached capture, early `(requestId, generation)` correlation, schema-checked deep-frozen results, and a strict portable JSON codec (`/model-json`) enforcing pre-parse duplicate-key and RFC 8259 integer validation.
+- **React 19 workbench adapters (`@rulecanvas/workbench-react`)**: Reusable controlled integer draft inputs, snapshot-bound verification state (`useVerificationSnapshot`), accessible verdict/assumption components, same-origin cross-workbench navigation (`WorkbenchNavigation`), and race-safe `?preset=...` URL routing (`createWorkbenchHistoryController`, `useWorkbenchRoute`).
 
 ## Architecture
 
-RuleCanvasKit separates its domain-agnostic verification engine from domain applications and workspace automation:
+RuleCanvasKit separates its domain-agnostic verification engine and shared workbench layers from domain applications and verification automation:
 
 ```text
 .github/                 # CI workflow, issue templates, and pull request template
 .kiro/                   # Versioned architecture steering rules and local verification hooks
 packages/
   rulecanvas-core/       # @rulecanvas/core: pure ES2022 validator, compiler, BFS verifier, replay APIs
-  rulecanvas-ui/         # @rulecanvas/ui: shared AST formatters, interactive replay controller, and accessible HTML renderers
+  rulecanvas-ui/         # @rulecanvas/ui: AST formatters, replay controller, diagnostics, safe HTML renderers
+  rulecanvas-workbench/  # @rulecanvas/workbench (private): worker transport, capture/freeze, portable JSON codec
+  rulecanvas-workbench-react/ # @rulecanvas/workbench-react (private): React 19 UI adapters & preset URL router
 apps/
-  agent-gate/            # @rulecanvas/agent-gate: policy modeling suite for AI agent permissions and approvals
-  interlock-sim/         # @rulecanvas/interlock-sim: educational discrete-state safety interlock simulator
+  agent-gate/            # @rulecanvas/agent-gate: policy modeling workbench for AI agent permissions & approvals
+  interlock-sim/         # @rulecanvas/interlock-sim: educational discrete-state BSL-3 airlock interlock workbench
+scripts/
+  verify-exports.mjs     # Pure Node ESM export check across all 4 libraries (6 entry points) + SSR app imports
+  verify-pack.mjs        # Map-free tarball packaging, allowlist check, & offline third-app consumer verification
+  check-test-hygiene.mjs # Anti-skip / anti-focus AST check across all test files
+  release-preflight.mjs  # Local CI archive manifest, bounded tar/gzip, and Chromium worker preflight
+tests/
+  browser/               # Playwright headless Chromium regression suite across desktop, tablet, and mobile
 docs/
-  ARCHITECTURE.md        # Engine design, tuple encoding, BFS semantics, and dependency rules
+  ARCHITECTURE.md        # Engine design, tuple encoding, BFS semantics, layering, and verification gates
   TOOL_ATTRIBUTION.md    # Development tooling disclosure and specification policy
+  SKELETON_CREW_SUBMISSION.md # Honest Devpost Skeleton Crew draft and sub-three-minute demo script
+  releases/              # Release notes (v0.2.0, v0.3.0, v0.4.0)
   specs/                 # Formal requirements, design, and task specifications for @rulecanvas/core
 ```
 
-Boundary tests automatically enforce that `packages/rulecanvas-core` and `packages/rulecanvas-ui` never import from `apps/*`, `node:*`, third-party npm packages, or non-deterministic host globals (`@rulecanvas/ui` depends solely on `@rulecanvas/core`). See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for full details on validation caps, dense tuple encoding, BFS semantics, shared UI layering, and package boundaries.
+Boundary tests automatically enforce an acyclic 4-library package graph (`@rulecanvas/core` -> `@rulecanvas/ui` & `@rulecanvas/workbench` -> `@rulecanvas/workbench-react` -> `apps/*`): no library imports from `apps/*`, `apps/*` never import from each other, and `packages/rulecanvas-core`, `packages/rulecanvas-ui`, and `packages/rulecanvas-workbench` never import `node:*`, third-party npm packages, or non-deterministic host globals. See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for full details.
+
+## Package Exports Summary
+
+| Package | Version | Visibility | Export Subpaths | Primary Role | README |
+| --- | --- | --- | --- | --- | --- |
+| `@rulecanvas/core` | `0.1.0` | Packable | `.` | Pure ES2022 GTS validator, BFS verifier, and replay APIs | [packages/rulecanvas-core/README.md](./packages/rulecanvas-core/README.md) |
+| `@rulecanvas/ui` | `0.2.0` | Packable | `.` | Formatters, replay controller, HTML renderers, and diagnostics | [packages/rulecanvas-ui/README.md](./packages/rulecanvas-ui/README.md) |
+| `@rulecanvas/workbench` | `0.5.0` | Private | `./verify`, `./verify-worker`, `./model-json` | Worker/main-thread transport, detached capture, portable JSON codec | [packages/rulecanvas-workbench/README.md](./packages/rulecanvas-workbench/README.md) |
+| `@rulecanvas/workbench-react` | `0.5.0` | Private | `.` | React 19 workbench controls, snapshot hook, nav, and `?preset=` routing | [packages/rulecanvas-workbench-react/README.md](./packages/rulecanvas-workbench-react/README.md) |
 
 ## Installation and Quick Start
 
-Prerequisites: Node.js `^22.12.0 || ^24.0.0 || >=26.0.0` (Node 24 LTS recommended; CI runs Node 24) and `pnpm`.
+Prerequisites: Node.js `^22.12.0 || ^24.0.0 || >=26.0.0` (Node 24 LTS recommended; CI runs Node 24) and `pnpm` (`12.21.0`).
 
 ```bash
 git clone https://github.com/iamramchandrakarki/rulecanvas-kit.git
 cd rulecanvas-kit
-pnpm install
+pnpm install --frozen-lockfile
 pnpm build
 pnpm test
 ```
+
+Run either interactive browser workbench locally:
+
+```bash
+# AgentGate workbench (AI agent approval policy verification)
+pnpm --filter @rulecanvas/agent-gate dev
+
+# InterlockSim workbench (educational BSL-3 airlock interlock simulator)
+pnpm --filter @rulecanvas/interlock-sim dev
+```
+
+Or preview the production static builds:
+
+```bash
+pnpm build
+pnpm --filter @rulecanvas/agent-gate preview
+pnpm --filter @rulecanvas/interlock-sim preview
+```
+
+To use the navigation between apps, serve the two production builds as sibling directories on one origin. The [static preview and release instructions](./docs/releases/workbench-integration.md) show the directory layout.
 
 ## Usage Examples
 
@@ -143,74 +187,103 @@ if (result.status === 'VIOLATED') {
 }
 ```
 
-## Applications
+## Integrated Workbenches
 
-RuleCanvasKit powers two domain-separated applications built on `@rulecanvas/core`.
+RuleCanvasKit powers two domain-separated React 19 + Vite workbenches built on the four shared packages. Both apps provide:
+
+- **Reciprocal same-origin navigation**: `WorkbenchNavigation` links between `AgentGate` and `InterlockSim` (`../interlock-sim/` and `../agent-gate/` by default for sibling static deployments, configurable at build time via `VITE_INTERLOCK_SIM_URL` and `VITE_AGENT_GATE_URL`, and validated against the deployment path prefix).
+- **Preset URL query routing with discard protection**: Both apps synchronize active presets with `?preset=...` via `useWorkbenchRoute`, prompting with an accessible `role="alertdialog"` confirmation and focus restoration when switching presets or comparison rows while JSON or model edits are dirty.
+- **Snapshot-bound Web Worker verification**: Verification runs in a Vite module worker via `@rulecanvas/workbench/verify` and `useVerificationSnapshot`, with automatic cancellation of superseded runs, synchronous main-thread fallback when Web Workers are unavailable, and explicit `OUTDATED:` status separation after edits.
+- **Portable JSON import/export**: Both apps use the shared codec for portable exports. InterlockSim also uses it for imports with last-value handling for duplicate keys. AgentGate retains its previous import limits for existing model files. Both import paths check raw integer literals before parsing.
 
 ### AgentGate (`apps/agent-gate`)
 
-AgentGate is the primary commercially relevant application in RuleCanvasKit for verifying AI agent permissions, security policies, and approval workflows before rollout. As of `v0.3.0`, `@rulecanvas/agent-gate` provides both executable TypeScript policy models (`broken`, `naive-patch-a`, `naive-patch-b`, `principled-fix`, and `vacuous-fix`) and an interactive React + Vite verification workbench (`pnpm --filter @rulecanvas/agent-gate dev` / `build` / `preview`) featuring a structured policy and AST guard editor, strict integer draft and raw JSON number pre-validation, non-blocking Web Worker verification with main-thread fallback, `@rulecanvas/ui` counterexample replay, and a reactive 5-preset comparison matrix.
+AgentGate is the primary policy-modeling workbench in RuleCanvasKit for verifying AI agent permissions, security policies, and approval workflows before rollout. `@rulecanvas/agent-gate` exports executable TypeScript policy models (`broken`, `naive-patch-a`, `naive-patch-b`, `principled-fix`, and `vacuous-fix`) alongside the browser workbench featuring a structured schema/AST editor, strict integer draft validation, counterexample replay, and a 5-preset comparison matrix.
 
 ### InterlockSim (`apps/interlock-sim`)
 
-InterlockSim is an educational browser workbench for exploring discrete airlock interlocks. Compare the broken, repaired, and vacuous-lockout presets, replay a counterexample, and step through enabled operator actions. The guard inspector explains blocked actions and offers a guided repair for the built-in broken preset. The workbench also supports JSON import and export for custom finite-state models.
+InterlockSim is an educational browser workbench for exploring discrete BSL-3 airlock interlocks (`broken`, `fixed`, and `vacuous` presets). It pairs an accessible airlock schematic and operator console with shortest counterexample replay, predicate-level guard explanations, a guided repair for the built-in broken preset, a 3-preset comparison matrix, strict 512,000-character export (allowing clean zero-invariant drafts), and legacy duplicate-key import compatibility. See the [v0.4.0 release notes](docs/releases/v0.4.0.md) for a walkthrough.
 
-After installing workspace dependencies, build the shared packages and launch the workbench:
+## Build another workbench on this foundation
 
-```bash
-pnpm build
-pnpm --filter @rulecanvas/interlock-sim dev
-```
-
-For a production build, use `pnpm --filter @rulecanvas/interlock-sim build`. See the [v0.4.0 release notes](docs/releases/v0.4.0.md) for a walkthrough and verification limits.
+1. Add an app under `apps/`. Give it its own scenario, interface, and Vite entry point. Use `workspace:*` for the shared packages your app imports.
+2. Define a bounded model with invariants, an optional goal, and explicit assumptions. Start with `verifyModel` and `replayTrace` from `@rulecanvas/core`.
+3. Add only the adapters your app needs. The UI library can format and replay results. For a React workbench with module-worker verification, follow the worker entry and snapshot hook used by either existing app.
+4. Add a domain test with an expected verdict and, for a failing model, an expected replay. Run `pnpm build`, `pnpm test`, and `pnpm verify:boundaries`. Run `pnpm verify:pack` to see the shared packages build and verify a booking model in an independent consumer.
 
 ## Screenshots
 
-Repository screenshot documentation is planned for the `v1.0.0` milestone.
+**AgentGate.** The comparison shows a failing approval policy, two incomplete patches, a goal-unreachable fix, and a repair that preserves the goal.
 
-## Testing Instructions
+![AgentGate comparison table showing five presets with verdicts, states explored, and goal reachability](docs/screenshots/agent-gate.png)
 
-Run the full build, typecheck, test, boundary, hygiene, and benchmark suite locally:
+**InterlockSim.** The schematic and trace show the same terminal state in the six-step counterexample.
+
+![InterlockSim schematic, operator controls, verification verdict, and replay timeline](docs/screenshots/interlock-sim.png)
+
+## Build, Pack, and Verification Instructions
+
+Run the complete build, typecheck, export, archive, test, boundary, hygiene, benchmark, and browser regression suite locally:
 
 ```bash
-# Build @rulecanvas/core and @rulecanvas/ui
+# Build all 4 library packages and both application bundles
 pnpm build
 
-# Build the AgentGate interactive browser workbench
-pnpm --filter @rulecanvas/agent-gate build
-pnpm --filter @rulecanvas/interlock-sim build
-
-# Typecheck all workspace packages and strict ES2022 core/UI configs
+# Typecheck all packages and run strict ES2022 / React library tsc checks
 pnpm typecheck
 pnpm --filter @rulecanvas/core exec tsc --noEmit -p tsconfig.json
 pnpm --filter @rulecanvas/ui exec tsc --noEmit -p tsconfig.json
+pnpm --filter @rulecanvas/workbench exec tsc --noEmit -p tsconfig.json
+pnpm --filter @rulecanvas/workbench-react exec tsc --noEmit -p tsconfig.json
 
-# Run all unit, property-based, boundary, and application scenario tests
+# Verify all 4 library packages (6 public entry points) and SSR app imports in pure Node
+pnpm verify:exports
+
+# Build map-free tarballs, check positive allowlists, and test an offline third-app consumer
+pnpm verify:pack
+
+# Run all unit, property-based, boundary, workbench, and scenario tests
 pnpm test
-
-# Run architecture and boundary enforcement checks
-pnpm verify:boundaries
-
-# Check test hygiene (no skipped or focused tests)
-pnpm verify:hygiene
 
 # Run the property-based differential oracle with an explicit seed
 FC_SEED=918273645 pnpm --filter @rulecanvas/core exec vitest run tests/properties.test.ts
 
+# Run architecture, dependency DAG, and honesty boundary checks
+pnpm verify:boundaries
+
+# Check test hygiene (no skipped, focused, or pending tests)
+pnpm verify:hygiene
+
 # Run the deterministic benchmark suite
 pnpm bench
 ```
+
+To run the headless Chromium browser regression gate (`pnpm test:browser`) against both built workbenches and, optionally, the packed third-app consumer produced by `pnpm verify:pack`:
+
+```bash
+qa_dir=$(mktemp -d)
+npm install --no-save --prefix "$qa_dir" playwright@1.65.1 @axe-core/playwright@4.14.1
+"$qa_dir/node_modules/.bin/playwright" install chromium
+BOOKING_FIXTURE_DIST="$qa_dir/booking" pnpm verify:pack
+PLAYWRIGHT_MODULE="$qa_dir/node_modules/playwright/index.mjs" \
+  AXE_PLAYWRIGHT_MODULE="$qa_dir/node_modules/@axe-core/playwright/dist/index.mjs" \
+  BOOKING_FIXTURE_DIST="$qa_dir/booking" \
+  SCREENSHOT_DIR="$qa_dir/screenshots" pnpm test:browser
+```
+
+The browser gate checks both workbench journeys, keyboard operation, four viewport widths down to 375 CSS pixels, and axe WCAG A/AA rules. It also checks the built booking worker when `BOOKING_FIXTURE_DIST` is set.
 
 ## Known Limitations
 
 - **Model-scoped verification only**: Verification results apply strictly to declared mathematical models under their explicit `ModelAssumption[]` assumptions. RuleCanvasKit does not provide real-world security guarantees, live runtime enforcement, or industrial safety certification.
 - **Design-time policy modeling (`AgentGate`)**: `@rulecanvas/agent-gate` evaluates discrete permission and approval state machines at design time. It is not a live runtime firewall, prompt-injection classifier, or production configuration scanner.
 - **Educational interlock modeling (`InterlockSim`)**: `@rulecanvas/interlock-sim` models discrete interlock logic for educational exploration only. It does not model continuous physics, sensor failures, or hardware timing and must not be used for real-world physical containment or SIL / IEC 61508 engineering.
-- **Bounded finite-state exploration**: Exploration is bounded by `maxStates` (`<= 100,000`) and `maxDepth` (`<= 10,000`). Models whose reachable state space exceeds these limits return `INCONCLUSIVE` rather than approximating a verdict.
+- **Bounded finite-state exploration and JSON budgets**: Core exploration is bounded by `maxStates` (`<= 100,000`), `maxDepth` (`<= 10,000`), and AST complexity (`depth <= 32`, `visits <= 256`). Models exceeding these limits return `INCONCLUSIVE` or structured validation errors. Portable JSON export defaults to `512,000` UTF-16 code units and `10,000` nodes (`2,000,000` characters / `50,000` nodes hard ceiling).
+- **Private workbench packages and sibling static hosting**: `@rulecanvas/workbench` and `@rulecanvas/workbench-react` are currently `"private": true` workspace packages tested via local tarballs (`pnpm verify:pack`) rather than published to npm. Relative cross-workbench links assume `agent-gate` and `interlock-sim` static builds are served as sibling directories unless `VITE_INTERLOCK_SIM_URL` / `VITE_AGENT_GATE_URL` is set at build time.
 
 ## Contribution Guidelines
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md) for development prerequisites, commit conventions, required checks, and core engine invariants. For vulnerability reporting and threat-boundary details, see [SECURITY.md](./SECURITY.md). For development tooling disclosure and specification practices, see [docs/TOOL_ATTRIBUTION.md](./docs/TOOL_ATTRIBUTION.md).
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for development prerequisites, commit conventions, packaging/layering invariants, and required checks. For vulnerability reporting and threat-boundary details, see [SECURITY.md](./SECURITY.md). For development tooling disclosure and specification practices, see [docs/TOOL_ATTRIBUTION.md](./docs/TOOL_ATTRIBUTION.md).
 
 ## License
 

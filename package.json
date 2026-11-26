@@ -6,18 +6,20 @@
     "node": "^22.12.0 || ^24.0.0 || >=26.0.0"
   },
   "packageManager": "pnpm@12.21.0",
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "esbuild"
-    ]
-  },
   "scripts": {
-    "build": "pnpm --filter @rulecanvas/core build && pnpm --filter @rulecanvas/ui build",
-    "typecheck": "pnpm build && pnpm -r typecheck",
-    "test": "pnpm build && vitest run",
-    "verify:boundaries": "pnpm build && vitest run packages/rulecanvas-core/tests/boundaries.test.ts",
+    "build:libs": "pnpm --filter @rulecanvas/core build && pnpm --filter @rulecanvas/ui build && pnpm --filter @rulecanvas/workbench build && pnpm --filter @rulecanvas/workbench-react build",
+    "build": "pnpm run build:libs && pnpm --filter @rulecanvas/agent-gate build && pnpm --filter @rulecanvas/interlock-sim build",
+    "typecheck": "pnpm run build:libs && pnpm -r typecheck",
+    "test": "pnpm run build:libs && vitest run",
+    "verify:boundaries": "pnpm run build:libs && vitest run packages/rulecanvas-core/tests/boundaries.test.ts",
+    "verify:exports": "pnpm run build:libs && node scripts/verify-exports.mjs",
+    "verify:pack": "node scripts/verify-pack.mjs",
     "verify:hygiene": "node scripts/check-test-hygiene.mjs",
-    "bench": "pnpm build && tsx packages/rulecanvas-core/bench/run-bench.ts"
+    "verify:release:preflight": "node scripts/release-preflight.mjs",
+    "test:release:preflight": "node --test tests/release-preflight.test.mjs",
+    "test:browser": "pnpm run build && node tests/browser/workbench-e2e.mjs",
+    "test:e2e": "pnpm run test:browser",
+    "bench": "pnpm run build:libs && tsx packages/rulecanvas-core/bench/run-bench.ts"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",

@@ -73,8 +73,9 @@ pre,
 
 .ag-brand {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: var(--space-3);
+  gap: var(--space-2) var(--space-3);
   min-width: 0;
 }
 
@@ -135,6 +136,7 @@ pre,
   border-radius: var(--radius-sm);
   padding: var(--space-1) var(--space-2);
   min-width: 0;
+  max-width: 100%;
   transition: border-color var(--dur-fast) var(--ease-out);
 }
 
@@ -583,9 +585,11 @@ pre,
 
 .ag-inline-field {
   display: inline-flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-1);
   min-width: 0;
+  max-width: 100%;
 }
 
 .ag-inline-label {
@@ -975,6 +979,12 @@ pre,
   }
 }
 
+@media (max-width: 768px) {
+  .ag-topbar {
+    position: static;
+  }
+}
+
 @media (max-width: 520px) {
   .ag-topbar,
   .ag-context-strip,
@@ -990,6 +1000,85 @@ pre,
     padding-left: var(--space-3);
     padding-right: var(--space-3);
   }
+
+  .ag-transition-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ag-badge {
+    max-width: 100%;
+    white-space: normal;
+  }
+
+  .ag-table .ag-badge {
+    white-space: nowrap;
+  }
+
+  .ag-table th,
+  .ag-table td {
+    padding: var(--space-1) var(--space-2);
+  }
+}
+
+.ag-alert code,
+.ag-inline-errors code,
+.ag-transition-id {
+  overflow-wrap: anywhere;
+}
+
+.ag-wb-nav {
+  margin-top: var(--space-1);
+}
+
+.ag-wb-nav-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.ag-wb-nav-link {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px var(--space-2);
+  border: 1px solid var(--color-rule-strong);
+  border-radius: var(--radius-sm);
+  color: var(--color-ink-secondary);
+  text-decoration: none;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.ag-wb-nav-link:hover,
+.ag-wb-nav-link:focus-visible {
+  border-color: var(--color-accent);
+  color: var(--color-ink);
+}
+
+.ag-wb-nav-link-active {
+  border-color: var(--color-accent);
+  background: var(--color-surface-subtle);
+  color: var(--color-ink);
+}
+
+.ag-discard-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-5);
+  border-bottom: 1px solid var(--color-warning);
+  background: var(--color-surface-subtle);
+  color: var(--color-ink);
+}
+
+.ag-discard-banner p {
+  margin: 2px 0 0;
+  color: var(--color-ink-secondary);
+  font-size: 13px;
 }
 
 @media (prefers-reduced-motion: reduce) {

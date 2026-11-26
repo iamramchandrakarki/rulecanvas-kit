@@ -88,7 +88,9 @@ function checkPackageImportsInSource(
 ): string[] {
   const rel = path.relative(REPO_ROOT, filePath);
   const pkgSrcRel = path.relative(REPO_ROOT, pkgSrcDir);
-  const parsed = parseSync(filePath, source);
+  const parsed = parseSync(filePath, source, {
+    lang: filePath.endsWith('.tsx') ? 'tsx' : 'ts',
+  });
   const violations: string[] = [];
 
   if (parsed.errors.length > 0) {
@@ -165,6 +167,80 @@ const UI_ALLOWED_BARE_SPECIFIERS = new Set(['@rulecanvas/core']);
 
 function checkUiImportsInSource(filePath: string, source: string): string[] {
   return checkPackageImportsInSource(filePath, source, UI_SRC_DIR, UI_ALLOWED_BARE_SPECIFIERS);
+}
+
+function collectWorkspaceSourceSpecifiers(
+  filePath: string,
+  content: string,
+): {
+  readonly parseErrors: readonly string[];
+  readonly specs: readonly string[];
+  readonly dynamicImports: readonly string[];
+} {
+  const relFile = path.relative(REPO_ROOT, filePath);
+  const parsed = parseSync(filePath, content, {
+    lang: filePath.endsWith('.tsx') ? 'tsx' : 'ts',
+  });
+  if (parsed.errors.length > 0) {
+    return {
+      parseErrors: [`${relFile}: TypeScript parse error (${parsed.errors[0]!.message})`],
+      specs: [],
+      dynamicImports: [],
+    };
+  }
+  const specs: string[] = [];
+  const dynamicImports: string[] = [];
+  const collect = (node: unknown): void => {
+    if (node === null || typeof node !== 'object') return;
+    if (Array.isArray(node)) {
+      for (const item of node) collect(item);
+      return;
+    }
+    const rec = node as Record<string, unknown>;
+    if (
+      (rec['type'] === 'ImportDeclaration' ||
+        rec['type'] === 'ExportNamedDeclaration' ||
+        rec['type'] === 'ExportAllDeclaration') &&
+      rec['source'] &&
+      typeof (rec['source'] as { value?: unknown }).value === 'string'
+    ) {
+      specs.push((rec['source'] as { value: string }).value);
+    } else if (rec['type'] === 'ImportExpression') {
+      const src = rec['source'] as AstNode | undefined;
+      const spec = getStaticStringValue(src);
+      if (spec !== null) {
+        specs.push(spec);
+      }
+      dynamicImports.push(spec ?? '<dynamic>');
+    } else if (rec['type'] === 'TSImportType') {
+      const arg = (rec['argument'] ?? rec['source']) as
+        | { literal?: { value?: unknown }; value?: unknown }
+        | undefined;
+      const litVal = arg?.literal?.value ?? arg?.value;
+      if (typeof litVal === 'string') {
+        specs.push(litVal);
+      }
+    } else if (rec['type'] === 'TSExternalModuleReference') {
+      const exprVal = getStaticStringValue(rec['expression'] as AstNode | undefined);
+      if (exprVal !== null) {
+        specs.push(exprVal);
+      }
+    } else if (
+      rec['type'] === 'CallExpression' &&
+      (rec['callee'] as AstNode | undefined)?.type === 'Identifier' &&
+      (rec['callee'] as { name?: unknown }).name === 'require' &&
+      Array.isArray(rec['arguments']) &&
+      rec['arguments'].length > 0
+    ) {
+      const reqSpec = getStaticStringValue(rec['arguments'][0] as AstNode | undefined);
+      if (reqSpec !== null) {
+        specs.push(reqSpec);
+      }
+    }
+    for (const val of Object.values(rec)) collect(val);
+  };
+  collect(parsed.program);
+  return { parseErrors: [], specs, dynamicImports };
 }
 
 const FORBIDDEN_GLOBALS = new Set([
@@ -523,7 +599,9 @@ function walkProgramWithScopes(
 
 function checkForbiddenApisInSource(filePath: string, source: string): string[] {
   const rel = path.relative(REPO_ROOT, filePath);
-  const parsed = parseSync(filePath, source);
+  const parsed = parseSync(filePath, source, {
+    lang: filePath.endsWith('.tsx') ? 'tsx' : 'ts',
+  });
   const found = new Set<string>();
 
   if (parsed.errors.length > 0) {
@@ -733,6 +811,9 @@ describe('architecture and honesty boundaries', () => {
     expect(findTestHygieneViolations('probe.test.ts', "it.concurrent('pending');")).toHaveLength(1);
     expect(findTestHygieneViolations('probe.test.ts', "import { test as myTest } from 'vitest'; myTest.fails('pending', undefined);")).toHaveLength(1);
     expect(findTestHygieneViolations('probe.test.ts', "import * as v from 'vitest'; v.bench.sequential('pending');")).toHaveLength(1);
+    expect(findTestHygieneViolations('tests/browser/probe-e2e.mjs', "import { test } from '@playwright/test'; test.fixme('x', () => {});")).toHaveLength(1);
+    expect(findTestHygieneViolations('tests/browser/probe-e2e.mjs', "test.describe.skip('x', () => {});")).toHaveLength(1);
+    expect(findTestHygieneViolations('tests/browser/probe-e2e.mjs', "await page.waitForTimeout(250);")).toHaveLength(1);
   });
 
   it('contains zero domain leaks in packages/rulecanvas-core/src/** filenames or contents', () => {
@@ -855,6 +936,73 @@ describe('architecture and honesty boundaries', () => {
     expect(violations).toEqual([]);
   });
 
+  it('forbids non-deterministic or host-coupled APIs and domain leaks in @rulecanvas/workbench and @rulecanvas/workbench-react', () => {
+    const wbSrcDir = path.join(REPO_ROOT, 'packages/rulecanvas-workbench/src');
+    const wbReactSrcDir = path.join(REPO_ROOT, 'packages/rulecanvas-workbench-react/src');
+
+    const wbFiles = walkFiles(wbSrcDir, (p) => p.endsWith('.ts'));
+    const wbReactFiles = walkFiles(wbReactSrcDir, (p) => p.endsWith('.ts') || p.endsWith('.tsx'));
+    expect(wbFiles.length).toBeGreaterThan(0);
+    expect(wbReactFiles.length).toBeGreaterThan(0);
+
+    // Every file in packages/rulecanvas-workbench/src (except verify.ts checking typeof globalThis.Worker)
+    // and packages/rulecanvas-workbench-react/src must avoid Date/performance/setTimeout/setInterval/Math.random/eval/Function.
+    const hostViolations: string[] = [];
+    for (const filePath of [...wbFiles, ...wbReactFiles]) {
+      const apis = checkForbiddenApisInSource(filePath, readFileSync(filePath, 'utf8'));
+      if (filePath.startsWith(wbSrcDir) && path.basename(filePath) === 'verify.ts') {
+        const filtered = apis.filter((msg) => !msg.includes('[globalThis]'));
+        hostViolations.push(...filtered);
+      } else {
+        hostViolations.push(...apis);
+      }
+    }
+    expect(hostViolations).toEqual([]);
+
+    // Self-check: TSX files in @rulecanvas/workbench-react are scanned with JSX parsing enabled
+    expect(
+      checkForbiddenApisInSource(
+        path.join(wbReactSrcDir, '__probe__.tsx'),
+        'export const Probe = () => <span>{Date.now()}</span>;',
+      ),
+    ).toHaveLength(1);
+
+    const domainLeakPatterns: readonly RegExp[] = [
+      /airlock/i,
+      /autoclave/i,
+      /bsl/i,
+      /steril/i,
+      /agent/i,
+      /trifecta/i,
+      /launder/i,
+      /approval/i,
+      /exfil/i,
+      /webhook/i,
+      /interlock/i,
+      /valve/i,
+      /door/i,
+      /\bmcp\b/i,
+    ];
+    const leakViolations: string[] = [];
+    for (const baseDir of [wbSrcDir, wbReactSrcDir]) {
+      for (const filePath of walkFiles(baseDir)) {
+        const rel = path.relative(baseDir, filePath);
+        const content = readFileSync(filePath, 'utf8');
+        for (const pattern of domainLeakPatterns) {
+          if (pattern.test(rel)) {
+            leakViolations.push(`filename "${rel}" matches forbidden domain pattern ${pattern}`);
+          }
+          if (pattern.test(content)) {
+            leakViolations.push(
+              `${path.relative(REPO_ROOT, filePath)} content matches forbidden domain pattern ${pattern}`,
+            );
+          }
+        }
+      }
+    }
+    expect(leakViolations).toEqual([]);
+  });
+
   it('contains zero overclaim phrases across claim-bearing non-test files', () => {
     const forbiddenPhrases = [
       '100% secure',
@@ -925,6 +1073,220 @@ describe('architecture and honesty boundaries', () => {
         }
       }
     }
+
+    expect(violations).toEqual([]);
+  });
+
+  it('enforces acyclic workspace package-manifest graph, strict layering, zero cross-app imports, and zero deep internal package imports', () => {
+    const allowedRuntimeDeps: Readonly<Record<string, ReadonlySet<string>>> = {
+      '@rulecanvas/core': new Set([]),
+      '@rulecanvas/ui': new Set(['@rulecanvas/core']),
+      '@rulecanvas/workbench': new Set(['@rulecanvas/core']),
+      '@rulecanvas/workbench-react': new Set([
+        '@rulecanvas/core',
+        '@rulecanvas/ui',
+        '@rulecanvas/workbench',
+      ]),
+      '@rulecanvas/agent-gate': new Set([
+        '@rulecanvas/core',
+        '@rulecanvas/ui',
+        '@rulecanvas/workbench',
+        '@rulecanvas/workbench-react',
+        'react',
+        'react-dom',
+      ]),
+      '@rulecanvas/interlock-sim': new Set([
+        '@rulecanvas/core',
+        '@rulecanvas/ui',
+        '@rulecanvas/workbench',
+        '@rulecanvas/workbench-react',
+        'react',
+        'react-dom',
+      ]),
+    };
+
+    const allowedPeerDeps: Readonly<Record<string, ReadonlySet<string>>> = {
+      '@rulecanvas/core': new Set([]),
+      '@rulecanvas/ui': new Set([]),
+      '@rulecanvas/workbench': new Set([]),
+      '@rulecanvas/workbench-react': new Set(['react']),
+      '@rulecanvas/agent-gate': new Set([]),
+      '@rulecanvas/interlock-sim': new Set([]),
+    };
+
+    const allowedPackageSubpaths = new Set([
+      '@rulecanvas/core',
+      '@rulecanvas/ui',
+      '@rulecanvas/workbench/verify',
+      '@rulecanvas/workbench/verify-worker',
+      '@rulecanvas/workbench/model-json',
+      '@rulecanvas/workbench-react',
+    ]);
+
+    const allowedBareImportsByLib: Readonly<Record<string, ReadonlySet<string>>> = {
+      '@rulecanvas/core': new Set([]),
+      '@rulecanvas/ui': new Set(['@rulecanvas/core']),
+      '@rulecanvas/workbench': new Set(['@rulecanvas/core']),
+      '@rulecanvas/workbench-react': new Set([
+        '@rulecanvas/core',
+        '@rulecanvas/ui',
+        '@rulecanvas/workbench/verify',
+        '@rulecanvas/workbench/verify-worker',
+        '@rulecanvas/workbench/model-json',
+        'react',
+        'react/jsx-runtime',
+      ]),
+    };
+
+    const graph = new Map<string, string[]>();
+    const violations: string[] = [];
+
+    for (const group of ['packages', 'apps'] as const) {
+      const groupDir = path.join(REPO_ROOT, group);
+      if (!existsSync(groupDir)) continue;
+      for (const dirName of readdirSync(groupDir)) {
+        const wsDir = path.join(groupDir, dirName);
+        const pkgPath = path.join(wsDir, 'package.json');
+        if (!existsSync(pkgPath)) continue;
+        const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as {
+          name?: string;
+          dependencies?: Record<string, string>;
+          peerDependencies?: Record<string, string>;
+          optionalDependencies?: Record<string, string>;
+        };
+        const name = pkg.name ?? dirName;
+        const deps = Object.keys(pkg.dependencies ?? {});
+        const peers = Object.keys(pkg.peerDependencies ?? {});
+        const optionalDeps = Object.keys(pkg.optionalDependencies ?? {});
+        const allowedRuntime = allowedRuntimeDeps[name];
+        const allowedPeers = allowedPeerDeps[name];
+
+        if (allowedRuntime !== undefined) {
+          for (const dep of deps) {
+            if (!allowedRuntime.has(dep)) {
+              violations.push(`${name}: disallowed runtime dependency "${dep}"`);
+            }
+          }
+          for (const dep of optionalDeps) {
+            if (!allowedRuntime.has(dep)) {
+              violations.push(`${name}: disallowed optional dependency "${dep}"`);
+            }
+          }
+        }
+        if (allowedPeers !== undefined) {
+          for (const peer of peers) {
+            if (!allowedPeers.has(peer)) {
+              violations.push(`${name}: disallowed peer dependency "${peer}"`);
+            }
+          }
+        }
+
+        const internalDeps = [...deps, ...peers, ...optionalDeps].filter((d) =>
+          d.startsWith('@rulecanvas/'),
+        );
+        const declaredInternalSet = new Set(internalDeps);
+        graph.set(name, internalDeps);
+
+        // Source-level checks across src/**/*.{ts,tsx}: per-importer DAG allowlist, no cross-app imports, no relative escapes, no disallowed @rulecanvas/* deep subpaths
+        const srcDir = path.join(wsDir, 'src');
+        if (!existsSync(srcDir)) continue;
+        const srcFiles = walkFiles(srcDir, (p) => p.endsWith('.ts') || p.endsWith('.tsx'));
+        for (const filePath of srcFiles) {
+          const content = readFileSync(filePath, 'utf8');
+          const { parseErrors, specs, dynamicImports } = collectWorkspaceSourceSpecifiers(
+            filePath,
+            content,
+          );
+          violations.push(...parseErrors);
+
+          const relFile = path.relative(REPO_ROOT, filePath);
+          if (group === 'packages' && dynamicImports.length > 0) {
+            violations.push(
+              `${relFile}: disallowed dynamic import() (${dynamicImports.join(', ')}) in library package`,
+            );
+          }
+          if (
+            group === 'packages' &&
+            (name === '@rulecanvas/workbench' || name === '@rulecanvas/workbench-react')
+          ) {
+            const domainLeakRe = /\b(agent-?gate|interlock-?sim|bsl3|airlock|approval.?laundering)\b/i;
+            if (domainLeakRe.test(relFile) || domainLeakRe.test(content)) {
+              violations.push(`${relFile}: domain-specific identifier leaked into shared library`);
+            }
+          }
+          for (const spec of specs) {
+            if (spec.startsWith('.')) {
+              const resolved = path.resolve(path.dirname(filePath), spec);
+              if (!resolved.startsWith(`${wsDir}${path.sep}`) && resolved !== wsDir) {
+                violations.push(`${relFile}: relative import escapes workspace package ("${spec}")`);
+              }
+              continue;
+            }
+
+            // All non-relative specifiers (node:*, bare npm, @rulecanvas/*, aliases) must be explicitly allowlisted
+            if (spec.startsWith('node:')) {
+              violations.push(`${relFile}: disallowed Node built-in import "${spec}"`);
+              continue;
+            }
+            if (group === 'packages') {
+              const allowedSet = allowedBareImportsByLib[name];
+              if (allowedSet === undefined || !allowedSet.has(spec)) {
+                violations.push(`${relFile}: disallowed bare import "${spec}" in ${name}`);
+                continue;
+              }
+            }
+            if (spec.startsWith('@rulecanvas/')) {
+              if (!allowedPackageSubpaths.has(spec)) {
+                violations.push(`${relFile}: disallowed @rulecanvas subpath "${spec}"`);
+              }
+              const parts = spec.split('/');
+              const pkgName = `${parts[0]}/${parts[1]}`;
+              if (!declaredInternalSet.has(pkgName)) {
+                violations.push(
+                  `${relFile}: imports "${spec}" whose package "${pkgName}" is not declared in ${name}'s allowed dependencies`,
+                );
+              }
+              if (group === 'apps' && (spec.includes('agent-gate') || spec.includes('interlock-sim'))) {
+                violations.push(`${relFile}: cross-app bare import "${spec}"`);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Topological cycle detection (DFS 3-color)
+    const state = new Map<string, 'visiting' | 'visited'>();
+    const visit = (node: string, stack: string[]): void => {
+      state.set(node, 'visiting');
+      for (const next of graph.get(node) ?? []) {
+        if (!graph.has(next)) continue;
+        if (state.get(next) === 'visiting') {
+          violations.push(`dependency cycle detected: ${[...stack, node, next].join(' -> ')}`);
+        } else if (state.get(next) !== 'visited') {
+          visit(next, [...stack, node]);
+        }
+      }
+      state.set(node, 'visited');
+    };
+    for (const node of graph.keys()) {
+      if (state.get(node) !== 'visited') visit(node, []);
+    }
+
+    // Self-check: TS import-equals (TSExternalModuleReference) and require() are extracted on .ts and .tsx paths
+    const importEqualsProbe = collectWorkspaceSourceSpecifiers(
+      path.join(REPO_ROOT, 'packages/rulecanvas-workbench-react/src/__probe__.tsx'),
+      "import fc = require('fast-check'); export type Probe = typeof fc;",
+    );
+    expect(importEqualsProbe.parseErrors).toEqual([]);
+    expect(importEqualsProbe.specs).toContain('fast-check');
+
+    const requireCallProbe = collectWorkspaceSourceSpecifiers(
+      path.join(REPO_ROOT, 'packages/rulecanvas-workbench-react/src/__probe__.ts'),
+      "const fcMod = require('fast-check'); export { fcMod };",
+    );
+    expect(requireCallProbe.parseErrors).toEqual([]);
+    expect(requireCallProbe.specs).toContain('fast-check');
 
     expect(violations).toEqual([]);
   });

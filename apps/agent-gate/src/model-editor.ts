@@ -15,27 +15,33 @@ import {
   type VarDef,
 } from '@rulecanvas/core';
 
-export type DiagnosticSection =
-  | 'general'
-  | 'schema'
-  | 'rules'
-  | 'invariants'
-  | 'goal'
-  | 'assumptions';
+import {
+  getErrorsForPathPrefix,
+  indexModelDiagnostics,
+  parseStrictIntegerDraft,
+  type DiagnosticSection,
+  type ModelDiagnosticsIndex,
+  type StrictIntegerParseResult,
+} from '@rulecanvas/ui';
+import {
+  DEFAULT_MODEL_JSON_LIMITS,
+  createModelJsonCodec,
+} from '@rulecanvas/workbench/model-json';
 
-export interface ModelDiagnosticsIndex {
-  readonly all: readonly ValidationError[];
-  readonly byPath: Readonly<Record<string, readonly ValidationError[]>>;
-  readonly sections: Readonly<Record<DiagnosticSection, readonly ValidationError[]>>;
-}
+export {
+  getErrorsForPathPrefix,
+  indexModelDiagnostics,
+  parseStrictIntegerDraft,
+  type DiagnosticSection,
+  type ModelDiagnosticsIndex,
+  type StrictIntegerParseResult,
+};
+
+const agentGateCommonExportCodec = createModelJsonCodec(DEFAULT_MODEL_JSON_LIMITS);
 
 export type JsonImportResult =
   | { readonly ok: true; readonly model: TransitionSystemModel }
   | { readonly ok: false; readonly errors: readonly ValidationError[] };
-
-export type StrictIntegerParseResult =
-  | { readonly ok: true; readonly value: number }
-  | { readonly ok: false; readonly message: string };
 
 const MAX_IMPORT_JSON_CHARS = 2_000_000;
 const MAX_IMPORT_DEPTH = 64;
@@ -87,27 +93,6 @@ const BOOL_EXPR_KEYS_BY_OP: Readonly<Record<string, ReadonlySet<string>>> = {
   gte: new Set(['op', 'left', 'right']),
   in: new Set(['op', 'expr', 'values']),
 };
-
-export function parseStrictIntegerDraft(raw: string): StrictIntegerParseResult {
-  const trimmed = raw.trim();
-  if (trimmed.length === 0) {
-    return { ok: false, message: 'Integer value is required.' };
-  }
-  if (!/^-?\d+$/.test(trimmed)) {
-    return {
-      ok: false,
-      message: `Invalid integer "${raw}": enter a whole base-10 integer without decimals or extra characters.`,
-    };
-  }
-  const parsed = Number(trimmed);
-  if (!Number.isSafeInteger(parsed)) {
-    return {
-      ok: false,
-      message: `Integer "${trimmed}" exceeds safe integer bounds.`,
-    };
-  }
-  return { ok: true, value: Object.is(parsed, -0) ? 0 : parsed };
-}
 
 export function defaultValueForVarDef(def: VarDef): StateValue {
   switch (def.kind) {
@@ -2018,7 +2003,21 @@ function cloneCanonicalModelForExport(model: TransitionSystemModel): Record<stri
 
 export function exportModelToJson(model: TransitionSystemModel): string {
   const canonical = cloneCanonicalModelForExport(model);
-  return JSON.stringify(canonical, null, 2);
+  if (validateModel(canonical).length === 0) {
+    const common = agentGateCommonExportCodec.encode(canonical);
+    if (!common.ok) {
+      throw new TypeError(common.error.message);
+    }
+    return common.text;
+  }
+  const pretty = JSON.stringify(canonical, null, 2);
+  const maxChars = DEFAULT_MODEL_JSON_LIMITS.maxChars;
+  if (pretty.length <= maxChars) return pretty;
+  const compact = JSON.stringify(canonical);
+  if (compact.length > maxChars) {
+    throw new TypeError('Model JSON exceeds the ' + maxChars + '-character export limit.');
+  }
+  return compact;
 }
 
 const RFC8259_JSON_NUMBER_RE = /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$/;
@@ -2226,66 +2225,4 @@ export function importModelFromJson(rawText: unknown): JsonImportResult {
       ],
     };
   }
-}
-
-function classifyErrorSection(path: string): DiagnosticSection {
-  if (path.startsWith('schema') || path.startsWith('initialState')) {
-    return 'schema';
-  }
-  if (path.startsWith('rules')) {
-    return 'rules';
-  }
-  if (path.startsWith('invariants')) {
-    return 'invariants';
-  }
-  if (path.startsWith('goal')) {
-    return 'goal';
-  }
-  if (path.startsWith('assumptions')) {
-    return 'assumptions';
-  }
-  return 'general';
-}
-
-export function indexModelDiagnostics(
-  errors: readonly ValidationError[],
-): ModelDiagnosticsIndex {
-  const byPath: Record<string, ValidationError[]> = {};
-  const sections: Record<DiagnosticSection, ValidationError[]> = {
-    general: [],
-    schema: [],
-    rules: [],
-    invariants: [],
-    goal: [],
-    assumptions: [],
-  };
-
-  for (const error of errors) {
-    const existing = byPath[error.path];
-    if (existing !== undefined) {
-      existing.push(error);
-    } else {
-      byPath[error.path] = [error];
-    }
-    const section = classifyErrorSection(error.path);
-    sections[section].push(error);
-  }
-
-  return {
-    all: [...errors],
-    byPath,
-    sections,
-  };
-}
-
-export function getErrorsForPathPrefix(
-  index: ModelDiagnosticsIndex,
-  prefix: string,
-): readonly ValidationError[] {
-  return index.all.filter(
-    (err) =>
-      err.path === prefix ||
-      err.path.startsWith(`${prefix}.`) ||
-      err.path.startsWith(`${prefix}[`),
-  );
 }

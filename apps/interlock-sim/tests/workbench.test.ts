@@ -716,6 +716,64 @@ describe('InterlockSim workbench architecture, semantics, security, and UI', () 
       tryExportModelJson({ ...bsl3AirlockFixedModel, schema: schemaWithReserved }).ok,
     ).toBe(false);
 
+    // Zero-invariant drafts reject non-enumerable object props, extra array props, and symbols (never silently stripped)
+    const zeroInvDraft: TransitionSystemModel = {
+      ...bsl3AirlockFixedModel,
+      invariants: [],
+    };
+    const zeroInvExported = tryExportModelJson(zeroInvDraft);
+    expect(zeroInvExported.ok).toBe(true);
+
+    const zeroInvWithNonEnumObjProp = { ...zeroInvDraft };
+    Object.defineProperty(zeroInvWithNonEnumObjProp, 'hiddenMeta', {
+      value: 'should-reject',
+      enumerable: false,
+      configurable: true,
+    });
+    expect(tryExportModelJson(zeroInvWithNonEnumObjProp).ok).toBe(false);
+
+    const zeroInvRuleWithNonEnumProp = { ...zeroInvDraft.rules[0]! };
+    Object.defineProperty(zeroInvRuleWithNonEnumProp, 'hiddenRuleMeta', {
+      value: 1,
+      enumerable: false,
+      configurable: true,
+    });
+    expect(
+      tryExportModelJson({
+        ...zeroInvDraft,
+        rules: [zeroInvRuleWithNonEnumProp, ...zeroInvDraft.rules.slice(1)],
+      }).ok,
+    ).toBe(false);
+
+    const zeroInvRulesWithExtraEnumProp = [...zeroInvDraft.rules];
+    (zeroInvRulesWithExtraEnumProp as unknown as Record<string, unknown>)['extraProp'] = 123;
+    expect(
+      tryExportModelJson({ ...zeroInvDraft, rules: zeroInvRulesWithExtraEnumProp }).ok,
+    ).toBe(false);
+
+    const zeroInvRulesWithNonEnumExtraProp = [...zeroInvDraft.rules];
+    Object.defineProperty(zeroInvRulesWithNonEnumExtraProp, 'hiddenExtra', {
+      value: 'nope',
+      enumerable: false,
+      configurable: true,
+    });
+    expect(
+      tryExportModelJson({ ...zeroInvDraft, rules: zeroInvRulesWithNonEnumExtraProp }).ok,
+    ).toBe(false);
+
+    const zeroInvRulesWithSymbol = [...zeroInvDraft.rules];
+    Object.defineProperty(zeroInvRulesWithSymbol, Symbol('tag'), {
+      value: true,
+      enumerable: true,
+    });
+    expect(tryExportModelJson({ ...zeroInvDraft, rules: zeroInvRulesWithSymbol }).ok).toBe(false);
+
+    const zeroInvObjWithSymbol: Record<PropertyKey, unknown> = { ...zeroInvDraft };
+    zeroInvObjWithSymbol[Symbol('meta')] = true;
+    expect(tryExportModelJson(zeroInvObjWithSymbol as unknown as TransitionSystemModel).ok).toBe(
+      false,
+    );
+
     // Compact JSON fallback keeps near-limit exports re-importable, and > 512KB triggers JSON_EXPORT_ERROR
     const largePadding = 'A'.repeat(498_000);
     const compactableModel: TransitionSystemModel = {
@@ -1108,14 +1166,14 @@ describe('InterlockSim workbench architecture, semantics, security, and UI', () 
     expect(spoofedSchematicHtml).not.toContain('GOAL REACHED: LAB ENTRY');
     expect(spoofedSchematicHtml).toContain('UNAVAILABLE');
 
-    // R2-2a: Export and import share identical complexity budget accounting (48 rules x 60 clauses)
+    // R2-2a: Export and import share identical value-occurrence visit budget accounting (56 rules x 60 clauses > 10,000 visits)
     const manyClauses: BoolExpr[] = Array.from({ length: 60 }, () => ({ op: 'lit' as const, value: true }));
     const highBudgetModel: TransitionSystemModel = {
       id: 'high-budget',
       name: 'High Budget Model',
       schema: { flag: { kind: 'boolean' } },
       initialState: { flag: true },
-      rules: Array.from({ length: 48 }, (_, i) => ({
+      rules: Array.from({ length: 56 }, (_, i) => ({
         id: `r_${i}`,
         label: `Rule ${i}`,
         guard: { op: 'and', args: manyClauses },
@@ -1133,6 +1191,53 @@ describe('InterlockSim workbench architecture, semantics, security, and UI', () 
     expect(highBudgetExport.ok).toBe(false);
     if (!highBudgetExport.ok) {
       expect(highBudgetExport.error.code).toBe('JSON_EXPORT_ERROR');
+    }
+
+    // 65-invariant model must NOT qualify for the zero-invariant draft export exception
+    const tooManyInvariantsModel: TransitionSystemModel = {
+      ...bsl3AirlockFixedModel,
+      invariants: Array.from({ length: 65 }, (_, i) => ({
+        id: `inv_${i}`,
+        label: `Invariant ${i}`,
+        holds: { op: 'lit', value: true },
+      })),
+    };
+    const tooManyInvExport = tryExportModelJson(tooManyInvariantsModel);
+    expect(tooManyInvExport.ok).toBe(false);
+    if (!tooManyInvExport.ok) {
+      expect(tooManyInvExport.error.code).toBe('JSON_EXPORT_ERROR');
+    }
+
+    // ~502 KB zero-invariant draft (exceeds 512 KB pretty, fits compact) must export cleanly via compact fallback
+    const compactZeroInvDraft: TransitionSystemModel = {
+      ...bsl3AirlockFixedModel,
+      invariants: [],
+      assumptions: [
+        {
+          id: 'asm_zero_compact',
+          category: 'scope',
+          statement: 'Z'.repeat(501_500),
+          notModeled: 'Timing',
+        },
+      ],
+    };
+    expect(JSON.stringify(compactZeroInvDraft, null, 2).length).toBeGreaterThan(512_000);
+    const zeroCompactExport = tryExportModelJson(compactZeroInvDraft);
+    expect(zeroCompactExport.ok).toBe(true);
+    if (zeroCompactExport.ok) {
+      expect(zeroCompactExport.text.length).toBeLessThanOrEqual(512_000);
+    }
+
+    // Legacy import wrapper preserves last-value semantics for duplicate keys
+    const baselineJson = exportModelToJson(bsl3AirlockFixedModel);
+    const dupNamePayload = baselineJson.replace(
+      `"name": ${JSON.stringify(bsl3AirlockFixedModel.name)},`,
+      `"name": "First Name",\n  "name": "Second Name",`,
+    );
+    const legacyDupImport = importModelFromJson(dupNamePayload);
+    expect(legacyDupImport.ok).toBe(true);
+    if (legacyDupImport.ok) {
+      expect(legacyDupImport.model.name).toBe('Second Name');
     }
 
     // Any model whose export succeeds (near-budget 28 rules x 60 clauses) must re-import cleanly

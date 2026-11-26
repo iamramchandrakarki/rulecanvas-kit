@@ -212,6 +212,9 @@ export function VerificationWorkbenchPane({
         <section className="is-verdict" role="status" aria-live="polite" data-tone="warning">
           <div className="is-verdict-top">
             <span className="is-badge" data-tone="warning">
+              <span aria-hidden="true">
+                {cancelledNotice !== null || activeErrors.length > 0 ? '!' : '○'}
+              </span>{' '}
               {cancelledNotice !== null
                 ? 'VERIFICATION CANCELLED'
                 : activeErrors.length > 0
@@ -269,7 +272,9 @@ export function VerificationWorkbenchPane({
               data-tone={isStale ? 'warning' : verdictView.tone}
             >
               {isStale ? (
-                <>OUTDATED: {verdictView.badge}</>
+                <>
+                  <span aria-hidden="true">!</span> OUTDATED: {verdictView.badge}
+                </>
               ) : (
                 <>
                   <span aria-hidden="true">{verdictView.symbol}</span> {verdictView.badge}
@@ -282,6 +287,7 @@ export function VerificationWorkbenchPane({
                 className="is-badge"
                 data-tone={verdictView.goalReachable ? 'success' : 'warning'}
               >
+                <span aria-hidden="true">{verdictView.goalReachable ? '✓' : '○'}</span>{' '}
                 {verdictView.goalReachable ? 'Goal reachable: Yes' : 'Goal reachable: No'}
               </span>
             )}
@@ -356,7 +362,7 @@ export function VerificationWorkbenchPane({
                 ? `Counterexample Trace (${replaySession.totalSteps} steps)`
                 : `Manual Simulation Sequence (${replaySession.totalSteps} steps)`}
             </h3>
-            <span className="is-step-counter">
+            <span className="is-step-counter" aria-live="polite">
               Cursor: Step {replaySession.cursor} / {replaySession.totalSteps}
             </span>
           </div>
@@ -430,7 +436,12 @@ export function VerificationWorkbenchPane({
                   {stateTableView.changedCount} modified on active step
                 </span>
               </div>
-              <div className="is-table-wrap">
+              <div
+                className="is-table-wrap"
+                tabIndex={0}
+                role="region"
+                aria-label={`State variables table for ${stateTableView.modelName}`}
+              >
                 <table
                   className="is-table"
                   aria-label={`State variables for ${stateTableView.modelName}`}
@@ -477,7 +488,12 @@ export function VerificationWorkbenchPane({
               <h4 className="is-section-title">
                 Invariants &amp; Goal at Step {replaySession.cursor}
               </h4>
-              <div className="is-table-wrap">
+              <div
+                className="is-table-wrap"
+                tabIndex={0}
+                role="region"
+                aria-label="Invariants and goal evaluation table"
+              >
                 <table className="is-table" aria-label="Invariant and goal evaluation">
                   <thead>
                     <tr>

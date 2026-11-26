@@ -26,6 +26,15 @@ export {
 } from './replay-controller.js';
 
 export {
+  getErrorsForPathPrefix,
+  indexModelDiagnostics,
+  parseStrictIntegerDraft,
+  type DiagnosticSection,
+  type ModelDiagnosticsIndex,
+  type StrictIntegerParseResult,
+} from './diagnostics.js';
+
+export {
   buildInvariantsPanelView,
   buildStateTableView,
   buildVerdictSummaryView,

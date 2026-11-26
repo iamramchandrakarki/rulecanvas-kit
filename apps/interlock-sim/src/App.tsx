@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   validateModel,
   validateOptions,
-  verifyModel,
   type TransitionSystemModel,
   type ValidationError,
   type VerifyOptions,
@@ -11,7 +10,6 @@ import {
 import {
   applyManualStep,
   buildVerdictSummaryView,
-  createManualSimulationSession,
   createVerdictReplaySession,
   jumpReplayToStep,
   resetReplaySession,
@@ -19,6 +17,13 @@ import {
   stepReplayForward,
   type ReplaySession,
 } from '@rulecanvas/ui';
+import {
+  WorkbenchNavigation,
+  readPresetFromSearch,
+  useVerificationSnapshot,
+  useWorkbenchRoute,
+  type WorkbenchNavLink,
+} from '@rulecanvas/workbench-react';
 import { DEFAULT_VERIFY_OPTIONS, runInterlockPresetComparison } from './comparison.js';
 import { AirlockSchematic } from './components/AirlockSchematic.js';
 import { ComparisonPanel } from './components/ComparisonPanel.js';
@@ -26,7 +31,6 @@ import { InterlockRuleEditor } from './components/InterlockRuleEditor.js';
 import { OperatorConsole } from './components/OperatorConsole.js';
 import {
   VerificationWorkbenchPane,
-  type VerifiedSnapshot,
 } from './components/VerificationWorkbenchPane.js';
 import { indexModelDiagnostics, parseStrictIntegerDraft } from './model-inspector.js';
 import {
@@ -35,12 +39,7 @@ import {
   loadInterlockPresetModel,
   type InterlockPresetVariant,
 } from './presets.js';
-import {
-  VerifyWorkerClient,
-  isWebWorkerSupported,
-  type VerifyExecutionMode,
-  type WorkerFactory,
-} from './verify-client.js';
+import { createAppVerifyClient, type WorkerFactory } from './verify-client.js';
 
 export interface AppProps {
   readonly initialVariant?: InterlockPresetVariant;
@@ -48,17 +47,39 @@ export interface AppProps {
   readonly workerFactory?: WorkerFactory;
 }
 
-function buildInitialSession(
+function buildVerdictSession(
   model: TransitionSystemModel,
   result: VerifyResult,
-): ReplaySession | null {
-  const fromVerdict = createVerdictReplaySession(model, result, { startAt: 'terminal' });
-  if (fromVerdict.ok) {
-    return fromVerdict.session;
+):
+  | { readonly ok: true; readonly session: ReplaySession | null }
+  | { readonly ok: false; readonly message: string } {
+  if (result.status === 'INVALID') {
+    return { ok: true, session: null };
   }
-  const manual = createManualSimulationSession(model);
-  return manual.ok ? manual.session : null;
+  const fromVerdict = createVerdictReplaySession(model, result, { startAt: 'terminal' });
+  if (!fromVerdict.ok) {
+    return {
+      ok: false,
+      message:
+        fromVerdict.errors[0]?.message ??
+        'Verification verdict failed replay consistency check against the captured model.',
+    };
+  }
+  return { ok: true, session: fromVerdict.session };
 }
+
+function resolveAllowedNavPrefix(baseUrl: string): string | undefined {
+  const normalized = baseUrl.replace(/\/+$/, '');
+  const lastSlash = normalized.lastIndexOf('/');
+  if (lastSlash <= 0) return undefined;
+  return normalized.slice(0, lastSlash);
+}
+
+const ALLOWED_NAV_PREFIX = resolveAllowedNavPrefix(
+  (typeof import.meta !== 'undefined' &&
+    (import.meta as { readonly env?: { readonly BASE_URL?: string } }).env?.BASE_URL) ||
+    '/',
+);
 
 function resolveModelLabel(
   model: TransitionSystemModel,
@@ -73,21 +94,46 @@ function resolveModelLabel(
   return trimmedId.length > 0 ? trimmedId : 'Custom Interlock Model';
 }
 
+const ALLOWED_INTERLOCK_PRESETS: readonly InterlockPresetVariant[] = ['broken', 'fixed', 'vacuous'];
+
+const WORKBENCH_NAV_LINKS: readonly WorkbenchNavLink[] = [
+  {
+    id: 'agent-gate',
+    label: 'AgentGate',
+    href:
+      typeof import.meta !== 'undefined' &&
+      typeof (import.meta as { env?: Record<string, string | undefined> }).env?.['VITE_AGENT_GATE_URL'] ===
+        'string'
+        ? (import.meta as { env: Record<string, string> }).env['VITE_AGENT_GATE_URL']!
+        : '../agent-gate/',
+    description: 'Open AgentGate policy verification workbench',
+  },
+  {
+    id: 'interlock-sim',
+    label: 'InterlockSim',
+    href: './',
+    description: 'Current BSL-3 airlock interlock simulation workbench',
+  },
+];
+
 export function App({
-  initialVariant = 'broken',
+  initialVariant,
   initialShowComparison = false,
   workerFactory,
 }: AppProps) {
+  const resolvedInitialVariant: InterlockPresetVariant =
+    initialVariant ??
+    (typeof window !== 'undefined'
+      ? readPresetFromSearch(window.location.search, ALLOWED_INTERLOCK_PRESETS, 'broken').preset
+      : 'broken');
+
   const initialModelRef = useRef<TransitionSystemModel | null>(null);
   if (initialModelRef.current === null) {
-    initialModelRef.current = loadInterlockPresetModel(initialVariant);
+    initialModelRef.current = loadInterlockPresetModel(resolvedInitialVariant);
   }
-  const initialResultRef = useRef<VerifyResult | null>(null);
-  if (initialResultRef.current === null) {
-    initialResultRef.current = verifyModel(initialModelRef.current, DEFAULT_VERIFY_OPTIONS);
-  }
-
-  const [activePreset, setActivePreset] = useState<InterlockPresetVariant | null>(initialVariant);
+  const [activePreset, setActivePreset] = useState<InterlockPresetVariant | null>(
+    resolvedInitialVariant,
+  );
   const [model, setModel] = useState<TransitionSystemModel>(() => initialModelRef.current!);
   const [editorResetKey, setEditorResetKey] = useState<number>(0);
 
@@ -99,45 +145,46 @@ export function App({
     {},
   );
 
-  const [isRunning, setIsRunning] = useState<boolean>(false);
-  const [runningExecutionMode, setRunningExecutionMode] = useState<VerifyExecutionMode>(() =>
-    workerFactory !== undefined || isWebWorkerSupported() ? 'worker' : 'main-thread',
-  );
-  const [workerError, setWorkerError] = useState<string | null>(null);
+  const modelRevisionRef = useRef(0);
+  const createClient = useCallback(() => createAppVerifyClient(workerFactory), [workerFactory]);
+  const {
+    snapshot: verifiedSnapshot,
+    replaySession,
+    setReplaySession,
+    isRunning,
+    runningExecutionMode,
+    transportError: workerError,
+    run: runSnapshot,
+    clear: clearVerification,
+    invalidatePending,
+    cancel,
+    isPending,
+  } = useVerificationSnapshot({
+    initialRequest: {
+      model: initialModelRef.current,
+      options: DEFAULT_VERIFY_OPTIONS,
+      label: getInterlockPresetDescriptor(resolvedInitialVariant).shortLabel,
+      revision: 0,
+    },
+    createClient,
+  });
   const [cancelledNotice, setCancelledNotice] = useState<string | null>(null);
-
-  const [verifiedSnapshot, setVerifiedSnapshot] = useState<VerifiedSnapshot | null>(() => ({
-    model: initialModelRef.current!,
-    modelLabel: getInterlockPresetDescriptor(initialVariant).shortLabel,
-    options: DEFAULT_VERIFY_OPTIONS,
-    result: initialResultRef.current!,
-    executionMode: 'main-thread',
-  }));
-
-  const [replaySession, setReplaySession] = useState<ReplaySession | null>(() =>
-    buildInitialSession(initialModelRef.current!, initialResultRef.current!),
-  );
   const [replayError, setReplayError] = useState<string | null>(null);
+  const [jsonDraftDirty, setJsonDraftDirty] = useState<boolean>(false);
+
+  const latestModelRef = useRef<TransitionSystemModel>(model);
+  latestModelRef.current = model;
+  const latestActivePresetRef = useRef<InterlockPresetVariant | null>(activePreset);
+  latestActivePresetRef.current = activePreset;
+  const latestEditorDraftErrorMapRef = useRef<Readonly<Record<string, string>>>(
+    editorDraftErrorMap,
+  );
+  latestEditorDraftErrorMapRef.current = editorDraftErrorMap;
+  const stayHereButtonRef = useRef<HTMLButtonElement | null>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
 
   const [showComparison, setShowComparison] = useState<boolean>(initialShowComparison);
   const lastValidBoundsRef = useRef<VerifyOptions>(DEFAULT_VERIFY_OPTIONS);
-
-  const clientRef = useRef<VerifyWorkerClient | null>(null);
-  const activeRunIdRef = useRef<number>(0);
-
-  useEffect(() => {
-    const client = new VerifyWorkerClient({
-      ...(workerFactory !== undefined ? { workerFactory } : {}),
-      restartOnSupersede: true,
-    });
-    clientRef.current = client;
-    setRunningExecutionMode(client.getExecutionMode());
-    return () => {
-      activeRunIdRef.current += 1;
-      client.dispose();
-      clientRef.current = null;
-    };
-  }, [workerFactory]);
 
   const maxStatesParsed = useMemo(() => parseStrictIntegerDraft(maxStatesText), [maxStatesText]);
   const maxDepthParsed = useMemo(() => parseStrictIntegerDraft(maxDepthText), [maxDepthText]);
@@ -174,9 +221,7 @@ export function App({
       maxDepth: maxDepthParsed.ok ? maxDepthParsed.value : DEFAULT_VERIFY_OPTIONS.maxDepth,
     });
     for (const err of coreCheck) {
-      if (err.path === 'options.maxStates' && !maxStatesParsed.ok) continue;
-      if (err.path === 'options.maxDepth' && !maxDepthParsed.ok) continue;
-      errs.push(err);
+      errs.push({ ...err, path: err.path ? 'options.' + err.path : 'options' });
     }
     return errs;
   }, [maxStatesParsed, maxDepthParsed]);
@@ -198,7 +243,7 @@ export function App({
 
   const isStale =
     verifiedSnapshot !== null &&
-    (verifiedSnapshot.model !== model ||
+    (verifiedSnapshot.revision !== modelRevisionRef.current ||
       parsedOptions === null ||
       verifiedSnapshot.options.maxStates !== parsedOptions.maxStates ||
       verifiedSnapshot.options.maxDepth !== parsedOptions.maxDepth ||
@@ -231,85 +276,22 @@ export function App({
     targetOptionErrors: readonly ValidationError[],
     targetDraftErrors: readonly ValidationError[],
   ) => {
-    activeRunIdRef.current += 1;
-    const runId = activeRunIdRef.current;
-
-    clientRef.current?.cancel();
     setCancelledNotice(null);
-    setWorkerError(null);
-
-    if (targetOptionErrors.length > 0 || targetOptions === null) {
-      setIsRunning(false);
-      setVerifiedSnapshot(null);
-      setReplaySession(null);
-      return;
-    }
-
-    if (targetDraftErrors.length > 0) {
-      setIsRunning(false);
-      setVerifiedSnapshot(null);
-      setReplaySession(null);
-      return;
-    }
-
-    const modErrs = validateModel(targetModel);
-    if (modErrs.length > 0) {
-      setIsRunning(false);
-      setVerifiedSnapshot({
-        model: targetModel,
-        modelLabel: targetLabel,
-        options: targetOptions,
-        result: { status: 'INVALID', errors: modErrs },
-        executionMode: 'main-thread',
-      });
-      setReplaySession(null);
-      return;
-    }
-
-    const client = clientRef.current;
-    if (client === null) {
-      const syncResult = verifyModel(targetModel, targetOptions);
-      setIsRunning(false);
-      setVerifiedSnapshot({
-        model: targetModel,
-        modelLabel: targetLabel,
-        options: targetOptions,
-        result: syncResult,
-        executionMode: 'main-thread',
-      });
-      setReplaySession(buildInitialSession(targetModel, syncResult));
-      setReplayError(null);
-      return;
-    }
-
-    setIsRunning(true);
-    setRunningExecutionMode(client.getExecutionMode());
     setReplayError(null);
 
-    void client.verify(targetModel, targetOptions, { restartWorker: true }).then((outcome) => {
-      if (activeRunIdRef.current !== runId) {
-        return;
-      }
-      if (outcome.status === 'cancelled') {
-        setIsRunning(false);
-        return;
-      }
-      setIsRunning(false);
-      if (outcome.status === 'error') {
-        setWorkerError(outcome.message);
-        return;
-      }
-
-      setRunningExecutionMode(outcome.executionMode);
-      setVerifiedSnapshot({
-        model: targetModel,
-        modelLabel: targetLabel,
-        options: targetOptions,
-        result: outcome.result,
-        executionMode: outcome.executionMode,
-      });
-      setReplaySession(buildInitialSession(targetModel, outcome.result));
-      setReplayError(null);
+    if (targetOptions === null ||
+      targetOptionErrors.length > 0 ||
+      targetDraftErrors.length > 0 ||
+      validateModel(targetModel).length > 0) {
+      clearVerification();
+      return;
+    }
+    runSnapshot({
+      model: targetModel,
+      options: targetOptions,
+      label: targetLabel,
+      revision: modelRevisionRef.current,
+      restartWorker: true,
     });
   };
 
@@ -317,30 +299,29 @@ export function App({
     const nextModel = loadInterlockPresetModel(variant);
     const presetInfo = getInterlockPresetDescriptor(variant);
 
-    activeRunIdRef.current += 1;
-    clientRef.current?.cancel();
-    setIsRunning(false);
-    setVerifiedSnapshot(null);
-    setReplaySession(null);
-    setReplayError(null);
-    setWorkerError(null);
-    setCancelledNotice(null);
+    clearVerification();
+    modelRevisionRef.current += 1;
+    latestEditorDraftErrorMapRef.current = {};
     setEditorDraftErrorMap({});
+    setJsonDraftDirty(false);
     setEditorResetKey((prev) => prev + 1);
 
+    latestActivePresetRef.current = variant;
+    latestModelRef.current = nextModel;
     setActivePreset(variant);
     setModel(nextModel);
     runVerification(nextModel, presetInfo.shortLabel, parsedOptions, optionErrors, []);
   };
 
   const handleChangeModel = (nextModel: TransitionSystemModel) => {
-    const wasRunning = isRunning || (clientRef.current?.isRunning() ?? false);
-    activeRunIdRef.current += 1;
+    const wasRunning = isPending();
+    invalidatePending();
     if (wasRunning) {
-      clientRef.current?.cancel();
-      setIsRunning(false);
       setCancelledNotice('In-flight verification cancelled because the interlock model was edited.');
     }
+    modelRevisionRef.current += 1;
+    latestModelRef.current = nextModel;
+    latestActivePresetRef.current = null;
     setModel(nextModel);
     setActivePreset(null);
   };
@@ -348,28 +329,24 @@ export function App({
   const handleImportModel = (importedModel: TransitionSystemModel) => {
     const importedLabel = resolveModelLabel(importedModel, null);
 
-    activeRunIdRef.current += 1;
-    clientRef.current?.cancel();
-    setIsRunning(false);
-    setVerifiedSnapshot(null);
-    setReplaySession(null);
-    setReplayError(null);
-    setWorkerError(null);
-    setCancelledNotice(null);
+    clearVerification();
+    modelRevisionRef.current += 1;
+    latestEditorDraftErrorMapRef.current = {};
     setEditorDraftErrorMap({});
+    setJsonDraftDirty(false);
     setEditorResetKey((prev) => prev + 1);
 
+    latestActivePresetRef.current = null;
+    latestModelRef.current = importedModel;
     setActivePreset(null);
     setModel(importedModel);
     runVerification(importedModel, importedLabel, parsedOptions, optionErrors, []);
   };
 
   const handleBoundsEdit = (kind: 'maxStates' | 'maxDepth', rawValue: string) => {
-    const wasRunning = isRunning || (clientRef.current?.isRunning() ?? false);
-    activeRunIdRef.current += 1;
+    const wasRunning = isPending();
+    invalidatePending();
     if (wasRunning) {
-      clientRef.current?.cancel();
-      setIsRunning(false);
       setCancelledNotice(
         'In-flight verification cancelled because exploration bounds were modified.',
       );
@@ -383,42 +360,49 @@ export function App({
 
   const handleEditorDraftErrorChange = useCallback(
     (fieldKey: string, errorMessage: string | null) => {
-      setEditorDraftErrorMap((prev) => {
-        if (errorMessage === null) {
-          if (!(fieldKey in prev)) return prev;
-          const next = { ...prev };
+      if (errorMessage === null) {
+        if (fieldKey in latestEditorDraftErrorMapRef.current) {
+          const next = { ...latestEditorDraftErrorMapRef.current };
           delete next[fieldKey];
-          return next;
+          latestEditorDraftErrorMapRef.current = next;
+          setEditorDraftErrorMap(next);
         }
-        if (prev[fieldKey] === errorMessage) return prev;
-        return { ...prev, [fieldKey]: errorMessage };
-      });
-      if (errorMessage !== null && clientRef.current?.isRunning()) {
-        activeRunIdRef.current += 1;
-        clientRef.current.cancel();
-        setIsRunning(false);
+      } else if (latestEditorDraftErrorMapRef.current[fieldKey] !== errorMessage) {
+        const next = { ...latestEditorDraftErrorMapRef.current, [fieldKey]: errorMessage };
+        latestEditorDraftErrorMapRef.current = next;
+        setEditorDraftErrorMap(next);
+      }
+      if (errorMessage !== null && isPending()) {
+        invalidatePending();
         setCancelledNotice(
           'In-flight verification cancelled because an editor numeric draft was modified.',
         );
       }
     },
-    [],
+    [invalidatePending, isPending],
   );
 
   const handleCancelRun = () => {
-    activeRunIdRef.current += 1;
-    clientRef.current?.cancel();
-    setIsRunning(false);
+    cancel();
     setCancelledNotice('Verification run cancelled before completion.');
   };
 
   const handleVerifyCurrent = () => {
+    const syncModel = latestModelRef.current;
+    const syncPreset = latestActivePresetRef.current;
+    const syncDraftErrors: ValidationError[] = Object.entries(
+      latestEditorDraftErrorMapRef.current,
+    ).map(([path, message]) => ({
+      code: 'INVALID_INTEGER_DRAFT',
+      path,
+      message,
+    }));
     runVerification(
-      model,
-      resolveModelLabel(model, activePreset),
+      syncModel,
+      resolveModelLabel(syncModel, syncPreset),
       parsedOptions,
       optionErrors,
-      editorDraftErrors,
+      syncDraftErrors,
     );
   };
 
@@ -479,13 +463,43 @@ export function App({
 
   const handleRestoreVerdictTrace = () => {
     if (verifiedSnapshot === null) return;
-    setReplaySession(buildInitialSession(verifiedSnapshot.model, verifiedSnapshot.result));
+    const restored = buildVerdictSession(verifiedSnapshot.model, verifiedSnapshot.result);
+    if (!restored.ok) {
+      setReplayError(restored.message);
+      return;
+    }
+    setReplaySession(restored.session);
     setReplayError(null);
   };
 
   const activePresetInfo = activePreset !== null ? getInterlockPresetDescriptor(activePreset) : null;
   const hasAnyValidationErrors =
     optionErrors.length > 0 || editorDraftErrors.length > 0 || modelErrors.length > 0;
+  const isDirtyEditor = activePreset === null || editorDraftErrors.length > 0 || jsonDraftDirty;
+
+  const { pendingPrompt, selectPreset, requestLinkNavigation, acceptPrompt, declinePrompt } =
+    useWorkbenchRoute<InterlockPresetVariant>({
+      allowedPresets: ALLOWED_INTERLOCK_PRESETS,
+      defaultPreset: 'broken',
+      isDirty: isDirtyEditor,
+      onCommitPreset: handleLoadPreset,
+      formatPresetLabel: (preset) => getInterlockPresetDescriptor(preset).shortLabel,
+    });
+
+  useEffect(() => {
+    if (pendingPrompt !== null) {
+      if (typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
+        previousFocusRef.current = document.activeElement;
+      }
+      stayHereButtonRef.current?.focus();
+    } else if (previousFocusRef.current !== null) {
+      const target = previousFocusRef.current;
+      previousFocusRef.current = null;
+      if (target.isConnected) {
+        target.focus();
+      }
+    }
+  }, [pendingPrompt !== null]);
 
   return (
     <div className="is-shell">
@@ -498,6 +512,22 @@ export function App({
           <span className="is-brand-subtitle">
             Discrete BSL-3 airlock interlock simulation &amp; bounded verification workbench
           </span>
+          <WorkbenchNavigation
+            current="interlock-sim"
+            links={WORKBENCH_NAV_LINKS}
+            allowedPrefix={ALLOWED_NAV_PREFIX}
+            ariaLabel="RuleCanvasKit workbenches"
+            className="is-wb-nav"
+            listClassName="is-wb-nav-list"
+            linkClassName="is-wb-nav-link"
+            activeLinkClassName="is-wb-nav-link-active"
+            onNavigate={(link, event) => {
+              if (isDirtyEditor) {
+                event.preventDefault();
+                requestLinkNavigation(link.href, link.label);
+              }
+            }}
+          />
         </div>
 
         <div className="is-topbar-controls">
@@ -510,7 +540,7 @@ export function App({
               onChange={(e) => {
                 const val = e.target.value;
                 if (val !== 'custom') {
-                  handleLoadPreset(val as InterlockPresetVariant);
+                  selectPreset(val as InterlockPresetVariant);
                 }
               }}
             >
@@ -561,7 +591,9 @@ export function App({
               role="status"
             >
               {isStale ? (
-                <>OUTDATED: {topVerdictSummary.badge}</>
+                <>
+                  <span aria-hidden="true">!</span> OUTDATED: {topVerdictSummary.badge}
+                </>
               ) : (
                 <>
                   <span aria-hidden="true">{topVerdictSummary.symbol}</span>{' '}
@@ -571,19 +603,19 @@ export function App({
             </span>
           ) : hasAnyValidationErrors ? (
             <span className="is-badge" data-status="INVALID" data-tone="error" role="status">
-              INVALID
+              <span aria-hidden="true">!</span> INVALID
             </span>
           ) : cancelledNotice !== null ? (
             <span className="is-badge" data-tone="warning" role="status">
-              CANCELLED
+              <span aria-hidden="true">!</span> CANCELLED
             </span>
           ) : workerError !== null ? (
             <span className="is-badge" data-tone="error" role="status">
-              ERROR
+              <span aria-hidden="true">!</span> ERROR
             </span>
           ) : (
             <span className="is-badge" data-tone="warning" role="status">
-              NOT VERIFIED
+              <span aria-hidden="true">○</span> NOT VERIFIED
             </span>
           )}
 
@@ -601,6 +633,46 @@ export function App({
           </button>
         </div>
       </header>
+
+      {/* Unsaved-changes discard confirmation dialog */}
+      {pendingPrompt !== null && (
+        <div
+          className="is-discard-banner"
+          role="alertdialog"
+          aria-labelledby="is-discard-title"
+          aria-describedby="is-discard-desc"
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') {
+              e.preventDefault();
+              declinePrompt();
+            }
+          }}
+        >
+          <div>
+            <strong id="is-discard-title">Unsaved Custom Edits</strong>
+            <p id="is-discard-desc">
+              {pendingPrompt.label} will discard your current unsaved custom edits.
+            </p>
+          </div>
+          <div className="is-inline-actions">
+            <button
+              ref={stayHereButtonRef}
+              type="button"
+              className="is-btn is-btn-sm"
+              onClick={declinePrompt}
+            >
+              Stay Here
+            </button>
+            <button
+              type="button"
+              className="is-btn is-btn-sm is-btn-primary"
+              onClick={acceptPrompt}
+            >
+              Discard &amp; Continue
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Permanent Educational & Non-Certification Disclaimer Bar */}
       <div className="is-safety-strip" role="note" aria-label="Simulation scope and non-certification notice">
@@ -624,7 +696,7 @@ export function App({
           bounds={comparisonBounds}
           boundsHasErrors={comparisonBoundsInvalid}
           activeVariant={activePreset}
-          onLoadPreset={handleLoadPreset}
+          onLoadPreset={selectPreset}
           onClose={() => setShowComparison(false)}
         />
       )}
@@ -715,6 +787,7 @@ export function App({
             onChangeModel={handleChangeModel}
             onImportModel={handleImportModel}
             onDraftErrorChange={handleEditorDraftErrorChange}
+            onJsonDraftDirtyChange={setJsonDraftDirty}
           />
         </div>
       </main>

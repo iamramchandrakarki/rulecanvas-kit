@@ -45,7 +45,12 @@ export function ComparisonPanel({
         </div>
       )}
 
-      <div className="ag-table-wrap">
+      <div
+        className="ag-table-wrap"
+        tabIndex={0}
+        role="region"
+        aria-label="Preset policy comparison matrix table"
+      >
         <table className="ag-table">
           <thead>
             <tr>

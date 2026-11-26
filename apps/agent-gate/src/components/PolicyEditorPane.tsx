@@ -12,6 +12,7 @@ import {
   formatStateValue,
   formatVarDef,
 } from '@rulecanvas/ui';
+import { useIntegerDraftStore } from '@rulecanvas/workbench-react';
 import {
   addAssumption,
   addInvariant,
@@ -71,6 +72,7 @@ export interface PolicyEditorPaneProps {
   readonly onChangeModel: (next: TransitionSystemModel) => void;
   readonly onImportModel: (imported: TransitionSystemModel) => void;
   readonly onDraftErrorChange?: ((fieldKey: string, errorMessage: string | null) => void) | undefined;
+  readonly onJsonDraftDirtyChange?: ((dirty: boolean) => void) | undefined;
 }
 
 function InlineErrorList({ errors }: { readonly errors: readonly ValidationError[] }) {
@@ -227,6 +229,7 @@ export function PolicyEditorPane({
   onChangeModel,
   onImportModel,
   onDraftErrorChange,
+  onJsonDraftDirtyChange,
 }: PolicyEditorPaneProps) {
   const nextRowIdRef = useRef<number>(0);
   const prevResetKeyRef = useRef<string | number>(resetKey);
@@ -258,6 +261,9 @@ export function PolicyEditorPane({
   const [quickClauseNegated, setQuickClauseNegated] = useState<boolean>(true);
 
   const [initialJsonExport] = useState(() => tryExportModelJson(model));
+  const committedJsonRef = useRef<string>(initialJsonExport.ok ? initialJsonExport.text : '');
+  const onJsonDraftDirtyChangeRef = useRef(onJsonDraftDirtyChange);
+  onJsonDraftDirtyChangeRef.current = onJsonDraftDirtyChange;
   const [jsonDraft, setJsonDraft] = useState<string>(() =>
     initialJsonExport.ok ? initialJsonExport.text : '',
   );
@@ -303,104 +309,22 @@ export function PolicyEditorPane({
   const [varNameDrafts, setVarNameDrafts] = useState<Readonly<Record<string, string>>>({});
   const [varNameErrors, setVarNameErrors] = useState<Readonly<Record<string, string>>>({});
 
-  // Lifted integer drafts & errors keyed by stable logical fieldKey
-  const [intDraftValues, setIntDraftValues] = useState<Readonly<Record<string, string>>>({});
-  const [intDraftErrors, setIntDraftErrors] = useState<Readonly<Record<string, string>>>({});
-  const intDraftErrorsRef = useRef<Readonly<Record<string, string>>>({});
-
-  const handleIntDraftChange = useCallback(
-    (fieldKey: string, rawDraft: string, errorMessage: string | null) => {
-      setIntDraftValues((prev) => {
-        if (errorMessage === null) {
-          const parsed = parseStrictIntegerDraft(rawDraft);
-          if (parsed.ok && rawDraft === String(parsed.value)) {
-            if (!Object.hasOwn(prev, fieldKey)) return prev;
-            const next = { ...prev };
-            delete next[fieldKey];
-            return next;
-          }
-        }
-        if (prev[fieldKey] === rawDraft) return prev;
-        return { ...prev, [fieldKey]: rawDraft };
-      });
-
-      setIntDraftErrors((prev) => {
-        if (errorMessage === null) {
-          if (!Object.hasOwn(prev, fieldKey)) return prev;
-          const next = { ...prev };
-          delete next[fieldKey];
-          intDraftErrorsRef.current = next;
-          return next;
-        }
-        if (prev[fieldKey] === errorMessage) return prev;
-        const next = { ...prev, [fieldKey]: errorMessage };
-        intDraftErrorsRef.current = next;
-        return next;
-      });
-
-      onDraftErrorChangeRef.current?.(fieldKey, errorMessage);
-    },
-    [],
-  );
-
-  const pruneDraftsByPrefix = useCallback((prefix: string) => {
-    setIntDraftValues((prev) => {
-      let changed = false;
-      const next: Record<string, string> = {};
-      for (const [k, v] of Object.entries(prev)) {
-        if (matchesDraftPrefix(k, prefix)) {
-          changed = true;
-        } else {
-          next[k] = v;
-        }
-      }
-      return changed ? next : prev;
-    });
-
-    const removedErrorKeys: string[] = [];
-    for (const k of Object.keys(intDraftErrorsRef.current)) {
-      if (matchesDraftPrefix(k, prefix)) {
-        removedErrorKeys.push(k);
-      }
-    }
-
-    if (removedErrorKeys.length > 0) {
-      setIntDraftErrors((prev) => {
-        let changed = false;
-        const next: Record<string, string> = {};
-        for (const [k, v] of Object.entries(prev)) {
-          if (matchesDraftPrefix(k, prefix)) {
-            changed = true;
-          } else {
-            next[k] = v;
-          }
-        }
-        if (changed) {
-          intDraftErrorsRef.current = next;
-          return next;
-        }
-        return prev;
-      });
-      for (const k of removedErrorKeys) {
-        onDraftErrorChangeRef.current?.(k, null);
-      }
-    }
-  }, []);
-
-  const intDraftStore = useMemo<LiftedIntDraftStore>(
-    () => ({
-      draftValues: intDraftValues,
-      draftErrors: intDraftErrors,
-      onDraftChange: handleIntDraftChange,
-      onPruneDrafts: pruneDraftsByPrefix,
-    }),
-    [intDraftValues, intDraftErrors, handleIntDraftChange, pruneDraftsByPrefix],
-  );
+  // Lifted integer drafts & errors keyed by stable logical fieldKey (shared store)
+  const intDraftStore: LiftedIntDraftStore = useIntegerDraftStore({
+    resetKey,
+    onErrorChange: onDraftErrorChange,
+  });
+  const intDraftValues = intDraftStore.draftValues;
+  const intDraftErrors = intDraftStore.draftErrors;
+  const handleIntDraftChange = intDraftStore.onDraftChange;
+  const pruneDraftsByPrefix = intDraftStore.onPruneDrafts;
 
   useEffect(() => {
     const exported = tryExportModelJson(model);
     if (exported.ok) {
+      committedJsonRef.current = exported.text;
       setJsonDraft(exported.text);
+      onJsonDraftDirtyChangeRef.current?.(false);
       setJsonErrors([]);
       if (preserveNextNoticeRef.current) {
         preserveNextNoticeRef.current = false;
@@ -409,6 +333,7 @@ export function PolicyEditorPane({
       }
     } else {
       preserveNextNoticeRef.current = false;
+      onJsonDraftDirtyChangeRef.current?.(false);
       setJsonErrors([exported.error]);
       setJsonNotice(null);
     }
@@ -446,9 +371,6 @@ export function PolicyEditorPane({
       setExpandedRuleIds(nextExpanded);
       setVarNameDrafts({});
       setVarNameErrors({});
-      setIntDraftValues({});
-      setIntDraftErrors({});
-      intDraftErrorsRef.current = {};
     }
   }, [resetKey, model]);
 
@@ -821,7 +743,9 @@ export function PolicyEditorPane({
         // Fallback below
       }
     }
+    committedJsonRef.current = text;
     setJsonDraft(text);
+    onJsonDraftDirtyChangeRef.current?.(false);
     setJsonNotice('Synchronized current model JSON in the text area.');
   };
 
@@ -1930,7 +1854,11 @@ export function PolicyEditorPane({
               className="ag-textarea ag-textarea-mono"
               spellCheck={false}
               value={jsonDraft}
-              onChange={(e) => setJsonDraft(e.target.value)}
+              onChange={(e) => {
+                const nextVal = e.target.value;
+                setJsonDraft(nextVal);
+                onJsonDraftDirtyChangeRef.current?.(nextVal !== committedJsonRef.current);
+              }}
             />
           </div>
         </div>
