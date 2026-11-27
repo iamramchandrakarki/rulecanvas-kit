@@ -141,7 +141,7 @@ export function createAppVerifyClient(workerFactory?: WorkerFactory): VerifyClie
       ? {
           kind: 'app-worker',
           createWorker: createProtocolWorker,
-          asyncStartupError: 'fallback',
+          asyncStartupError: 'report',
         }
       : {
           kind: 'injected-worker',

@@ -429,4 +429,488 @@ describe('@rulecanvas/workbench verification transport and ownership contracts',
     expect(legacyRes2.kind).toBe('result');
     legacyClient.dispose();
   });
+
+  it('distinguishes worker construction failure from report-mode async startup failure', async () => {
+    // App-worker constructor failure still degrades to a legitimate main-thread run.
+    const constructorFallbackClient = createVerifyClient({
+      execution: {
+        kind: 'app-worker',
+        createWorker: () => {
+          throw new Error('Worker constructor unavailable');
+        },
+        asyncStartupError: 'report',
+      },
+    });
+    const fallback = await constructorFallbackClient.verify(counterModel, {
+      maxStates: 50,
+      maxDepth: 10,
+    });
+    expect(fallback.kind).toBe('result');
+    if (fallback.kind === 'result') {
+      expect(fallback.executionMode).toBe('main-thread');
+      expect(fallback.result.status).toBe('VERIFIED');
+    }
+    expect(constructorFallbackClient.getExecutionMode()).toBe('main-thread');
+    constructorFallbackClient.dispose();
+
+    // Report-mode async startup failure surfaces WORKER_ERROR and never claims a result.
+    const startupFailureClient = createVerifyClient({
+      execution: {
+        kind: 'app-worker',
+        createWorker: () => {
+          const w: VerifyWorkerInstance = {
+            onmessage: null,
+            onerror: null,
+            onmessageerror: null,
+            postMessage() {
+              queueMicrotask(() => w.onerror?.({ message: 'Worker module failed to load' }));
+            },
+            terminate() {},
+          };
+          return w;
+        },
+        asyncStartupError: 'report',
+      },
+    });
+    const failed = await startupFailureClient.verify(counterModel, { maxStates: 50, maxDepth: 10 });
+    expect(failed.kind).toBe('error');
+    if (failed.kind === 'error') {
+      expect(failed.code).toBe('WORKER_ERROR');
+      expect(failed.message).toBe('Worker module failed to load');
+    }
+    startupFailureClient.dispose();
+
+    // Injected-worker construction failure is reported rather than silently rerouted.
+    const injectedFailureClient = createVerifyClient({
+      execution: {
+        kind: 'injected-worker',
+        createWorker: () => {
+          throw new Error('Injected worker unavailable');
+        },
+      },
+    });
+    const injectedFailure = await injectedFailureClient.verify(counterModel, {
+      maxStates: 50,
+      maxDepth: 10,
+    });
+    expect(injectedFailure.kind).toBe('error');
+    if (injectedFailure.kind === 'error') {
+      expect(injectedFailure.code).toBe('WORKER_ERROR');
+    }
+    injectedFailureClient.dispose();
+  });
+
+  it('rejects malformed envelopes and strips unexpected properties from valid replies', async () => {
+    const options: VerifyOptions = { maxStates: 50, maxDepth: 10 };
+    const genuine = verifyModel(counterModel, options);
+    if (genuine.status !== 'VERIFIED') throw new Error('Expected a verified fixture');
+
+    const decorate = (): unknown => ({
+      ...genuine,
+      unexpectedRoot: 'strip-me',
+      stats: { ...genuine.stats, unexpectedStats: 'strip-me' },
+      assumptions: genuine.assumptions.map((a) => ({ ...a, unexpectedAssumption: 'strip-me' })),
+    });
+
+    const direct = sanitizeAndFreezeVerifyResult(decorate(), counterModel, options);
+    expect(direct.ok).toBe(true);
+    if (direct.ok && direct.result.status === 'VERIFIED') {
+      expect(Object.hasOwn(direct.result, 'unexpectedRoot')).toBe(false);
+      expect(Object.hasOwn(direct.result.stats, 'unexpectedStats')).toBe(false);
+      expect(Object.hasOwn(direct.result.assumptions[0]!, 'unexpectedAssumption')).toBe(false);
+      expect(Object.isFrozen(direct.result)).toBe(true);
+    }
+
+    const runWithReply = async (reply: (req: { generation: number; requestId: number }) => unknown) => {
+      const client = createVerifyClient({
+        execution: {
+          kind: 'injected-worker',
+          createWorker: () => {
+            let worker!: VerifyWorkerInstance;
+            worker = {
+              onmessage: null,
+              onerror: null,
+              onmessageerror: null,
+              postMessage(msg) {
+                const req = msg as { generation: number; requestId: number };
+                queueMicrotask(() => worker.onmessage?.({ data: reply(req) }));
+              },
+              terminate() {},
+            };
+            return worker;
+          },
+        },
+      });
+      const settled = await client.verify(counterModel, options);
+      client.dispose();
+      return settled;
+    };
+
+    const nonObjectResult = await runWithReply((req) => ({
+      protocolVersion: VERIFY_PROTOCOL_VERSION,
+      generation: req.generation,
+      requestId: req.requestId,
+      type: 'result',
+      result: 'not-an-object',
+    }));
+    expect(nonObjectResult.kind).toBe('error');
+    if (nonObjectResult.kind === 'error') {
+      expect(nonObjectResult.code).toBe('INTEGRITY_ERROR');
+    }
+
+    const unsupportedProtocol = await runWithReply((req) => ({
+      protocolVersion: 'v0',
+      generation: req.generation,
+      requestId: req.requestId,
+      type: 'result',
+      result: genuine,
+    }));
+    expect(unsupportedProtocol.kind).toBe('error');
+    if (unsupportedProtocol.kind === 'error') {
+      expect(unsupportedProtocol.code).toBe('INTEGRITY_ERROR');
+    }
+
+    const unrecognizedType = await runWithReply((req) => ({
+      protocolVersion: VERIFY_PROTOCOL_VERSION,
+      generation: req.generation,
+      requestId: req.requestId,
+      type: 'unexpected',
+    }));
+    expect(unrecognizedType.kind).toBe('error');
+    if (unrecognizedType.kind === 'error') {
+      expect(unrecognizedType.code).toBe('INTEGRITY_ERROR');
+    }
+
+    const stripped = await runWithReply((req) => ({
+      protocolVersion: VERIFY_PROTOCOL_VERSION,
+      generation: req.generation,
+      requestId: req.requestId,
+      type: 'result',
+      result: decorate(),
+    }));
+    expect(stripped.kind).toBe('result');
+    if (stripped.kind === 'result' && stripped.result.status === 'VERIFIED') {
+      expect(Object.hasOwn(stripped.result, 'unexpectedRoot')).toBe(false);
+      expect(Object.hasOwn(stripped.result.stats, 'unexpectedStats')).toBe(false);
+    }
+  });
+
+  it('rejects forged theoreticalStates against the exact BigInt schema product', async () => {
+    const options: VerifyOptions = { maxStates: 50, maxDepth: 10 };
+    const genuine = verifyModel(counterModel, options);
+    if (genuine.status !== 'VERIFIED') throw new Error('Expected a verified fixture');
+    const forged = { ...genuine, stats: { ...genuine.stats, theoreticalStates: '8' } };
+    expect(genuine.stats.theoreticalStates).toBe('7');
+
+    const direct = sanitizeAndFreezeVerifyResult(forged, counterModel, options);
+    expect(direct.ok).toBe(false);
+
+    const client = createVerifyClient({
+      execution: {
+        kind: 'injected-worker',
+        createWorker: () => {
+          let worker!: VerifyWorkerInstance;
+          worker = {
+            onmessage: null,
+            onerror: null,
+            onmessageerror: null,
+            postMessage(msg) {
+              const req = msg as { generation: number; requestId: number };
+              queueMicrotask(() =>
+                worker.onmessage?.({
+                  data: {
+                    protocolVersion: VERIFY_PROTOCOL_VERSION,
+                    generation: req.generation,
+                    requestId: req.requestId,
+                    type: 'result',
+                    result: forged,
+                  },
+                }),
+              );
+            },
+            terminate() {},
+          };
+          return worker;
+        },
+      },
+    });
+    const settled = await client.verify(counterModel, options);
+    expect(settled.kind).toBe('error');
+    if (settled.kind === 'error') {
+      expect(settled.code).toBe('INTEGRITY_ERROR');
+    }
+    client.dispose();
+  });
+
+  it('rejects forged VIOLATED traces that do not replay deterministically', async () => {
+    const options: VerifyOptions = { maxStates: 100, maxDepth: 10 };
+    const violatingModel: TransitionSystemModel = {
+      ...counterModel,
+      id: 'counter-violation',
+      name: 'Counter Violation',
+      rules: [
+        ...counterModel.rules,
+        {
+          id: 'reset',
+          label: 'Reset',
+          guard: { op: 'lit', value: false },
+          updates: [{ var: 'x', value: { op: 'lit', value: 0 } }],
+        },
+      ],
+      invariants: [
+        {
+          id: 'inv_small',
+          label: 'x stays small',
+          holds: { op: 'lte', left: { op: 'var', name: 'x' }, right: { op: 'lit', value: 3 } },
+        },
+        {
+          id: 'inv_nonneg',
+          label: 'x stays non-negative',
+          holds: { op: 'gte', left: { op: 'var', name: 'x' }, right: { op: 'lit', value: 0 } },
+        },
+      ],
+    };
+
+    const genuine = verifyModel(violatingModel, options);
+    if (genuine.status !== 'VIOLATED') throw new Error('Expected a violated fixture');
+    expect(genuine.trace.length).toBe(4);
+    expect(genuine.terminalState['x']).toBe(4);
+    expect(genuine.violatedInvariantIds).toEqual(['inv_small']);
+    expect(sanitizeAndFreezeVerifyResult(genuine, violatingModel, options).ok).toBe(true);
+
+    const lastStep = genuine.trace[3]!;
+    const forgedVariants: readonly unknown[] = [
+      {
+        ...genuine,
+        trace: genuine.trace.map((step, i) =>
+          i === 3 ? { ...step, stateAfter: { ...step.stateAfter, x: 5 } } : step,
+        ),
+      },
+      {
+        ...genuine,
+        trace: genuine.trace.map((step, i) => (i === 2 ? { ...step, changedVars: [] } : step)),
+      },
+      { ...genuine, terminalState: { ...genuine.terminalState, x: 5 } },
+      { ...genuine, violatedInvariantIds: ['inv_nonneg'] },
+      {
+        ...genuine,
+        trace: genuine.trace.map((step, i) => (i === 0 ? { ...step, ruleId: 'reset' } : step)),
+      },
+      {
+        ...genuine,
+        trace: genuine.trace.map((step, i) => (i === 0 ? { ...step, ruleId: 'missing_rule' } : step)),
+      },
+      { ...genuine, stats: { ...genuine.stats, maxDepthReached: 3 } },
+      { ...genuine, stats: { ...genuine.stats, maxDepthReached: 9 } },
+    ];
+    for (const forged of forgedVariants) {
+      expect(sanitizeAndFreezeVerifyResult(forged, violatingModel, options).ok).toBe(false);
+    }
+
+    // Empty traces are valid for initial-state violations and still replay-checked.
+    const initialViolationModel: TransitionSystemModel = {
+      ...violatingModel,
+      invariants: [
+        { id: 'inv_initial', label: 'Never true at start', holds: { op: 'lit', value: false } },
+      ],
+    };
+    const initialViolation = verifyModel(initialViolationModel, options);
+    if (initialViolation.status !== 'VIOLATED') throw new Error('Expected initial violation');
+    expect(initialViolation.trace).toEqual([]);
+    expect(sanitizeAndFreezeVerifyResult(initialViolation, initialViolationModel, options).ok).toBe(
+      true,
+    );
+    expect(
+      sanitizeAndFreezeVerifyResult(
+        { ...initialViolation, terminalState: { x: 1 } },
+        initialViolationModel,
+        options,
+      ).ok,
+    ).toBe(false);
+
+    // Client-level transport reports INTEGRITY_ERROR for a tampered trace.
+    const client = createVerifyClient({
+      execution: {
+        kind: 'injected-worker',
+        createWorker: () => {
+          let worker!: VerifyWorkerInstance;
+          worker = {
+            onmessage: null,
+            onerror: null,
+            onmessageerror: null,
+            postMessage(msg) {
+              const req = msg as { generation: number; requestId: number };
+              queueMicrotask(() =>
+                worker.onmessage?.({
+                  data: {
+                    protocolVersion: VERIFY_PROTOCOL_VERSION,
+                    generation: req.generation,
+                    requestId: req.requestId,
+                    type: 'result',
+                    result: {
+                      ...genuine,
+                      trace: genuine.trace.map((step, i) =>
+                        i === 3 ? { ...step, stateAfter: { ...step.stateAfter, x: 5 } } : step,
+                      ),
+                    },
+                  },
+                }),
+              );
+            },
+            terminate() {},
+          };
+          return worker;
+        },
+      },
+    });
+    const settled = await client.verify(violatingModel, options);
+    expect(settled.kind).toBe('error');
+    if (settled.kind === 'error') {
+      expect(settled.code).toBe('INTEGRITY_ERROR');
+    }
+    client.dispose();
+    expect(lastStep.ruleId).toBe('inc');
+  });
+
+  it('accepts genuine INVALID prefix traces only when they reproduce the out-of-domain diagnostic', () => {
+    const options: VerifyOptions = { maxStates: 50, maxDepth: 10 };
+    const invalidModel: TransitionSystemModel = {
+      id: 'invalid-step',
+      name: 'Invalid step',
+      schema: { x: { kind: 'int', min: 0, max: 1 } },
+      initialState: { x: 0 },
+      rules: [
+        {
+          id: 'to_one',
+          label: 'Move to one',
+          guard: { op: 'eq', left: { op: 'var', name: 'x' }, right: { op: 'lit', value: 0 } },
+          updates: [{ var: 'x', value: { op: 'lit', value: 1 } }],
+        },
+        {
+          id: 'overflow',
+          label: 'Overflow',
+          guard: { op: 'eq', left: { op: 'var', name: 'x' }, right: { op: 'lit', value: 1 } },
+          updates: [
+            {
+              var: 'x',
+              value: { op: 'add', left: { op: 'var', name: 'x' }, right: { op: 'lit', value: 1 } },
+            },
+          ],
+        },
+      ],
+      invariants: [{ id: 'inv_x', label: 'Always holds', holds: { op: 'lit', value: true } }],
+      assumptions: [
+        { id: 'asm_1', category: 'scope', statement: 'Discrete.', notModeled: 'Timing.' },
+      ],
+    };
+
+    const genuine = verifyModel(invalidModel, options);
+    if (genuine.status !== 'INVALID') throw new Error('Expected an invalid fixture');
+    expect(genuine.errors[0]?.code).toBe('OUT_OF_DOMAIN_TRANSITION');
+    expect(genuine.trace).toHaveLength(1);
+    expect(genuine.stats?.maxDepthReached).toBe(1);
+
+    expect(sanitizeAndFreezeVerifyResult(genuine, invalidModel, options).ok).toBe(true);
+    // Trace without paired stats is rejected outright.
+    expect(
+      sanitizeAndFreezeVerifyResult(
+        { status: 'INVALID', errors: genuine.errors, trace: genuine.trace },
+        invalidModel,
+        options,
+      ).ok,
+    ).toBe(false);
+    // Tampered prefix steps and diagnostics are rejected.
+    expect(
+      sanitizeAndFreezeVerifyResult(
+        {
+          ...genuine,
+          trace: genuine.trace!.map((step) => ({ ...step, changedVars: [] })),
+        },
+        invalidModel,
+        options,
+      ).ok,
+    ).toBe(false);
+    expect(
+      sanitizeAndFreezeVerifyResult(
+        {
+          ...genuine,
+          errors: genuine.errors.map((err) => ({ ...err, message: 'forged diagnostic' })),
+        },
+        invalidModel,
+        options,
+      ).ok,
+    ).toBe(false);
+    // INVALID without a trace remains admissible when diagnostics are well formed.
+    expect(
+      sanitizeAndFreezeVerifyResult(
+        { status: 'INVALID', errors: genuine.errors },
+        invalidModel,
+        options,
+      ).ok,
+    ).toBe(true);
+  });
+
+  it('ignores stale replies and wrong-generation envelopes while settling the active request', async () => {
+    const posted: Array<{ generation: number; requestId: number }> = [];
+    let worker!: VerifyWorkerInstance;
+    worker = {
+      onmessage: null,
+      onerror: null,
+      onmessageerror: null,
+      postMessage(msg) {
+        posted.push(msg as { generation: number; requestId: number });
+      },
+      terminate() {},
+    };
+    const client = createVerifyClient({
+      execution: { kind: 'injected-worker', createWorker: () => worker },
+    });
+
+    const first = client.verify(counterModel, { maxStates: 50, maxDepth: 10 });
+    const second = client.verify(counterModel, { maxStates: 50, maxDepth: 10 });
+    expect((await first).kind).toBe('cancelled');
+    expect(posted).toHaveLength(2);
+
+    const genuine = verifyModel(counterModel, { maxStates: 50, maxDepth: 10 });
+    const active = posted[1]!;
+
+    // Stale reply for the superseded request is ignored.
+    worker.onmessage?.({
+      data: {
+        protocolVersion: VERIFY_PROTOCOL_VERSION,
+        generation: posted[0]!.generation,
+        requestId: posted[0]!.requestId,
+        type: 'result',
+        result: genuine,
+      },
+    });
+    // Wrong generation for the active request is ignored.
+    worker.onmessage?.({
+      data: {
+        protocolVersion: VERIFY_PROTOCOL_VERSION,
+        generation: active.generation + 1,
+        requestId: active.requestId,
+        type: 'result',
+        result: genuine,
+      },
+    });
+    // Active, correctly correlated reply settles.
+    worker.onmessage?.({
+      data: {
+        protocolVersion: VERIFY_PROTOCOL_VERSION,
+        generation: active.generation,
+        requestId: active.requestId,
+        type: 'result',
+        result: genuine,
+      },
+    });
+
+    const settled = await second;
+    expect(settled.kind).toBe('result');
+    if (settled.kind === 'result') {
+      expect(settled.requestId).toBe(active.requestId);
+      expect(settled.result.status).toBe('VERIFIED');
+    }
+    client.dispose();
+  });
 });

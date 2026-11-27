@@ -1,4 +1,6 @@
 import {
+  replayTrace,
+  stepModel,
   validateModel,
   validateOptions,
   type ModelAssumption,
@@ -8,6 +10,7 @@ import {
   type ValidationError,
   type VerifyOptions,
   type VerifyResult,
+  type VerifyStats,
 } from '@rulecanvas/core';
 
 const MAX_CAPTURE_DEPTH = 128;
@@ -341,24 +344,136 @@ function validateOwnedStateSnapshot(
   return true;
 }
 
-function validateOwnedTrace(
+function expectedTheoreticalStates(model: TransitionSystemModel): string {
+  let product = 1n;
+  for (const name of Object.keys(model.schema)) {
+    const def = model.schema[name]!;
+    if (def.kind === 'boolean') {
+      product *= 2n;
+    } else if (def.kind === 'enum') {
+      product *= BigInt(def.values.length);
+    } else {
+      product *= BigInt(def.max) - BigInt(def.min) + 1n;
+    }
+  }
+  return product.toString();
+}
+
+function rebuildStateSnapshot(
+  rawState: unknown,
+  model: TransitionSystemModel,
+): StateSnapshot | null {
+  if (!validateOwnedStateSnapshot(rawState, model)) return null;
+  const source = rawState as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(model.schema)) {
+    defineEnumerableData(out, key, source[key]);
+  }
+  return out as StateSnapshot;
+}
+
+function rebuildTraceSteps(
   rawTrace: unknown,
   model: TransitionSystemModel,
-  maxAllowedLen: number,
-): rawTrace is TraceStep[] {
-  if (!Array.isArray(rawTrace) || rawTrace.length > maxAllowedLen) return false;
-  const ruleIds = new Set(model.rules.map((r) => r.id));
-  const schemaKeys = new Set(Object.keys(model.schema));
+): TraceStep[] | null {
+  if (!Array.isArray(rawTrace)) return null;
+  const out: TraceStep[] = [];
   for (let i = 0; i < rawTrace.length; i += 1) {
-    const step = rawTrace[i];
-    if (!isPlainRecord(step)) return false;
-    if (typeof step['ruleId'] !== 'string' || !ruleIds.has(step['ruleId'])) return false;
-    if (!validateOwnedStateSnapshot(step['stateBefore'], model)) return false;
-    if (!validateOwnedStateSnapshot(step['stateAfter'], model)) return false;
-    if (!Array.isArray(step['changedVars'])) return false;
-    for (const v of step['changedVars']) {
-      if (typeof v !== 'string' || !schemaKeys.has(v)) return false;
+    const step: unknown = rawTrace[i];
+    if (!isPlainRecord(step)) return null;
+    const ruleId = step['ruleId'];
+    if (typeof ruleId !== 'string') return null;
+    const stateBefore = rebuildStateSnapshot(step['stateBefore'], model);
+    const stateAfter = rebuildStateSnapshot(step['stateAfter'], model);
+    if (stateBefore === null || stateAfter === null) return null;
+    const rawChanged = step['changedVars'];
+    if (!Array.isArray(rawChanged)) return null;
+    const changedVars: string[] = [];
+    for (let j = 0; j < rawChanged.length; j += 1) {
+      const name: unknown = rawChanged[j];
+      if (typeof name !== 'string' || !Object.hasOwn(model.schema, name)) return null;
+      changedVars.push(name);
     }
+    out.push({ ruleId, stateBefore, stateAfter, changedVars });
+  }
+  return out;
+}
+
+function rebuildAssumptions(
+  rawAssumptions: unknown,
+  capturedAssumptions: readonly ModelAssumption[],
+): ModelAssumption[] | null {
+  if (!validateOwnedAssumptions(rawAssumptions, capturedAssumptions)) return null;
+  return capturedAssumptions.map((a) => ({
+    id: a.id,
+    category: a.category,
+    statement: a.statement,
+    notModeled: a.notModeled,
+  }));
+}
+
+function rebuildErrors(rawErrors: unknown): ValidationError[] | null {
+  if (!validateOwnedErrors(rawErrors)) return null;
+  const out: ValidationError[] = [];
+  for (let i = 0; i < rawErrors.length; i += 1) {
+    const err = rawErrors[i]!;
+    out.push({ code: err['code'], path: err['path'], message: err['message'] });
+  }
+  return out;
+}
+
+function rebuildStats(
+  rawStats: unknown,
+  model: TransitionSystemModel,
+  options: VerifyOptions,
+): VerifyStats | null {
+  if (!validateOwnedStats(rawStats, options)) return null;
+  const source = rawStats as Record<string, unknown>;
+  const theoreticalStates = source['theoreticalStates'] as string;
+  if (theoreticalStates !== expectedTheoreticalStates(model)) return null;
+  return {
+    theoreticalStates,
+    statesExplored: source['statesExplored'] as number,
+    transitionsEvaluated: source['transitionsEvaluated'] as number,
+    maxDepthReached: source['maxDepthReached'] as number,
+    deadlockStatesFound: source['deadlockStatesFound'] as number,
+  };
+}
+
+function stateSnapshotsEqual(
+  left: StateSnapshot,
+  right: StateSnapshot,
+  model: TransitionSystemModel,
+): boolean {
+  const keys = Object.keys(model.schema);
+  for (let i = 0; i < keys.length; i += 1) {
+    const key = keys[i]!;
+    if (left[key] !== right[key]) return false;
+  }
+  return true;
+}
+
+function stringListsEqual(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length !== right.length) return false;
+  for (let i = 0; i < left.length; i += 1) {
+    if (left[i] !== right[i]) return false;
+  }
+  return true;
+}
+
+function traceStepsEqual(
+  candidate: readonly TraceStep[],
+  expected: readonly TraceStep[],
+  model: TransitionSystemModel,
+): boolean {
+  if (candidate.length !== expected.length) return false;
+  for (let i = 0; i < candidate.length; i += 1) {
+    const left = candidate[i]!;
+    const right = expected[i]!;
+    if (left.ruleId !== right.ruleId) return false;
+    if (!stateSnapshotsEqual(left.stateBefore, right.stateBefore, model)) return false;
+    if (!stateSnapshotsEqual(left.stateAfter, right.stateAfter, model)) return false;
+    if (!stringListsEqual(left.changedVars, right.changedVars)) return false;
   }
   return true;
 }
@@ -438,37 +553,99 @@ export function sanitizeAndFreezeVerifyResult(
     }
 
     if (status === 'INVALID') {
-      if (!validateOwnedErrors(owned['errors'])) {
+      const errors = rebuildErrors(owned['errors']);
+      if (errors === null) {
         return { ok: false, message: 'INVALID verification result has malformed diagnostics.' };
       }
-      if (owned['stats'] !== undefined && !validateOwnedStats(owned['stats'], capturedOptions)) {
-        return { ok: false, message: 'INVALID verification result has out-of-bounds stats.' };
+      const hasStats = owned['stats'] !== undefined;
+      const stats = hasStats ? rebuildStats(owned['stats'], capturedModel, capturedOptions) : undefined;
+      if (stats === null) {
+        return { ok: false, message: 'INVALID verification result has out-of-bounds or mismatched stats.' };
       }
+
+      let trace: TraceStep[] | undefined;
       if (owned['trace'] !== undefined) {
-        const stats = owned['stats'] as { maxDepthReached: number } | undefined;
-        const maxTraceLen = stats !== undefined ? stats.maxDepthReached : capturedOptions.maxDepth;
-        if (!validateOwnedTrace(owned['trace'], capturedModel, maxTraceLen)) {
+        if (stats === undefined) {
+          return { ok: false, message: 'INVALID verification result with a trace requires paired stats.' };
+        }
+        const rebuiltTrace = rebuildTraceSteps(owned['trace'], capturedModel);
+        if (rebuiltTrace === null) {
           return { ok: false, message: 'INVALID verification result has a malformed trace.' };
         }
+        // Bounds are checked before any deterministic replay work.
+        if (
+          rebuiltTrace.length > stats.maxDepthReached ||
+          stats.maxDepthReached > capturedOptions.maxDepth
+        ) {
+          return {
+            ok: false,
+            message: 'INVALID verification result trace exceeds the captured depth bound.',
+          };
+        }
+        const replay = replayTrace(
+          capturedModel,
+          rebuiltTrace.map((step) => step.ruleId),
+        );
+        if (!replay.ok || !traceStepsEqual(rebuiltTrace, replay.steps, capturedModel)) {
+          return {
+            ok: false,
+            message: 'INVALID verification result trace does not replay deterministically.',
+          };
+        }
+        const diagnostic = errors.find((err) => err.code === 'OUT_OF_DOMAIN_TRANSITION');
+        if (diagnostic === undefined) {
+          return {
+            ok: false,
+            message: 'INVALID verification result trace lacks an out-of-domain diagnostic.',
+          };
+        }
+        let reproduced = false;
+        for (const rule of capturedModel.rules) {
+          const stepped = stepModel(capturedModel, replay.finalState, rule.id);
+          if (
+            !stepped.ok &&
+            stepped.error.code === diagnostic.code &&
+            stepped.error.path === diagnostic.path &&
+            stepped.error.message === diagnostic.message
+          ) {
+            reproduced = true;
+            break;
+          }
+        }
+        if (!reproduced) {
+          return {
+            ok: false,
+            message:
+              'INVALID verification result trace does not reproduce its out-of-domain diagnostic.',
+          };
+        }
+        trace = replay.steps.map((step) => ({
+          ruleId: step.ruleId,
+          stateBefore: { ...step.stateBefore },
+          stateAfter: { ...step.stateAfter },
+          changedVars: [...step.changedVars],
+        }));
       }
-      if (
-        owned['assumptions'] !== undefined &&
-        !validateOwnedAssumptions(owned['assumptions'], capturedModel.assumptions)
-      ) {
-        return {
-          ok: false,
-          message: 'INVALID verification result assumptions do not match the captured model snapshot.',
-        };
-      }
-      return { ok: true, result: deepFreeze(owned as unknown as VerifyResult) };
+
+      const result: VerifyResult = {
+        status: 'INVALID',
+        errors,
+        ...(stats !== undefined ? { stats } : {}),
+        ...(trace !== undefined ? { trace } : {}),
+      };
+      return { ok: true, result: deepFreeze(result) };
     }
 
-    if (!validateOwnedStats(owned['stats'], capturedOptions)) {
-      return { ok: false, message: `${status} result has missing or out-of-bounds stats.` };
+    const stats = rebuildStats(owned['stats'], capturedModel, capturedOptions);
+    if (stats === null) {
+      return {
+        ok: false,
+        message: `${status} result has missing, out-of-bounds, or mismatched stats.`,
+      };
     }
-    const stats = owned['stats'];
 
-    if (!validateOwnedAssumptions(owned['assumptions'], capturedModel.assumptions)) {
+    const assumptions = rebuildAssumptions(owned['assumptions'], capturedModel.assumptions);
+    if (assumptions === null) {
       return {
         ok: false,
         message: `${status} result assumptions do not match the captured model snapshot.`,
@@ -479,43 +656,101 @@ export function sanitizeAndFreezeVerifyResult(
       if (owned['trace'] !== undefined) {
         return { ok: false, message: 'VERIFIED result must not include a counterexample trace.' };
       }
-      if (owned['goalReachable'] !== undefined && typeof owned['goalReachable'] !== 'boolean') {
+      const goalReachable = owned['goalReachable'];
+      if (goalReachable !== undefined && typeof goalReachable !== 'boolean') {
         return { ok: false, message: 'VERIFIED result has non-boolean goalReachable.' };
       }
-      if (capturedModel.goal !== undefined && typeof owned['goalReachable'] !== 'boolean') {
+      if (capturedModel.goal !== undefined && typeof goalReachable !== 'boolean') {
         return { ok: false, message: 'VERIFIED result is missing goalReachable for declared goal.' };
       }
-      if (capturedModel.goal === undefined && owned['goalReachable'] !== undefined) {
+      if (capturedModel.goal === undefined && goalReachable !== undefined) {
         return { ok: false, message: 'VERIFIED result reported goalReachable without a declared goal.' };
       }
-      return { ok: true, result: deepFreeze(owned as unknown as VerifyResult) };
+      const result: VerifyResult = {
+        status: 'VERIFIED',
+        stats,
+        ...(typeof goalReachable === 'boolean' ? { goalReachable } : {}),
+        assumptions,
+      };
+      return { ok: true, result: deepFreeze(result) };
     }
 
     if (status === 'VIOLATED') {
-      if (!validateOwnedTrace(owned['trace'], capturedModel, stats.maxDepthReached)) {
-        return { ok: false, message: 'VIOLATED result trace is malformed or exceeds maxDepthReached.' };
+      const trace = rebuildTraceSteps(owned['trace'], capturedModel);
+      if (trace === null) {
+        return { ok: false, message: 'VIOLATED result trace is malformed.' };
       }
-      if (owned['trace'].length !== stats.maxDepthReached) {
+      // Bounds are checked before any deterministic replay work.
+      if (trace.length > stats.maxDepthReached || stats.maxDepthReached > capturedOptions.maxDepth) {
+        return { ok: false, message: 'VIOLATED result trace exceeds maxDepthReached.' };
+      }
+      if (trace.length !== stats.maxDepthReached) {
         return { ok: false, message: 'VIOLATED result trace length must match maxDepthReached.' };
       }
-      if (!validateOwnedStateSnapshot(owned['terminalState'], capturedModel)) {
+      const terminalState = rebuildStateSnapshot(owned['terminalState'], capturedModel);
+      if (terminalState === null) {
         return { ok: false, message: 'VIOLATED result terminalState does not match model schema.' };
       }
       const invIds = new Set(capturedModel.invariants.map((inv) => inv.id));
+      const rawViolated = owned['violatedInvariantIds'];
       if (
-        !Array.isArray(owned['violatedInvariantIds']) ||
-        owned['violatedInvariantIds'].length === 0 ||
-        !owned['violatedInvariantIds'].every((id) => typeof id === 'string' && invIds.has(id))
+        !Array.isArray(rawViolated) ||
+        rawViolated.length === 0 ||
+        !rawViolated.every((id) => typeof id === 'string' && invIds.has(id))
       ) {
         return { ok: false, message: 'VIOLATED result has invalid violatedInvariantIds.' };
       }
+      const violatedInvariantIds = rawViolated as string[];
+
+      const replay = replayTrace(
+        capturedModel,
+        trace.map((step) => step.ruleId),
+      );
+      if (!replay.ok) {
+        return { ok: false, message: 'VIOLATED result trace does not replay deterministically.' };
+      }
+      if (!traceStepsEqual(trace, replay.steps, capturedModel)) {
+        return {
+          ok: false,
+          message: 'VIOLATED result trace does not match deterministic replay steps.',
+        };
+      }
+      if (!stateSnapshotsEqual(terminalState, replay.finalState, capturedModel)) {
+        return {
+          ok: false,
+          message: 'VIOLATED result terminalState does not match deterministic replay.',
+        };
+      }
+      if (!stringListsEqual(violatedInvariantIds, replay.violatedInvariantIds)) {
+        return {
+          ok: false,
+          message: 'VIOLATED result violatedInvariantIds do not match deterministic replay.',
+        };
+      }
+
+      const goalReachable = owned['goalReachable'];
       if (
-        owned['goalReachable'] !== undefined &&
-        (owned['goalReachable'] !== true || capturedModel.goal === undefined || owned['trace'].length === 0)
+        goalReachable !== undefined &&
+        (goalReachable !== true || capturedModel.goal === undefined || trace.length === 0)
       ) {
         return { ok: false, message: 'VIOLATED result has inconsistent goalReachable metadata.' };
       }
-      return { ok: true, result: deepFreeze(owned as unknown as VerifyResult) };
+
+      const result: VerifyResult = {
+        status: 'VIOLATED',
+        trace: replay.steps.map((step) => ({
+          ruleId: step.ruleId,
+          stateBefore: { ...step.stateBefore },
+          stateAfter: { ...step.stateAfter },
+          changedVars: [...step.changedVars],
+        })),
+        terminalState: { ...replay.finalState },
+        violatedInvariantIds: [...replay.violatedInvariantIds],
+        stats,
+        ...(goalReachable === true ? { goalReachable: true as const } : {}),
+        assumptions,
+      };
+      return { ok: true, result: deepFreeze(result) };
     }
 
     // status === 'INCONCLUSIVE'
@@ -556,13 +791,23 @@ export function sanitizeAndFreezeVerifyResult(
         message: 'MAX_DEPTH result does not match captured maxDepth bound.',
       };
     }
+    const goalReachable = owned['goalReachable'];
     if (
-      owned['goalReachable'] !== undefined &&
-      (owned['goalReachable'] !== true || capturedModel.goal === undefined)
+      goalReachable !== undefined &&
+      (goalReachable !== true || capturedModel.goal === undefined)
     ) {
       return { ok: false, message: 'INCONCLUSIVE result has inconsistent goalReachable metadata.' };
     }
-    return { ok: true, result: deepFreeze(owned as unknown as VerifyResult) };
+    const result: VerifyResult = {
+      status: 'INCONCLUSIVE',
+      reason,
+      completedDepth,
+      frontierRemaining: owned['frontierRemaining'] as number,
+      stats,
+      ...(goalReachable === true ? { goalReachable: true as const } : {}),
+      assumptions,
+    };
+    return { ok: true, result: deepFreeze(result) };
   } catch (err) {
     return {
       ok: false,

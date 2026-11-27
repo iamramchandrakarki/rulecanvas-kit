@@ -442,9 +442,8 @@ export function removeAssumption(
   };
 }
 
-const interlockStrictCodec = createModelJsonCodec(DEFAULT_MODEL_JSON_LIMITS);
-const interlockLegacyImportCodec = createModelJsonCodec(DEFAULT_MODEL_JSON_LIMITS, {
-  duplicateKeys: 'last-value',
+const interlockStrictCodec = createModelJsonCodec(DEFAULT_MODEL_JSON_LIMITS, {
+  duplicateKeys: 'reject',
 });
 
 const DRAFT_RESERVED_KEYS: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype']);
@@ -589,12 +588,12 @@ export function tryExportModelJson(model: TransitionSystemModel): JsonExportResu
 }
 
 export function validateImportedModelValue(candidate: unknown): JsonImportResult {
-  return interlockLegacyImportCodec.validateValue(candidate);
+  return interlockStrictCodec.validateValue(candidate);
 }
 
 export function importModelFromJson(rawText: unknown): JsonImportResult {
   if (typeof rawText !== 'string' && rawText !== null && typeof rawText === 'object') {
-    return interlockLegacyImportCodec.validateValue(rawText);
+    return interlockStrictCodec.validateValue(rawText);
   }
-  return interlockLegacyImportCodec.decode(rawText);
+  return interlockStrictCodec.decode(rawText);
 }

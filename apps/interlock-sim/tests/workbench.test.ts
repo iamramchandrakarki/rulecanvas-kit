@@ -25,6 +25,7 @@ import {
   stepReplayForward,
 } from '@rulecanvas/ui';
 import { describe, expect, it, vi } from 'vitest';
+import { DEFAULT_MODEL_JSON_LIMITS } from '@rulecanvas/workbench/model-json';
 import { isCanonicalVacuousLockoutModel } from '../src/model-inspector.js';
 import { App } from '../src/App.js';
 import { AirlockSchematic } from '../src/components/AirlockSchematic.js';
@@ -609,7 +610,7 @@ describe('InterlockSim workbench architecture, semantics, security, and UI', () 
     }
     fallbackClient.dispose();
 
-    // Asynchronous Worker startup failure falls back to main-thread cleanly
+    // Asynchronous Worker startup failure is reported accurately as WORKER_ERROR (no silent fallback)
     const origWorker = (globalThis as { Worker?: unknown }).Worker;
     class AsyncFailingWorker {
       public onmessage: ((ev: { readonly data: unknown }) => void) | null = null;
@@ -623,16 +624,39 @@ describe('InterlockSim workbench architecture, semantics, security, and UI', () 
     }
     (globalThis as { Worker?: unknown }).Worker = AsyncFailingWorker;
     try {
-      const startupFallbackClient = new VerifyWorkerClient();
-      expect(startupFallbackClient.getExecutionMode()).toBe('worker');
-      const recovered = await startupFallbackClient.verify(model, DEFAULT_VERIFY_OPTIONS);
+      const startupFailureClient = new VerifyWorkerClient();
+      expect(startupFailureClient.getExecutionMode()).toBe('worker');
+      const failed = await startupFailureClient.verify(model, DEFAULT_VERIFY_OPTIONS);
+      expect(failed.status).toBe('error');
+      if (failed.status === 'error') {
+        expect(failed.message).toContain('Failed to load worker module script');
+      }
+      startupFailureClient.dispose();
+    } finally {
+      if (origWorker === undefined) {
+        delete (globalThis as { Worker?: unknown }).Worker;
+      } else {
+        (globalThis as { Worker?: unknown }).Worker = origWorker;
+      }
+    }
+
+    // Worker construction failure (constructor throws) still falls back to the main thread cleanly
+    class ThrowingWorker {
+      constructor() {
+        throw new Error('Worker constructor unavailable');
+      }
+    }
+    (globalThis as { Worker?: unknown }).Worker = ThrowingWorker;
+    try {
+      const constructorFallbackClient = new VerifyWorkerClient();
+      const recovered = await constructorFallbackClient.verify(model, DEFAULT_VERIFY_OPTIONS);
       expect(recovered.status).toBe('completed');
       if (recovered.status === 'completed') {
         expect(recovered.executionMode).toBe('main-thread');
         expect(recovered.result.status).toBe('VERIFIED');
       }
-      expect(startupFallbackClient.getExecutionMode()).toBe('main-thread');
-      startupFallbackClient.dispose();
+      expect(constructorFallbackClient.getExecutionMode()).toBe('main-thread');
+      constructorFallbackClient.dispose();
     } finally {
       if (origWorker === undefined) {
         delete (globalThis as { Worker?: unknown }).Worker;
@@ -1236,16 +1260,17 @@ describe('InterlockSim workbench architecture, semantics, security, and UI', () 
       expect(zeroCompactExport.text.length).toBeLessThanOrEqual(512_000);
     }
 
-    // Legacy import wrapper preserves last-value semantics for duplicate keys
+    // Strict shared codec rejects duplicate keys instead of preserving last-value semantics
     const baselineJson = exportModelToJson(bsl3AirlockFixedModel);
     const dupNamePayload = baselineJson.replace(
       `"name": ${JSON.stringify(bsl3AirlockFixedModel.name)},`,
       `"name": "First Name",\n  "name": "Second Name",`,
     );
-    const legacyDupImport = importModelFromJson(dupNamePayload);
-    expect(legacyDupImport.ok).toBe(true);
-    if (legacyDupImport.ok) {
-      expect(legacyDupImport.model.name).toBe('Second Name');
+    const strictDupImport = importModelFromJson(dupNamePayload);
+    expect(strictDupImport.ok).toBe(false);
+    if (!strictDupImport.ok) {
+      expect(strictDupImport.errors[0]?.code).toBe('DUPLICATE_JSON_KEY');
+      expect(strictDupImport.errors[0]?.path).toBe('$');
     }
 
     // Any model whose export succeeds (near-budget 28 rules x 60 clauses) must re-import cleanly
@@ -1405,6 +1430,8 @@ describe('InterlockSim workbench architecture, semantics, security, and UI', () 
     expect(altVacuousHtml).not.toContain('open_inner_door');
 
     // R2-7a: Valid JSON nested 257 levels returns IMPORT_COMPLEXITY_EXCEEDED (not JSON_PARSE_ERROR)
+    expect(DEFAULT_MODEL_JSON_LIMITS.maxChars).toBe(512_000);
+    expect(DEFAULT_MODEL_JSON_LIMITS.maxRawNesting).toBe(256);
     const nested257 = `${'['.repeat(257)}${']'.repeat(257)}`;
     const deepJsonResult = importModelFromJson(nested257);
     expect(deepJsonResult.ok).toBe(false);
