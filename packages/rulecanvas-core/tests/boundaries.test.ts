@@ -253,6 +253,17 @@ const FORBIDDEN_GLOBALS = new Set([
   'Function',
 ]);
 
+// Overclaim paraphrases, matched within one sentence. A directly negated verb ("not certified",
+// "does not prove", "never guaranteed") is a disclaimer, not a claim.
+const NOT = String.raw`(?<!\b(?:not|never|no|cannot|can't|isn't|aren't)\s+)`;
+const OVERCLAIM_PATTERNS: readonly RegExp[] = [
+  new RegExp(String.raw`${NOT}\bproves?\b[^.!?\n]{0,80}\bsafe\b`, 'i'),
+  new RegExp(String.raw`${NOT}\bcertified\b[^.!?\n]{0,60}\b(?:safety|interlock|verifier)\b`, 'i'),
+  new RegExp(String.raw`${NOT}\bguarantee(?:s|d)?\b[^.!?\n]{0,20}\b(?:safe|secure)\b`, 'i'),
+  new RegExp(String.raw`${NOT}\beliminates\s+all\b`, 'i'),
+  /\b100\s*%\s*(?:safe|secure)\b/i,
+];
+
 function isNonReferenceIdentifier(parent: AstNode | null, parentKey: string | null): boolean {
   if (!parent) return false;
   if (parent.type === 'MemberExpression' && parentKey === 'property' && !parent.computed) return true;
@@ -1062,7 +1073,26 @@ describe('architecture and honesty boundaries', () => {
       }
     }
 
+    // 4. Static hub, starter template, and app HTML entry points
+    const textExtensions = new Set(['.html', '.css', '.js', '.mjs', '.ts', '.tsx', '.md', '.json', '.txt']);
+    for (const group of ['site', 'templates'] as const) {
+      const groupDir = path.join(REPO_ROOT, group);
+      expect(existsSync(groupDir), `${group}/ must exist`).toBe(true);
+      for (const file of walkFiles(groupDir, (p) => textExtensions.has(path.extname(p)) && path.basename(p) !== 'OFL.txt')) {
+        claimFiles.push({ label: path.relative(REPO_ROOT, file), text: readFileSync(file, 'utf8') });
+      }
+    }
+    for (const app of readdirSync(path.join(REPO_ROOT, 'apps'))) {
+      const entry = path.join(REPO_ROOT, 'apps', app, 'index.html');
+      if (existsSync(entry)) {
+        claimFiles.push({ label: path.relative(REPO_ROOT, entry), text: readFileSync(entry, 'utf8') });
+      }
+    }
+
     expect(claimFiles.length).toBeGreaterThan(0);
+
+    // Paraphrase patterns, matched within one sentence.
+    const forbiddenPatterns = OVERCLAIM_PATTERNS;
 
     const violations: string[] = [];
     for (const item of claimFiles) {
@@ -1072,9 +1102,90 @@ describe('architecture and honesty boundaries', () => {
           violations.push(`${item.label}: contains forbidden overclaim phrase "${phrase}"`);
         }
       }
+      for (const pattern of forbiddenPatterns) {
+        const match = pattern.exec(normalized);
+        if (match !== null) {
+          violations.push(`${item.label}: overclaim pattern ${pattern} matched "${match[0]}"`);
+        }
+      }
     }
 
     expect(violations).toEqual([]);
+  });
+
+  it('overclaim patterns catch paraphrases and allow disclaimers', () => {
+    const patterns = OVERCLAIM_PATTERNS;
+    const flagged = (text: string) => patterns.some((p) => p.test(text));
+    for (const claim of [
+      'The checker proves your pipeline is safe.',
+      'A certified BSL-3 interlock.',
+      'Certified formal verifier',
+      'Guaranteed safe releases',
+      'It eliminates all approval bugs.',
+      '100 % secure agents',
+    ]) {
+      expect(flagged(claim), claim).toBe(true);
+    }
+    for (const disclaimer of [
+      'It has no IEC 61508 or SIL certification.',
+      'A result describes the model you wrote, not the system it stands for.',
+      'Reach production safely',
+      'Educational simulation only; not certified for IEC 61508 / SIL or physical safety-critical engineering.',
+      'A VERIFIED verdict does not prove the real system is safe.',
+    ]) {
+      expect(flagged(disclaimer), disclaimer).toBe(false);
+    }
+  });
+
+  it('keeps site/ portable: relative asset and link paths, no other origins except the GitHub repository', () => {
+    const siteDir = path.join(REPO_ROOT, 'site');
+    const violations: string[] = [];
+    for (const file of walkFiles(siteDir, (p) => ['.html', '.css', '.js'].includes(path.extname(p)))) {
+      const rel = path.relative(REPO_ROOT, file);
+      const text = readFileSync(file, 'utf8');
+      for (const m of text.matchAll(/\b(?:href|src|action|poster)\s*=\s*["']([^"']*)["']/gi)) {
+        const value = m[1]!;
+        if (value.startsWith('/') && !value.startsWith('//')) violations.push(`${rel}: root-absolute path ${value}`);
+        if (value.startsWith('//')) violations.push(`${rel}: protocol-relative URL ${value}`);
+        if (/^https?:/i.test(value) && !value.startsWith('https://github.com/iamramchandrakarki/rulecanvas-kit')) {
+          violations.push(`${rel}: other-origin URL ${value}`);
+        }
+      }
+      for (const m of text.matchAll(/url\(\s*["']?([^"')]+)/gi)) {
+        const value = m[1]!.trim();
+        if (!value.startsWith('./') && !value.startsWith('data:')) violations.push(`${rel}: non-relative url(${value})`);
+      }
+      for (const m of text.matchAll(/@import\s+["']([^"']+)/gi)) {
+        violations.push(`${rel}: @import ${m[1]}`);
+      }
+      if (/\bfetch\(|XMLHttpRequest|WebSocket|EventSource|sendBeacon/.test(text)) {
+        violations.push(`${rel}: network API use`);
+      }
+    }
+    expect(violations).toEqual([]);
+  });
+
+  it('keeps exactly two showcase apps and keeps site/ and templates/ out of the pnpm workspace', () => {
+    const apps = readdirSync(path.join(REPO_ROOT, 'apps')).filter((name) =>
+      statSync(path.join(REPO_ROOT, 'apps', name)).isDirectory(),
+    );
+    expect(apps.sort()).toEqual(['agent-gate', 'interlock-sim']);
+    const workspace = readFileSync(path.join(REPO_ROOT, 'pnpm-workspace.yaml'), 'utf8');
+    const globs = [...workspace.matchAll(/^\s+-\s+['"]?([^'"\n]+)['"]?\s*$/gm)].map((m) => m[1]!.trim());
+    expect(globs).toEqual(['packages/*', 'apps/*']);
+    const starterPkg = JSON.parse(
+      readFileSync(path.join(REPO_ROOT, 'templates/workbench-starter/package.json'), 'utf8'),
+    ) as { dependencies: Record<string, string> };
+    for (const lib of ['core', 'ui', 'workbench', 'workbench-react']) {
+      const { version } = JSON.parse(
+        readFileSync(path.join(REPO_ROOT, `packages/rulecanvas-${lib}/package.json`), 'utf8'),
+      ) as { version: string };
+      const spec = `file:../rulecanvas-tarballs/rulecanvas-${lib}-${version}.tgz`;
+      expect(starterPkg.dependencies[`@rulecanvas/${lib}`], `starter @rulecanvas/${lib}`).toBe(spec);
+      expect(
+        readFileSync(path.join(REPO_ROOT, 'templates/workbench-starter/pnpm-workspace.yaml'), 'utf8'),
+      ).toContain(`'@rulecanvas/${lib}': ${spec}`);
+    }
   });
 
   it('enforces acyclic workspace package-manifest graph, strict layering, zero cross-app imports, and zero deep internal package imports', () => {
