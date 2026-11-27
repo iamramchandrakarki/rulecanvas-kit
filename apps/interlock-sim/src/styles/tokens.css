@@ -1,4 +1,11 @@
-/* RuleCanvasKit Design System Tokens — InterlockSim Simulator & P&ID Schematic (Light, Dark & System) */
+/*
+ * RuleCanvasKit shared design tokens (Light, Dark & System).
+ *
+ * This file is byte-identical in both workbench apps. Edit both copies
+ * together; the design-token parity test fails when they drift.
+ * App-specific tokens (for example the schematic palette) live in the
+ * app's own stylesheet, never here.
+ */
 
 @font-face {
   font-family: 'IBM Plex Sans';
@@ -70,146 +77,164 @@
 :root[data-theme='light'] {
   color-scheme: light;
 
-  /* Surface hierarchy (off-white slate; zero pure white glare) */
+  /* Surface hierarchy: paper (canvas) -> surface (panes, controls) -> subtle (wells, headers) -> tint */
   --color-paper: oklch(98.2% 0.004 250);
-  --color-paper-2: oklch(99.4% 0.002 250);
-  --color-paper-3: oklch(96.2% 0.006 250);
+  --color-surface: oklch(99.4% 0.002 250);
+  --color-surface-subtle: oklch(96.2% 0.006 250);
+  --color-surface-tint: oklch(94.2% 0.010 252);
 
-  /* Ink (>= 4.5:1 contrast across surfaces) */
-  --color-ink: oklch(19.5% 0.018 255);
-  --color-ink-2: oklch(37.5% 0.018 254);
-  --color-muted: oklch(46.5% 0.016 252);
-
-  /* Structural hairlines & >= 3:1 interactive control borders */
+  /* Hairlines and >= 3:1 interactive control borders */
+  --color-rule-subtle: oklch(91.5% 0.008 250);
   --color-rule: oklch(88.2% 0.010 250);
-  --color-rule-2: oklch(91.5% 0.008 250);
+  --color-rule-strong: oklch(76.5% 0.016 250);
   --color-control-border: oklch(59% 0.025 252);
 
-  /* Primary & secondary engineering signals */
+  /* Ink (>= 4.5:1 on every surface) */
+  --color-ink: oklch(19.5% 0.018 255);
+  --color-ink-secondary: oklch(37.5% 0.018 254);
+  --color-ink-muted: oklch(46.5% 0.016 252);
+
+  /* Proposition and code surfaces */
+  --color-code-bg: oklch(96.4% 0.006 250);
+  --color-code-border: oklch(87% 0.012 250);
+  --color-code-ink: oklch(21% 0.018 255);
+  --color-code-muted: oklch(46% 0.016 252);
+
+  /* Precision Cobalt: primary action, selection, focus */
   --color-accent: oklch(45.5% 0.175 256);
   --color-accent-hover: oklch(40.5% 0.175 256);
   --color-accent-fill: oklch(45.5% 0.175 256);
   --color-accent-fill-hover: oklch(40.5% 0.175 256);
-  --color-accent-ink: oklch(99.4% 0.002 250);
   --color-accent-soft: oklch(95% 0.024 256);
   --color-accent-border: oklch(78% 0.075 256);
+  --color-accent-ink: oklch(99.4% 0.002 250);
+  --color-focus: oklch(45.5% 0.175 256);
 
-  --color-accent-2: oklch(43% 0.14 235);
-  --color-accent-2-soft: oklch(95% 0.024 235);
+  /* Change marker (modified variables, replay deltas) */
+  --color-info: oklch(43% 0.14 235);
+  --color-info-soft: oklch(95% 0.024 235);
 
-  /* Semantic verdict & interlock safety tokens */
+  /* Semantic verdict and diagnostic tokens (>= 4.5:1 text on soft tint) */
   --color-success: oklch(39.5% 0.13 152);
-  --color-success-bg: oklch(95.5% 0.028 152);
+  --color-success-soft: oklch(95.5% 0.028 152);
   --color-success-border: oklch(78% 0.075 152);
 
   --color-warning: oklch(41.5% 0.125 72);
-  --color-warning-bg: oklch(96% 0.032 76);
+  --color-warning-soft: oklch(96% 0.032 76);
   --color-warning-border: oklch(79% 0.085 74);
 
-  --color-error: oklch(44.5% 0.18 25);
-  --color-error-fill: oklch(44.5% 0.18 25);
-  --color-error-bg: oklch(96% 0.026 25);
-  --color-error-border: oklch(80% 0.08 25);
+  --color-danger: oklch(44.5% 0.18 25);
+  --color-danger-fill: oklch(44.5% 0.18 25);
+  --color-danger-soft: oklch(96% 0.026 25);
+  --color-danger-border: oklch(80% 0.08 25);
 
-  --color-focus: oklch(45.5% 0.175 256);
+  --color-error: oklch(43.5% 0.175 18);
+  --color-error-soft: oklch(96% 0.026 18);
+  --color-error-border: oklch(80% 0.08 18);
+
   --color-scrim: oklch(15% 0.02 255 / 0.44);
   --shadow-dialog: 0 12px 32px -4px oklch(12% 0.02 255 / 0.24);
-
-  /* Selective Direction B CAD/P&ID schematic stage tokens */
-  --schematic-well-bg: oklch(96.8% 0.005 248);
-  --schematic-grid-line: oklch(91.5% 0.008 248);
-  --schematic-corridor-bg: oklch(98.5% 0.003 250);
-  --schematic-chamber-neg: oklch(95.8% 0.016 240);
-  --schematic-chamber-eq: oklch(96.6% 0.020 78);
-  --schematic-chamber-uv: oklch(95.5% 0.024 285);
-  --schematic-chamber-breach: oklch(95.6% 0.030 25);
-  --schematic-lab-bg: oklch(95.2% 0.018 242);
-  --schematic-bulkhead: oklch(92.5% 0.010 250);
+  --shadow-popover: 0 6px 18px -6px oklch(12% 0.02 255 / 0.22);
 
   /* Typography */
   --font-display:
     'IBM Plex Sans', 'IBM Plex Sans Fallback', -apple-system, BlinkMacSystemFont, 'Segoe UI',
     sans-serif;
-  --font-body: var(--font-display);
-  --font-outlier:
+  --font-body:
+    'IBM Plex Sans', 'IBM Plex Sans Fallback', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    sans-serif;
+  --font-mono:
     'IBM Plex Mono', 'IBM Plex Mono Fallback', ui-monospace, 'SFMono-Regular', Menlo, Monaco,
     Consolas, monospace;
 
-  /* Scale, spacing & crisp radii */
-  --text-xs: 0.75rem;
-  --text-sm: 0.8125rem;
-  --text-md: 0.84375rem;
-  --text-lg: 0.9375rem;
+  --text-2xs: 0.71875rem; /* 11.5px metadata, step numbers */
+  --text-xs: 0.75rem; /* 12px labels, mono data */
+  --text-sm: 0.8125rem; /* 13px controls, section titles */
+  --text-md: 0.84375rem; /* 13.5px body prose */
+  --text-lg: 0.9375rem; /* 15px pane titles, verdict headline */
 
-  --space-3xs: 2px;
-  --space-2xs: 4px;
-  --space-xs: 8px;
-  --space-sm: 12px;
-  --space-md: 16px;
-  --space-lg: 24px;
+  /* Control sizing: 32px default, 28px compact rows, 26px dense AST editor */
+  --control-h: 32px;
+  --control-h-sm: 28px;
+  --control-h-xs: 26px;
+  --header-h: 44px;
 
+  /* Crisp engineering radii and 4px spacing grid */
   --radius-xs: 2px;
   --radius-sm: 3px;
   --radius-md: 4px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
 
   /* Motion */
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
-  --dur-micro: 120ms;
-  --dur-short: 160ms;
+  --dur-fast: 120ms;
+  --dur-base: 160ms;
+
+  scrollbar-color: var(--color-rule-strong) transparent;
 }
 
 :root[data-theme='dark'] {
   color-scheme: dark;
 
   --color-paper: oklch(15.2% 0.010 255);
-  --color-paper-2: oklch(18.4% 0.012 255);
-  --color-paper-3: oklch(21.6% 0.013 255);
+  --color-surface: oklch(18.4% 0.012 255);
+  --color-surface-subtle: oklch(21.6% 0.013 255);
+  --color-surface-tint: oklch(25% 0.016 255);
+
+  --color-rule-subtle: oklch(24.5% 0.012 255);
+  --color-rule: oklch(28.5% 0.014 255);
+  --color-rule-strong: oklch(38% 0.016 254);
+  --color-control-border: oklch(49.5% 0.020 254);
 
   --color-ink: oklch(94.5% 0.006 250);
-  --color-ink-2: oklch(80.5% 0.010 252);
-  --color-muted: oklch(70.5% 0.012 252);
+  --color-ink-secondary: oklch(80.5% 0.010 252);
+  --color-ink-muted: oklch(70.5% 0.012 252);
 
-  --color-rule: oklch(28.5% 0.014 255);
-  --color-rule-2: oklch(24.5% 0.012 255);
-  --color-control-border: oklch(49.5% 0.020 254);
+  --color-code-bg: oklch(14% 0.010 255);
+  --color-code-border: oklch(28.5% 0.014 255);
+  --color-code-ink: oklch(93% 0.008 250);
+  --color-code-muted: oklch(70.5% 0.012 252);
 
   --color-accent: oklch(74.5% 0.13 252);
   --color-accent-hover: oklch(79% 0.125 252);
   --color-accent-fill: oklch(52% 0.165 256);
   --color-accent-fill-hover: oklch(56.5% 0.165 256);
-  --color-accent-ink: oklch(99% 0.003 250);
   --color-accent-soft: oklch(24% 0.042 254);
   --color-accent-border: oklch(48% 0.11 254);
+  --color-accent-ink: oklch(99% 0.003 250);
+  --color-focus: oklch(75% 0.135 252);
 
-  --color-accent-2: oklch(76% 0.12 232);
-  --color-accent-2-soft: oklch(22.5% 0.038 232);
+  --color-info: oklch(76% 0.12 232);
+  --color-info-soft: oklch(22.5% 0.038 232);
 
   --color-success: oklch(78.5% 0.13 152);
-  --color-success-bg: oklch(23% 0.038 152);
+  --color-success-soft: oklch(23% 0.038 152);
   --color-success-border: oklch(46% 0.10 152);
 
   --color-warning: oklch(81% 0.135 76);
-  --color-warning-bg: oklch(23.5% 0.042 75);
+  --color-warning-soft: oklch(23.5% 0.042 75);
   --color-warning-border: oklch(49% 0.105 75);
 
-  --color-error: oklch(76.5% 0.145 25);
-  --color-error-fill: oklch(45% 0.175 25);
-  --color-error-bg: oklch(23% 0.048 25);
-  --color-error-border: oklch(48% 0.12 25);
+  --color-danger: oklch(76.5% 0.145 25);
+  --color-danger-fill: oklch(45% 0.175 25);
+  --color-danger-soft: oklch(23% 0.048 25);
+  --color-danger-border: oklch(48% 0.12 25);
 
-  --color-focus: oklch(75% 0.135 252);
+  --color-error: oklch(76.5% 0.145 18);
+  --color-error-soft: oklch(23% 0.048 18);
+  --color-error-border: oklch(48% 0.12 18);
+
   --color-scrim: oklch(6% 0.01 255 / 0.68);
   --shadow-dialog: 0 16px 40px -4px oklch(0% 0 0 / 0.58);
+  --shadow-popover: 0 8px 24px -6px oklch(0% 0 0 / 0.6);
 
-  --schematic-well-bg: oklch(13.2% 0.010 255);
-  --schematic-grid-line: oklch(19.5% 0.012 255);
-  --schematic-corridor-bg: oklch(16% 0.010 255);
-  --schematic-chamber-neg: oklch(17.5% 0.025 240);
-  --schematic-chamber-eq: oklch(18.5% 0.026 75);
-  --schematic-chamber-uv: oklch(18.5% 0.035 285);
-  --schematic-chamber-breach: oklch(19% 0.048 25);
-  --schematic-lab-bg: oklch(16.5% 0.026 242);
-  --schematic-bulkhead: oklch(23% 0.014 255);
+  scrollbar-color: var(--color-control-border) transparent;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -217,53 +242,62 @@
     color-scheme: dark;
 
     --color-paper: oklch(15.2% 0.010 255);
-    --color-paper-2: oklch(18.4% 0.012 255);
-    --color-paper-3: oklch(21.6% 0.013 255);
+    --color-surface: oklch(18.4% 0.012 255);
+    --color-surface-subtle: oklch(21.6% 0.013 255);
+    --color-surface-tint: oklch(25% 0.016 255);
+
+    --color-rule-subtle: oklch(24.5% 0.012 255);
+    --color-rule: oklch(28.5% 0.014 255);
+    --color-rule-strong: oklch(38% 0.016 254);
+    --color-control-border: oklch(49.5% 0.020 254);
 
     --color-ink: oklch(94.5% 0.006 250);
-    --color-ink-2: oklch(80.5% 0.010 252);
-    --color-muted: oklch(70.5% 0.012 252);
+    --color-ink-secondary: oklch(80.5% 0.010 252);
+    --color-ink-muted: oklch(70.5% 0.012 252);
 
-    --color-rule: oklch(28.5% 0.014 255);
-    --color-rule-2: oklch(24.5% 0.012 255);
-    --color-control-border: oklch(49.5% 0.020 254);
+    --color-code-bg: oklch(14% 0.010 255);
+    --color-code-border: oklch(28.5% 0.014 255);
+    --color-code-ink: oklch(93% 0.008 250);
+    --color-code-muted: oklch(70.5% 0.012 252);
 
     --color-accent: oklch(74.5% 0.13 252);
     --color-accent-hover: oklch(79% 0.125 252);
     --color-accent-fill: oklch(52% 0.165 256);
     --color-accent-fill-hover: oklch(56.5% 0.165 256);
-    --color-accent-ink: oklch(99% 0.003 250);
     --color-accent-soft: oklch(24% 0.042 254);
     --color-accent-border: oklch(48% 0.11 254);
+    --color-accent-ink: oklch(99% 0.003 250);
+    --color-focus: oklch(75% 0.135 252);
 
-    --color-accent-2: oklch(76% 0.12 232);
-    --color-accent-2-soft: oklch(22.5% 0.038 232);
+    --color-info: oklch(76% 0.12 232);
+    --color-info-soft: oklch(22.5% 0.038 232);
 
     --color-success: oklch(78.5% 0.13 152);
-    --color-success-bg: oklch(23% 0.038 152);
+    --color-success-soft: oklch(23% 0.038 152);
     --color-success-border: oklch(46% 0.10 152);
 
     --color-warning: oklch(81% 0.135 76);
-    --color-warning-bg: oklch(23.5% 0.042 75);
+    --color-warning-soft: oklch(23.5% 0.042 75);
     --color-warning-border: oklch(49% 0.105 75);
 
-    --color-error: oklch(76.5% 0.145 25);
-    --color-error-fill: oklch(45% 0.175 25);
-    --color-error-bg: oklch(23% 0.048 25);
-    --color-error-border: oklch(48% 0.12 25);
+    --color-danger: oklch(76.5% 0.145 25);
+    --color-danger-fill: oklch(45% 0.175 25);
+    --color-danger-soft: oklch(23% 0.048 25);
+    --color-danger-border: oklch(48% 0.12 25);
 
-    --color-focus: oklch(75% 0.135 252);
+    --color-error: oklch(76.5% 0.145 18);
+    --color-error-soft: oklch(23% 0.048 18);
+    --color-error-border: oklch(48% 0.12 18);
+
     --color-scrim: oklch(6% 0.01 255 / 0.68);
     --shadow-dialog: 0 16px 40px -4px oklch(0% 0 0 / 0.58);
+    --shadow-popover: 0 8px 24px -6px oklch(0% 0 0 / 0.6);
 
-    --schematic-well-bg: oklch(13.2% 0.010 255);
-    --schematic-grid-line: oklch(19.5% 0.012 255);
-    --schematic-corridor-bg: oklch(16% 0.010 255);
-    --schematic-chamber-neg: oklch(17.5% 0.025 240);
-    --schematic-chamber-eq: oklch(18.5% 0.026 75);
-    --schematic-chamber-breach: oklch(19% 0.048 25);
-    --schematic-chamber-uv: oklch(18.5% 0.035 285);
-    --schematic-lab-bg: oklch(16.5% 0.026 242);
-    --schematic-bulkhead: oklch(23% 0.014 255);
+    scrollbar-color: var(--color-control-border) transparent;
   }
+}
+
+::selection {
+  background-color: var(--color-accent-soft);
+  color: var(--color-ink);
 }

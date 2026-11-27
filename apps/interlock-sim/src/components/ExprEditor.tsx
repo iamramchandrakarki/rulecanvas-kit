@@ -302,7 +302,7 @@ export function ValueExprEditor({
         )}
 
         {(value.op === 'add' || value.op === 'sub') && (
-          <span className="is-mono" style={{ fontSize: 'var(--text-xs)', color: 'var(--color-muted)' }}>
+          <span className="is-mono" style={{ fontSize: 'var(--text-xs)', color: 'var(--color-ink-muted)' }}>
             {formatValueExpr(value)}
           </span>
         )}
@@ -475,7 +475,7 @@ export function BoolExprEditor({
         )}
 
         {depth === 0 && (
-          <span className="is-mono" style={{ fontSize: 'var(--text-xs)', color: 'var(--color-muted)' }}>
+          <span className="is-mono" style={{ fontSize: 'var(--text-xs)', color: 'var(--color-ink-muted)' }}>
             {formatBoolExpr(value)}
           </span>
         )}

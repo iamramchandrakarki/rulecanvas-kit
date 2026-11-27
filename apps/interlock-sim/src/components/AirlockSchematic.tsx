@@ -350,20 +350,20 @@ export function AirlockSchematic({
       ? 'var(--color-accent)'
       : outerDoor === 'closed'
         ? 'var(--color-ink)'
-        : 'var(--color-muted)';
+        : 'var(--color-ink-muted)';
   const innerStroke = containmentBreach
-    ? 'var(--color-error)'
+    ? 'var(--color-danger)'
     : innerDoor === 'open'
       ? 'var(--color-accent)'
       : innerDoor === 'closed'
         ? 'var(--color-ink)'
-        : 'var(--color-muted)';
+        : 'var(--color-ink-muted)';
   const chamberStroke = !isEvaluated
     ? 'var(--color-control-border)'
     : hasViolation
-      ? 'var(--color-error)'
+      ? 'var(--color-danger)'
       : pressure === 'negative'
-        ? 'var(--color-accent-2)'
+        ? 'var(--color-info)'
         : 'var(--color-warning)';
 
   const chamberFill = hasViolation
@@ -437,7 +437,7 @@ export function AirlockSchematic({
           <text
             x="22"
             y="46"
-            fill="var(--color-ink-2)"
+            fill="var(--color-ink-secondary)"
             fontSize="11.5"
             fontFamily="var(--font-body)"
             fontWeight="600"
@@ -447,9 +447,9 @@ export function AirlockSchematic({
           <text
             x="22"
             y="66"
-            fill="var(--color-muted)"
+            fill="var(--color-ink-muted)"
             fontSize="11.5"
-            fontFamily="var(--font-outlier)"
+            fontFamily="var(--font-mono)"
           >
             P = 0 Pa (ref)
           </text>
@@ -479,17 +479,17 @@ export function AirlockSchematic({
                 width="10"
                 height="96"
                 fill="var(--color-ink)"
-                stroke="var(--color-paper-2)"
+                stroke="var(--color-surface)"
                 strokeWidth="1"
               />
               <text
                 x="161"
                 y="17"
                 textAnchor="middle"
-                fill="var(--color-ink-2)"
+                fill="var(--color-ink-secondary)"
                 fontSize="11"
                 fontWeight="600"
-                fontFamily="var(--font-outlier)"
+                fontFamily="var(--font-mono)"
               >
                 OUTER: SEALED
               </text>
@@ -514,7 +514,7 @@ export function AirlockSchematic({
                 fill={outerStroke}
                 fontSize="11"
                 fontWeight="600"
-                fontFamily="var(--font-outlier)"
+                fontFamily="var(--font-mono)"
               >
                 OUTER: OPEN
               </text>
@@ -534,9 +534,9 @@ export function AirlockSchematic({
                 x="161"
                 y="17"
                 textAnchor="middle"
-                fill="var(--color-muted)"
+                fill="var(--color-ink-muted)"
                 fontSize="10.5"
-                fontFamily="var(--font-outlier)"
+                fontFamily="var(--font-mono)"
               >
                 OUTER: N/A
               </text>
@@ -571,10 +571,10 @@ export function AirlockSchematic({
             width="156"
             height="28"
             rx="2"
-            fill="var(--color-paper-2)"
+            fill="var(--color-surface)"
             stroke={
               pressure === 'negative'
-                ? 'var(--color-accent-2)'
+                ? 'var(--color-info)'
                 : pressure === 'equalized'
                   ? 'var(--color-warning-border)'
                   : 'var(--color-rule)'
@@ -585,14 +585,14 @@ export function AirlockSchematic({
             y="74"
             fill={
               pressure === 'negative'
-                ? 'var(--color-accent-2)'
+                ? 'var(--color-info)'
                 : pressure === 'equalized'
                   ? 'var(--color-warning)'
-                  : 'var(--color-muted)'
+                  : 'var(--color-ink-muted)'
             }
             fontSize="11"
             fontWeight="600"
-            fontFamily="var(--font-outlier)"
+            fontFamily="var(--font-mono)"
           >
             {pressure === 'negative'
               ? 'ΔP: NEGATIVE (-Pa)'
@@ -608,17 +608,17 @@ export function AirlockSchematic({
             width="144"
             height="28"
             rx="2"
-            fill={uvState === 'active' ? 'var(--color-accent-fill)' : 'var(--color-paper-2)'}
-            stroke={uvHazard ? 'var(--color-error)' : 'var(--color-control-border)'}
+            fill={uvState === 'active' ? 'var(--color-accent-fill)' : 'var(--color-surface)'}
+            stroke={uvHazard ? 'var(--color-danger)' : 'var(--color-control-border)'}
           />
           <text
             x="434"
             y="50"
             textAnchor="middle"
-            fill={uvState === 'active' ? 'var(--color-accent-ink)' : 'var(--color-ink-2)'}
+            fill={uvState === 'active' ? 'var(--color-accent-ink)' : 'var(--color-ink-secondary)'}
             fontSize="11"
             fontWeight="600"
-            fontFamily="var(--font-outlier)"
+            fontFamily="var(--font-mono)"
           >
             {uvState === 'active' ? 'UV-C: ACTIVE' : uvState === 'off' ? 'UV-C: OFF' : 'UV-C: N/A'}
           </text>
@@ -637,14 +637,14 @@ export function AirlockSchematic({
             width="102"
             height="78"
             rx="2"
-            fill="var(--color-paper-2)"
-            stroke={occupiedState === 'occupied' ? 'var(--color-accent-2)' : 'var(--color-rule)'}
+            fill="var(--color-surface)"
+            stroke={occupiedState === 'occupied' ? 'var(--color-info)' : 'var(--color-rule)'}
           />
           <text
             x="245"
             y="119"
             textAnchor="middle"
-            fill="var(--color-muted)"
+            fill="var(--color-ink-muted)"
             fontSize="10.5"
             fontFamily="var(--font-body)"
             fontWeight="500"
@@ -653,11 +653,11 @@ export function AirlockSchematic({
           </text>
           {occupiedState === 'occupied' ? (
             <g>
-              <circle cx="245" cy="134" r="6" fill="var(--color-accent-2)" />
+              <circle cx="245" cy="134" r="6" fill="var(--color-info)" />
               <path
                 d="M233 154c1.5-7 6-10 12-10s10.5 3 12 10"
                 fill="none"
-                stroke="var(--color-accent-2)"
+                stroke="var(--color-info)"
                 strokeWidth="2"
                 strokeLinecap="round"
               />
@@ -668,7 +668,7 @@ export function AirlockSchematic({
                 fill="var(--color-ink)"
                 fontSize="10.5"
                 fontWeight="600"
-                fontFamily="var(--font-outlier)"
+                fontFamily="var(--font-mono)"
               >
                 OCCUPIED
               </text>
@@ -678,9 +678,9 @@ export function AirlockSchematic({
               x="245"
               y="152"
               textAnchor="middle"
-              fill="var(--color-muted)"
+              fill="var(--color-ink-muted)"
               fontSize="11"
-              fontFamily="var(--font-outlier)"
+              fontFamily="var(--font-mono)"
             >
               {occupiedState === 'empty' ? 'UNOCCUPIED' : 'N/A'}
             </text>
@@ -693,14 +693,14 @@ export function AirlockSchematic({
             width="98"
             height="78"
             rx="2"
-            fill="var(--color-paper-2)"
+            fill="var(--color-surface)"
             stroke="var(--color-rule)"
           />
           <text
             x="355"
             y="119"
             textAnchor="middle"
-            fill="var(--color-muted)"
+            fill="var(--color-ink-muted)"
             fontSize="10.5"
             fontFamily="var(--font-body)"
             fontWeight="500"
@@ -714,7 +714,7 @@ export function AirlockSchematic({
             height="18"
             rx="1.5"
             fill={
-              purgeCycles !== null && purgeCycles >= 1 ? 'var(--color-success)' : 'var(--color-paper-3)'
+              purgeCycles !== null && purgeCycles >= 1 ? 'var(--color-success)' : 'var(--color-surface-subtle)'
             }
             stroke="var(--color-control-border)"
           />
@@ -725,7 +725,7 @@ export function AirlockSchematic({
             height="18"
             rx="1.5"
             fill={
-              purgeCycles !== null && purgeCycles >= 2 ? 'var(--color-success)' : 'var(--color-paper-3)'
+              purgeCycles !== null && purgeCycles >= 2 ? 'var(--color-success)' : 'var(--color-surface-subtle)'
             }
             stroke="var(--color-control-border)"
           />
@@ -733,10 +733,10 @@ export function AirlockSchematic({
             x="355"
             y="170"
             textAnchor="middle"
-            fill={purgeCycles !== null ? 'var(--color-ink)' : 'var(--color-muted)'}
+            fill={purgeCycles !== null ? 'var(--color-ink)' : 'var(--color-ink-muted)'}
             fontSize="10.5"
             fontWeight="600"
-            fontFamily="var(--font-outlier)"
+            fontFamily="var(--font-mono)"
           >
             {purgeCycles !== null ? `${purgeCycles} / ${purgeMax} cycles` : 'N/A'}
           </text>
@@ -748,14 +748,14 @@ export function AirlockSchematic({
             width="92"
             height="78"
             rx="2"
-            fill={overrideState === 'engaged' ? 'var(--color-warning-bg)' : 'var(--color-paper-2)'}
+            fill={overrideState === 'engaged' ? 'var(--color-warning-soft)' : 'var(--color-surface)'}
             stroke={overrideState === 'engaged' ? 'var(--color-warning-border)' : 'var(--color-rule)'}
           />
           <text
             x="460"
             y="119"
             textAnchor="middle"
-            fill="var(--color-muted)"
+            fill="var(--color-ink-muted)"
             fontSize="10.5"
             fontFamily="var(--font-body)"
             fontWeight="500"
@@ -766,7 +766,7 @@ export function AirlockSchematic({
             cx="460"
             cy="139"
             r="9"
-            fill={overrideState === 'engaged' ? 'var(--color-warning)' : 'var(--color-paper-3)'}
+            fill={overrideState === 'engaged' ? 'var(--color-warning)' : 'var(--color-surface-subtle)'}
             stroke="var(--color-control-border)"
           />
           <line
@@ -774,7 +774,7 @@ export function AirlockSchematic({
             y1="139"
             x2={overrideState === 'engaged' ? '467' : '460'}
             y2={overrideState === 'engaged' ? '139' : '132'}
-            stroke={overrideState === 'engaged' ? 'var(--color-paper-2)' : 'var(--color-ink-2)'}
+            stroke={overrideState === 'engaged' ? 'var(--color-surface)' : 'var(--color-ink-secondary)'}
             strokeWidth="2"
             strokeLinecap="round"
           />
@@ -786,12 +786,12 @@ export function AirlockSchematic({
               overrideState === 'engaged'
                 ? 'var(--color-warning)'
                 : overrideState === 'off'
-                  ? 'var(--color-ink-2)'
-                  : 'var(--color-muted)'
+                  ? 'var(--color-ink-secondary)'
+                  : 'var(--color-ink-muted)'
             }
             fontSize="10.5"
             fontWeight="600"
-            fontFamily="var(--font-outlier)"
+            fontFamily="var(--font-mono)"
           >
             {overrideState === 'engaged' ? 'ENGAGED' : overrideState === 'off' ? 'OFF' : 'N/A'}
           </text>
@@ -821,17 +821,17 @@ export function AirlockSchematic({
                 width="10"
                 height="96"
                 fill="var(--color-ink)"
-                stroke="var(--color-paper-2)"
+                stroke="var(--color-surface)"
                 strokeWidth="1"
               />
               <text
                 x="539"
                 y="17"
                 textAnchor="middle"
-                fill="var(--color-ink-2)"
+                fill="var(--color-ink-secondary)"
                 fontSize="11"
                 fontWeight="600"
-                fontFamily="var(--font-outlier)"
+                fontFamily="var(--font-mono)"
               >
                 INNER: SEALED
               </text>
@@ -856,7 +856,7 @@ export function AirlockSchematic({
                 fill={innerStroke}
                 fontSize="11"
                 fontWeight="600"
-                fontFamily="var(--font-outlier)"
+                fontFamily="var(--font-mono)"
               >
                 INNER: OPEN
               </text>
@@ -876,9 +876,9 @@ export function AirlockSchematic({
                 x="539"
                 y="17"
                 textAnchor="middle"
-                fill="var(--color-muted)"
+                fill="var(--color-ink-muted)"
                 fontSize="10.5"
-                fontFamily="var(--font-outlier)"
+                fontFamily="var(--font-mono)"
               >
                 INNER: N/A
               </text>
@@ -892,13 +892,13 @@ export function AirlockSchematic({
             width="172"
             height="172"
             fill={containmentBreach ? 'var(--schematic-chamber-breach)' : 'var(--schematic-lab-bg)'}
-            stroke={containmentBreach ? 'var(--color-error)' : 'var(--color-accent-2)'}
+            stroke={containmentBreach ? 'var(--color-danger)' : 'var(--color-info)'}
             strokeWidth="1.5"
           />
           <text
             x="570"
             y="46"
-            fill="var(--color-accent-2)"
+            fill="var(--color-info)"
             fontSize="11.5"
             fontFamily="var(--font-body)"
             fontWeight="600"
@@ -908,9 +908,9 @@ export function AirlockSchematic({
           <text
             x="570"
             y="66"
-            fill="var(--color-ink-2)"
+            fill="var(--color-ink-secondary)"
             fontSize="11"
-            fontFamily="var(--font-outlier)"
+            fontFamily="var(--font-mono)"
           >
             Negative seal zone
           </text>
@@ -922,17 +922,17 @@ export function AirlockSchematic({
                 width="152"
                 height="44"
                 rx="2"
-                fill="var(--color-error-bg)"
-                stroke="var(--color-error)"
+                fill="var(--color-danger-soft)"
+                stroke="var(--color-danger)"
               />
               <text
                 x="644"
                 y="142"
                 textAnchor="middle"
-                fill="var(--color-error)"
+                fill="var(--color-danger)"
                 fontSize="11"
                 fontWeight="600"
-                fontFamily="var(--font-outlier)"
+                fontFamily="var(--font-mono)"
               >
                 ! CONTAINMENT BREACH
               </text>
@@ -942,7 +942,7 @@ export function AirlockSchematic({
                 textAnchor="middle"
                 fill="var(--color-ink)"
                 fontSize="10"
-                fontFamily="var(--font-outlier)"
+                fontFamily="var(--font-mono)"
               >
                 inv_containment_seal
               </text>

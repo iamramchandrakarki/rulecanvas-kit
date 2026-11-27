@@ -418,7 +418,7 @@ export function GuidedRepairCallout({ editor }: { readonly editor: InterlockEdit
           Apply Principled Repair
         </button>
       </div>
-      <p style={{ fontSize: 12, color: 'var(--color-ink-2)' }}>
+      <p style={{ fontSize: 12, color: 'var(--color-ink-secondary)' }}>
         Stages a candidate guard edit enforcing <code className="is-mono">pressure == negative</code>{' '}
         unconditionally alongside closed outer door, UV-off, and occupancy so{' '}
         <code className="is-mono">maintenanceOverride</code> bypasses only the HEPA purge count.
@@ -458,7 +458,7 @@ export function GuardInspectorContent({ editor }: { readonly editor: InterlockEd
             <div>
               <strong>guard:</strong> {formatBoolExpr(selectedRule.guard)}
             </div>
-            <div style={{ marginTop: 4, color: 'var(--color-muted)' }}>
+            <div style={{ marginTop: 4, color: 'var(--color-ink-muted)' }}>
               <strong>updates:</strong>{' '}
               {selectedRule.updates.map((u) => formatUpdateAssignment(u)).join('; ')}
             </div>

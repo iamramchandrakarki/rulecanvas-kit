@@ -1,4 +1,11 @@
-/* RuleCanvasKit Design System Tokens — Precision Workbench (Light, Dark & System) */
+/*
+ * RuleCanvasKit shared design tokens (Light, Dark & System).
+ *
+ * This file is byte-identical in both workbench apps. Edit both copies
+ * together; the design-token parity test fails when they drift.
+ * App-specific tokens (for example the schematic palette) live in the
+ * app's own stylesheet, never here.
+ */
 
 @font-face {
   font-family: 'IBM Plex Sans';
@@ -70,29 +77,30 @@
 :root[data-theme='light'] {
   color-scheme: light;
 
-  /* Surface hierarchy (off-white tinted slate; no pure #ffffff glare) */
+  /* Surface hierarchy: paper (canvas) -> surface (panes, controls) -> subtle (wells, headers) -> tint */
   --color-paper: oklch(98.2% 0.004 250);
   --color-surface: oklch(99.4% 0.002 250);
   --color-surface-subtle: oklch(96.2% 0.006 250);
   --color-surface-tint: oklch(94.2% 0.010 252);
 
-  /* Hairlines & >= 3:1 interactive control borders */
+  /* Hairlines and >= 3:1 interactive control borders */
+  --color-rule-subtle: oklch(91.5% 0.008 250);
   --color-rule: oklch(88.2% 0.010 250);
   --color-rule-strong: oklch(76.5% 0.016 250);
   --color-control-border: oklch(59% 0.025 252);
 
-  /* Ink (>= 4.5:1 across all surfaces) */
+  /* Ink (>= 4.5:1 on every surface) */
   --color-ink: oklch(19.5% 0.018 255);
   --color-ink-secondary: oklch(37.5% 0.018 254);
   --color-ink-muted: oklch(46.5% 0.016 252);
 
-  /* Proposition strip surface */
+  /* Proposition and code surfaces */
   --color-code-bg: oklch(96.4% 0.006 250);
   --color-code-border: oklch(87% 0.012 250);
   --color-code-ink: oklch(21% 0.018 255);
   --color-code-muted: oklch(46% 0.016 252);
 
-  /* Precision Cobalt primary signal */
+  /* Precision Cobalt: primary action, selection, focus */
   --color-accent: oklch(45.5% 0.175 256);
   --color-accent-hover: oklch(40.5% 0.175 256);
   --color-accent-fill: oklch(45.5% 0.175 256);
@@ -102,7 +110,11 @@
   --color-accent-ink: oklch(99.4% 0.002 250);
   --color-focus: oklch(45.5% 0.175 256);
 
-  /* Semantic verdict & diagnostic tokens (>= 4.5:1 text on soft tint) */
+  /* Change marker (modified variables, replay deltas) */
+  --color-info: oklch(43% 0.14 235);
+  --color-info-soft: oklch(95% 0.024 235);
+
+  /* Semantic verdict and diagnostic tokens (>= 4.5:1 text on soft tint) */
   --color-success: oklch(39.5% 0.13 152);
   --color-success-soft: oklch(95.5% 0.028 152);
   --color-success-border: oklch(78% 0.075 152);
@@ -122,6 +134,7 @@
 
   --color-scrim: oklch(15% 0.02 255 / 0.44);
   --shadow-dialog: 0 12px 32px -4px oklch(12% 0.02 255 / 0.24);
+  --shadow-popover: 0 6px 18px -6px oklch(12% 0.02 255 / 0.22);
 
   /* Typography */
   --font-display:
@@ -134,7 +147,19 @@
     'IBM Plex Mono', 'IBM Plex Mono Fallback', ui-monospace, 'SFMono-Regular', Menlo, Monaco,
     Consolas, monospace;
 
-  /* Crisp engineering radii & 4px spacing grid */
+  --text-2xs: 0.71875rem; /* 11.5px metadata, step numbers */
+  --text-xs: 0.75rem; /* 12px labels, mono data */
+  --text-sm: 0.8125rem; /* 13px controls, section titles */
+  --text-md: 0.84375rem; /* 13.5px body prose */
+  --text-lg: 0.9375rem; /* 15px pane titles, verdict headline */
+
+  /* Control sizing: 32px default, 28px compact rows, 26px dense AST editor */
+  --control-h: 32px;
+  --control-h-sm: 28px;
+  --control-h-xs: 26px;
+  --header-h: 44px;
+
+  /* Crisp engineering radii and 4px spacing grid */
   --radius-xs: 2px;
   --radius-sm: 3px;
   --radius-md: 4px;
@@ -151,7 +176,7 @@
   --dur-fast: 120ms;
   --dur-base: 160ms;
 
-  scrollbar-color: var(--color-rule-strong) var(--color-paper);
+  scrollbar-color: var(--color-rule-strong) transparent;
 }
 
 :root[data-theme='dark'] {
@@ -162,6 +187,7 @@
   --color-surface-subtle: oklch(21.6% 0.013 255);
   --color-surface-tint: oklch(25% 0.016 255);
 
+  --color-rule-subtle: oklch(24.5% 0.012 255);
   --color-rule: oklch(28.5% 0.014 255);
   --color-rule-strong: oklch(38% 0.016 254);
   --color-control-border: oklch(49.5% 0.020 254);
@@ -184,6 +210,9 @@
   --color-accent-ink: oklch(99% 0.003 250);
   --color-focus: oklch(75% 0.135 252);
 
+  --color-info: oklch(76% 0.12 232);
+  --color-info-soft: oklch(22.5% 0.038 232);
+
   --color-success: oklch(78.5% 0.13 152);
   --color-success-soft: oklch(23% 0.038 152);
   --color-success-border: oklch(46% 0.10 152);
@@ -203,8 +232,9 @@
 
   --color-scrim: oklch(6% 0.01 255 / 0.68);
   --shadow-dialog: 0 16px 40px -4px oklch(0% 0 0 / 0.58);
+  --shadow-popover: 0 8px 24px -6px oklch(0% 0 0 / 0.6);
 
-  scrollbar-color: var(--color-control-border) var(--color-paper);
+  scrollbar-color: var(--color-control-border) transparent;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -216,6 +246,7 @@
     --color-surface-subtle: oklch(21.6% 0.013 255);
     --color-surface-tint: oklch(25% 0.016 255);
 
+    --color-rule-subtle: oklch(24.5% 0.012 255);
     --color-rule: oklch(28.5% 0.014 255);
     --color-rule-strong: oklch(38% 0.016 254);
     --color-control-border: oklch(49.5% 0.020 254);
@@ -238,6 +269,9 @@
     --color-accent-ink: oklch(99% 0.003 250);
     --color-focus: oklch(75% 0.135 252);
 
+    --color-info: oklch(76% 0.12 232);
+    --color-info-soft: oklch(22.5% 0.038 232);
+
     --color-success: oklch(78.5% 0.13 152);
     --color-success-soft: oklch(23% 0.038 152);
     --color-success-border: oklch(46% 0.10 152);
@@ -257,8 +291,9 @@
 
     --color-scrim: oklch(6% 0.01 255 / 0.68);
     --shadow-dialog: 0 16px 40px -4px oklch(0% 0 0 / 0.58);
+    --shadow-popover: 0 8px 24px -6px oklch(0% 0 0 / 0.6);
 
-    scrollbar-color: var(--color-control-border) var(--color-paper);
+    scrollbar-color: var(--color-control-border) transparent;
   }
 }
 

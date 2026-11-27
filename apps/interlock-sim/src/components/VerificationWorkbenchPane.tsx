@@ -172,7 +172,7 @@ function TraceTimelineSection({
                   <span>
                     <strong className="is-mono">{step.ruleId}</strong>
                     {isActive && label !== undefined && (
-                      <span style={{ color: 'var(--color-muted)' }}>: {label}</span>
+                      <span style={{ color: 'var(--color-ink-muted)' }}>: {label}</span>
                     )}
                   </span>
                   <span className="is-timeline-step-num">Step {stepNum}</span>
@@ -278,7 +278,7 @@ function StateAndInvariantsContent({ replaySession }: StateAndInvariantsContentP
                   data-changed={row.changed ? 'true' : 'false'}
                 >
                   <td className="is-mono">{row.name}</td>
-                  <td className="is-mono" style={{ color: 'var(--color-muted)' }}>
+                  <td className="is-mono" style={{ color: 'var(--color-ink-muted)' }}>
                     {row.domainText}
                   </td>
                   <td className="is-mono" style={{ fontWeight: 600 }}>
@@ -325,7 +325,7 @@ function StateAndInvariantsContent({ replaySession }: StateAndInvariantsContentP
                       <div className="is-mono" style={{ fontWeight: 600 }}>
                         {inv.id}
                       </div>
-                      <div style={{ color: 'var(--color-muted)', fontSize: 11.5 }}>
+                      <div style={{ color: 'var(--color-ink-muted)', fontSize: 11.5 }}>
                         {inv.label}
                       </div>
                     </td>
@@ -349,7 +349,7 @@ function StateAndInvariantsContent({ replaySession }: StateAndInvariantsContentP
                       <div className="is-mono" style={{ fontWeight: 600 }}>
                         {invariantsPanelView.goal.id}
                       </div>
-                      <div style={{ color: 'var(--color-muted)', fontSize: 11.5 }}>
+                      <div style={{ color: 'var(--color-ink-muted)', fontSize: 11.5 }}>
                         {invariantsPanelView.goal.label}
                       </div>
                     </td>
@@ -411,7 +411,7 @@ function SnapshotAssumptionsProvenance({
             <span className="is-assumption-category">{asm.category}</span>
           </div>
           <p style={{ fontSize: 12.5 }}>{asm.statement}</p>
-          <p style={{ fontSize: 12, color: 'var(--color-muted)' }}>
+          <p style={{ fontSize: 12, color: 'var(--color-ink-muted)' }}>
             <strong>Not modeled:</strong> {asm.notModeled}
           </p>
         </div>
@@ -440,7 +440,7 @@ function SnapshotAssumptionsProvenance({
                 <span className="is-assumption-category">{asm.category}</span>
               </div>
               <p style={{ fontSize: 12.5 }}>{asm.statement}</p>
-              <p style={{ fontSize: 12, color: 'var(--color-muted)' }}>
+              <p style={{ fontSize: 12, color: 'var(--color-ink-muted)' }}>
                 <strong>Not modeled:</strong> {asm.notModeled}
               </p>
             </div>
@@ -979,7 +979,7 @@ export function VerificationWorkbenchPane({
                       <span className="is-assumption-category">{asm.category}</span>
                     </div>
                     <p style={{ fontSize: 12.5 }}>{asm.statement}</p>
-                    <p style={{ fontSize: 12, color: 'var(--color-muted)' }}>
+                    <p style={{ fontSize: 12, color: 'var(--color-ink-muted)' }}>
                       <strong>Not modeled:</strong> {asm.notModeled}
                     </p>
                   </div>
