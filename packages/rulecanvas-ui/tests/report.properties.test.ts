@@ -404,11 +404,12 @@ describe('@rulecanvas/ui verification report', () => {
       };
       expect(buildVerificationReportFromSnapshot(forgedStats).ok).toBe(false);
 
+      const baseError = snapshot.result.errors[0]!;
       const repeatedDiagnostics = {
         ...snapshot,
         result: {
           ...snapshot.result,
-          errors: Array.from({ length: 100 }, () => ({ ...snapshot.result.errors[0]! })),
+          errors: Array.from({ length: 100 }, () => ({ ...baseError })),
         },
       };
       expect(buildVerificationReportFromSnapshot(repeatedDiagnostics).ok).toBe(true);
@@ -418,7 +419,7 @@ describe('@rulecanvas/ui verification report', () => {
         result: {
           ...snapshot.result,
           errors: [
-            ...Array.from({ length: 100 }, () => ({ ...snapshot.result.errors[0]! })),
+            ...Array.from({ length: 100 }, () => ({ ...baseError })),
             {
               code: 'OUT_OF_DOMAIN_TRANSITION',
               path: 'rules.missing.updates.x',
