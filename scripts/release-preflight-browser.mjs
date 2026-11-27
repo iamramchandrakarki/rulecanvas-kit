@@ -28,7 +28,7 @@ const APPS = [
     app: 'agent-gate',
     sibling: 'interlock-sim',
     verdict: 'section.ag-verdict',
-    verifyButton: 'Verify Policy',
+    verifyButton: /^Verify(?: Policy)?$/,
     siblingVerdict: 'section.is-verdict',
     presets: [
       { id: 'broken', status: 'VIOLATED', texts: ['Step 5 of 5', 'inv_no_confidential_publish'], nav: true },
@@ -39,7 +39,7 @@ const APPS = [
     app: 'interlock-sim',
     sibling: 'agent-gate',
     verdict: 'section.is-verdict',
-    verifyButton: 'Verify Interlock Model',
+    verifyButton: /^Verify(?: Interlock Model)?$/,
     siblingVerdict: 'section.ag-verdict',
     presets: [
       { id: 'broken', status: 'VIOLATED', texts: ['Step 6 of 6', 'inv_containment_seal'], nav: true },

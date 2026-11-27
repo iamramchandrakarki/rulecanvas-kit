@@ -17,9 +17,12 @@ export {
 
 export {
   AssumptionsList,
+  VerdictDeltaRow,
   VerdictSummary,
   type AssumptionsListProps,
   type AssumptionsScope,
+  type VerdictDeltaRowProps,
+  type VerdictDeltaSnapshot,
   type VerdictSummaryProps,
 } from './VerdictSummary.js';
 
@@ -106,6 +109,12 @@ export {
   type SelectNavigationItem,
   type SelectTypeaheadState,
 } from './select-navigation.js';
+
+export {
+  ExportReportMenu,
+  type ExportReportMenuProps,
+  type ExportReportSnapshot,
+} from './ExportReportMenu.js';
 
 export {
   WORKBENCH_TOOLTIP_DISMISSED_ATTRIBUTE,

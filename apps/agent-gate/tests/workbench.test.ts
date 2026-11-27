@@ -598,8 +598,9 @@ describe('AgentGate workbench domain modules and UI', () => {
     );
 
     expect(brokenHtml).toContain('AgentGate');
-    expect(brokenHtml).toContain('Verify Policy');
-    expect(brokenHtml).toContain('Compare All 5 Presets');
+    expect(brokenHtml).toContain('>Verify<');
+    expect(brokenHtml).toContain('Compare (5)');
+    expect(brokenHtml).toContain('Export report');
     expect(brokenHtml).toContain('VIOLATED');
     expect(brokenHtml).toContain('Counterexample found in 5 steps.');
     expect(brokenHtml).toContain('Step 5 of 5');

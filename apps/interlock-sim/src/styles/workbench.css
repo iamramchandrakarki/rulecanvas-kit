@@ -425,10 +425,25 @@ a.is-brand-link:active {
   }
 }
 
-/* Laptop & 1440p widths: theme & guide labels collapse to icons (names stay available to assistive tech) */
-@media (min-width: 1024px) and (max-width: 1519px) {
-  .is-theme-btn > span:not(.rc-tip),
+/* Small laptops (1024-1279px): collapse guide label to icon; keep Guide visible at 1280px & 1440px */
+@media (min-width: 1024px) and (max-width: 1279px) {
   .is-guide-trigger > span:not(.is-visually-hidden):not(.rc-tip) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .is-guide-trigger {
+    padding: 5px 8px;
+  }
+}
+
+/* Laptop & 1440p widths: theme switch labels collapse to icons (names stay available to assistive tech) */
+@media (min-width: 1024px) and (max-width: 1519px) {
+  .is-theme-btn > span:not(.rc-tip) {
     position: absolute;
     width: 1px;
     height: 1px;
@@ -439,10 +454,6 @@ a.is-brand-link:active {
 
   .is-theme-btn {
     padding: 2px 7px;
-  }
-
-  .is-guide-trigger {
-    padding: 5px 8px;
   }
 }
 
@@ -566,18 +577,29 @@ a.is-brand-link:active {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  min-width: 32px;
+  min-height: 32px;
+  width: 32px;
+  height: 32px;
   border: 1px solid transparent;
   border-radius: var(--radius-xs);
   background: transparent;
   color: var(--color-ink-muted);
-  font-size: 16px;
+  font-size: 18px;
   line-height: 1;
   cursor: pointer;
   transition:
     background-color var(--dur-instant) var(--ease-out),
     color var(--dur-instant) var(--ease-out);
+}
+
+@media (pointer: coarse) {
+  .is-guide-panel [data-guide-close='true'] {
+    min-width: 40px;
+    min-height: 40px;
+    width: 40px;
+    height: 40px;
+  }
 }
 
 .is-guide-panel [data-guide-close='true']:hover {
@@ -1985,6 +2007,24 @@ a.is-brand-link:active {
   color: var(--color-ink);
 }
 
+.is-table-comparison th:last-child,
+.is-table-comparison td:last-child {
+  position: sticky;
+  right: 0;
+  background-color: var(--color-surface);
+  box-shadow: -1px 0 0 var(--color-rule);
+  z-index: 1;
+}
+
+.is-table-comparison thead th:last-child {
+  background-color: var(--color-surface-subtle);
+  z-index: 2;
+}
+
+.is-table-comparison tbody tr[data-changed='true'] td:last-child {
+  background-color: var(--color-accent-soft);
+}
+
 .is-table th,
 .is-table td {
   padding: 6px 10px;
@@ -2308,9 +2348,7 @@ a.is-brand-link:active {
   }
 
   .is-guide-panel {
-    left: 0;
-    right: auto;
-    transform-origin: top left;
+    transform-origin: top center;
   }
 
   .is-btn,

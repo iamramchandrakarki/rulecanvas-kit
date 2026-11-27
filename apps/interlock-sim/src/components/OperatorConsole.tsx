@@ -10,9 +10,9 @@ export interface OperatorConsoleProps {
   readonly draftRuleIds?: ReadonlySet<string> | undefined;
   readonly canRestoreCounterexample: boolean;
   readonly replayError: string | null;
-  readonly onResetReplay: () => void;
-  readonly onStepBack: () => void;
-  readonly onStepForward: () => void;
+  readonly onResetReplay?: (() => void) | undefined;
+  readonly onStepBack?: (() => void) | undefined;
+  readonly onStepForward?: (() => void) | undefined;
   readonly onApplyManualStep: (ruleId: string) => void;
   readonly onRestoreVerdictTrace: () => void;
   readonly onInspectRule?: ((ruleId: string) => void) | undefined;
@@ -54,13 +54,8 @@ export function OperatorConsole({
   modelLabel,
   isStale,
   draftRuleIds,
-  canRestoreCounterexample,
   replayError,
-  onResetReplay,
-  onStepBack,
-  onStepForward,
   onApplyManualStep,
-  onRestoreVerdictTrace,
   onInspectRule,
   onHoverVars,
 }: OperatorConsoleProps) {
@@ -83,51 +78,9 @@ export function OperatorConsole({
       {isStale && (
         <div className="is-alert is-alert-warning" role="status">
           <strong>Stepping Snapshot ({modelLabel})</strong>
-          <p>Unverified draft edits exist. Verify Interlock Model to simulate updated rules.</p>
+          <p>Unverified draft edits exist. Run Verify to simulate updated rules.</p>
         </div>
       )}
-
-      <div className="is-replay-toolbar">
-        <div className="is-inline-actions">
-          <button
-            type="button"
-            className="is-btn is-btn-sm"
-            disabled={replaySession.cursor === 0 && replaySession.totalSteps === 0}
-            onClick={onResetReplay}
-          >
-            Reset
-          </button>
-          <button
-            type="button"
-            className="is-btn is-btn-sm"
-            disabled={!replaySession.canStepBack}
-            onClick={onStepBack}
-          >
-            Step Back
-          </button>
-          <span className="is-step-counter" aria-live="polite">
-            Step {replaySession.cursor} of {replaySession.totalSteps}
-          </span>
-          <button
-            type="button"
-            className="is-btn is-btn-sm"
-            disabled={!replaySession.canStepForward}
-            onClick={onStepForward}
-          >
-            Step Forward
-          </button>
-        </div>
-
-        {canRestoreCounterexample && replaySession.mode === 'manual' && (
-          <button
-            type="button"
-            className="is-btn is-btn-sm is-btn-active"
-            onClick={onRestoreVerdictTrace}
-          >
-            Restore Counterexample
-          </button>
-        )}
-      </div>
 
       {replayError !== null && (
         <div className="is-alert" role="alert">

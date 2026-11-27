@@ -14,6 +14,7 @@ import {
   type ReplaySession,
 } from '@rulecanvas/ui';
 import { useRef, useState, type KeyboardEvent } from 'react';
+import { ExportReportMenu, VerdictDeltaRow } from '@rulecanvas/workbench-react';
 import { isWebWorkerSupported, type VerifyExecutionMode } from '../verify-client.js';
 
 export interface VerifiedSnapshot {
@@ -35,6 +36,7 @@ export interface VerificationWorkbenchPaneProps {
   readonly editorDraftErrors: readonly ValidationError[];
   readonly modelErrors: readonly ValidationError[];
   readonly verifiedSnapshot: VerifiedSnapshot | null;
+  readonly previousSnapshot?: VerifiedSnapshot | null | undefined;
   readonly replaySession: ReplaySession | null;
   readonly replayError: string | null;
   readonly onCancelRun: () => void;
@@ -98,6 +100,7 @@ export function VerificationWorkbenchPane({
   editorDraftErrors,
   modelErrors,
   verifiedSnapshot,
+  previousSnapshot = null,
   replaySession,
   replayError,
   onCancelRun,
@@ -195,6 +198,13 @@ export function VerificationWorkbenchPane({
     >
       <div className="ag-pane-header">
         <h2 className="ag-pane-title">Verification inspector</h2>
+        <ExportReportMenu
+          snapshot={verifiedSnapshot}
+          isRunning={isRunning}
+          isStale={isStale}
+          triggerClassName="ag-btn ag-btn-sm"
+          tooltipClassName="rc-tip"
+        />
       </div>
 
       <div className="ag-workbench-body">
@@ -217,12 +227,16 @@ export function VerificationWorkbenchPane({
             </div>
             <p className="ag-verdict-headline">
               {runningExecutionMode === 'main-thread'
-                ? 'Executing deterministic verification on main thread (Web Workers unavailable)'
+                ? isWebWorkerSupported()
+                  ? 'Executing deterministic verification on main thread…'
+                  : 'Executing deterministic verification on main thread (Web Workers unavailable)'
                 : 'Exploring reachable state space in background worker…'}
             </p>
             <p className="ag-verdict-detail">
               {runningExecutionMode === 'main-thread'
-                ? 'Web Workers are unavailable in this runtime. Verification runs deterministically on the main thread.'
+                ? isWebWorkerSupported()
+                  ? 'Verification is running synchronously on the main thread.'
+                  : 'Web Workers are unavailable in this runtime. Verification runs deterministically on the main thread.'
                 : 'Verification runs off the main thread so rule inspection and editing stay responsive.'}
             </p>
           </div>
@@ -371,12 +385,19 @@ export function VerificationWorkbenchPane({
             <p className="ag-verdict-headline">{verdictView.headline}</p>
             <p className="ag-verdict-detail">{verdictView.detail}</p>
 
+            <VerdictDeltaRow
+              previous={previousSnapshot}
+              current={verifiedSnapshot}
+              isRunning={isRunning}
+              isStale={isStale}
+            />
+
             {candidateRepairRuleId !== undefined && onInspectRule !== undefined && !isStale && (
               <div className="ag-verdict-repair">
-                <div className="ag-verdict-repair-copy">
-                  <span className="ag-verdict-next-label">Next step</span>
-                  <span>Require a fresh approval after draft edits.</span>
-                </div>
+                <span className="ag-verdict-repair-copy">
+                  <span className="ag-verdict-next-label">Next step</span> Require a fresh approval
+                  after draft edits.
+                </span>
                 <button
                   type="button"
                   className="ag-btn ag-btn-sm ag-btn-active"
@@ -481,9 +502,14 @@ export function VerificationWorkbenchPane({
                   type="button"
                   className="ag-btn ag-btn-sm"
                   disabled={!replaySession.canStepBack}
+                  aria-keyshortcuts="["
+                  data-rc-tip-host="true"
                   onClick={onStepBack}
                 >
                   Previous
+                  <span className="rc-tip" aria-hidden="true">
+                    Previous step ([)
+                  </span>
                 </button>
                 <span className="ag-step-counter" aria-live="polite">
                   Step {replaySession.cursor} of {replaySession.totalSteps}
@@ -492,9 +518,14 @@ export function VerificationWorkbenchPane({
                   type="button"
                   className="ag-btn ag-btn-sm"
                   disabled={!replaySession.canStepForward}
+                  aria-keyshortcuts="]"
+                  data-rc-tip-host="true"
                   onClick={onStepForward}
                 >
                   Next
+                  <span className="rc-tip" aria-hidden="true">
+                    Next step (])
+                  </span>
                 </button>
               </div>
 
