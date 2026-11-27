@@ -54,3 +54,32 @@ export {
   type VerdictSummaryView,
   type VerdictTone,
 } from './components.js';
+
+export {
+  VERIFICATION_REPORT_SCHEMA_VERSION,
+  buildVerificationReportFromSnapshot,
+  formatVerificationReportMarkdown,
+  isTrustedVerificationReport,
+  sanitizeReportFilename,
+  serializeVerificationReportJson,
+  verifyAndBuildReport,
+  type ReportBuildResult,
+  type VerificationReport,
+  type VerificationReportGoalRef,
+  type VerificationReportGoalStatus,
+  type VerificationReportInconclusive,
+  type VerificationReportInvariantRef,
+  type VerificationReportModelSummary,
+  type VerificationReportProvenance,
+  type VerificationReportTraceDiff,
+  type VerificationReportTraceStep,
+} from './report.js';
+
+export {
+  computeVerdictDelta,
+  type VerdictDelta,
+  type VerdictDeltaChangedSection,
+  type VerdictDeltaClassification,
+  type VerdictDeltaEndpoint,
+  type VerdictDeltaResult,
+} from './delta.js';
