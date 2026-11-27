@@ -61,6 +61,12 @@ export {
 } from './theme.js';
 
 export {
+  VerificationBoundsControl,
+  type VerificationBoundKind,
+  type VerificationBoundsControlProps,
+} from './BoundsControl.js';
+
+export {
   WorkbenchBrandMark,
   WorkbenchDiscardDialog,
   WorkbenchThemeSwitch,
