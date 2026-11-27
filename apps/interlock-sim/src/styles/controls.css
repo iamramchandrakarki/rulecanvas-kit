@@ -1,0 +1,461 @@
+/*
+ * Shared controls, focus and motion layer (byte-identical in both workbench apps).
+ *
+ * Loaded after workbench.css and expr-editor.css. It owns:
+ *   - one focus-visible language for fields, select triggers and buttons
+ *   - the WorkbenchSelect trigger and listbox menu (`rc-select-*`)
+ *   - decorative hover/focus tooltips (`rc-tip`, dismissible with Escape)
+ *   - shared motion: tab indicators, panel reveals, changed-value cues
+ *
+ * Motion rules: 90-280ms, transform/opacity/clip-path only, never on text
+ * contrast. Every animation is cosmetic; state and verdicts render immediately.
+ */
+
+/* ---------- Motion primitives ---------- */
+
+@keyframes rc-menu-in {
+  from {
+    transform: translateY(var(--rc-menu-shift, -4px)) scale(0.98);
+    clip-path: inset(var(--rc-menu-clip-from, 0 0 30% 0) round var(--radius-md));
+  }
+  to {
+    transform: none;
+    clip-path: inset(0 round var(--radius-md));
+  }
+}
+
+@keyframes rc-menu-out {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateY(var(--rc-menu-shift, -4px)) scale(0.985);
+  }
+}
+
+@keyframes rc-panel-in {
+  from {
+    transform: translateY(4px);
+  }
+  to {
+    transform: none;
+  }
+}
+
+@keyframes rc-value-changed {
+  from {
+    background-color: var(--color-info-soft);
+    box-shadow: 0 0 0 2px var(--color-info-soft);
+  }
+  to {
+    background-color: transparent;
+    box-shadow: 0 0 0 2px transparent;
+  }
+}
+
+/* ---------- Focus ---------- */
+
+/*
+ * Fields and select triggers: a single 2px ring drawn over the 1px border
+ * (offset -1px), so there is no gap and no second outline. Buttons keep the
+ * global 2px ring with a 2px offset so it stays visible on filled buttons.
+ */
+input:not([type='checkbox'], [type='radio'], [type='range']):focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+.rc-select-trigger:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: -1px;
+}
+
+:is(input, textarea, .rc-select-trigger)[aria-invalid='true']:focus-visible {
+  outline-color: var(--color-error);
+}
+
+/* ---------- WorkbenchSelect trigger ---------- */
+
+/* Zero-specificity base: app field classes (.ag-select, .is-select, *-mono) refine it. */
+:where(.rc-select-trigger) {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 400;
+  color: var(--color-ink);
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-control-border);
+  border-radius: var(--radius-sm);
+  padding: 5px 8px;
+  min-height: var(--control-h);
+}
+
+.rc-select-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+  line-height: 1.25;
+  text-align: left;
+  cursor: pointer;
+  user-select: none;
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    background-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
+}
+
+.rc-select-value {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rc-select-chevron {
+  flex: none;
+  color: var(--color-ink-muted);
+  transition:
+    transform var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.rc-select-trigger[aria-expanded='true'] {
+  border-color: var(--color-accent);
+  background-color: var(--color-surface);
+}
+
+.rc-select-trigger[aria-expanded='true'] .rc-select-chevron {
+  transform: rotate(180deg);
+  color: var(--color-accent);
+}
+
+.rc-select-trigger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.rc-select-trigger[aria-invalid='true'] {
+  border-color: var(--color-error);
+  background-color: var(--color-error-soft);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .rc-select-trigger:hover:not(:disabled):not([aria-expanded='true']) {
+    border-color: var(--color-ink-secondary);
+  }
+
+  .rc-select-trigger:hover:not(:disabled) .rc-select-chevron {
+    color: var(--color-ink-secondary);
+  }
+}
+
+/* ---------- WorkbenchSelect menu (top layer, fixed position) ---------- */
+
+.rc-select-menu {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  z-index: 1000;
+  box-sizing: border-box;
+  min-width: 8rem;
+  max-width: min(28rem, calc(100vw - 16px));
+  max-height: 320px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px;
+  background-color: var(--color-surface);
+  color: var(--color-ink);
+  border: 1px solid var(--color-rule-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-popover);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 400;
+  line-height: 1.35;
+  text-align: left;
+  scrollbar-width: thin;
+  transform-origin: top left;
+  animation: rc-menu-in var(--dur-fast) var(--ease-out);
+}
+
+.rc-select-menu[data-placement='top'] {
+  --rc-menu-shift: 4px;
+  --rc-menu-clip-from: 30% 0 0 0;
+  transform-origin: bottom left;
+}
+
+.rc-select-menu[data-state='closing'] {
+  pointer-events: none;
+  animation: rc-menu-out var(--dur-instant) var(--ease-in) forwards;
+}
+
+.rc-select-menu:focus {
+  outline: none;
+}
+
+.rc-select-option {
+  position: relative;
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  align-items: center;
+  column-gap: 6px;
+  min-height: 30px;
+  padding: 4px 12px 4px 6px;
+  border-radius: var(--radius-sm);
+  color: var(--color-ink);
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background-color var(--dur-instant) var(--ease-out),
+    box-shadow var(--dur-instant) var(--ease-out);
+}
+
+.rc-select-option-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rc-select-option-desc {
+  grid-column: 2;
+  min-width: 0;
+  font-family: var(--font-body);
+  font-size: var(--text-2xs);
+  font-weight: 400;
+  line-height: 1.35;
+  color: var(--color-ink-muted);
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+
+/* Scenario pickers explain each preset in one or two lines */
+.rc-select-menu-presets {
+  width: min(22rem, calc(100vw - 16px));
+}
+
+.rc-select-menu-presets .rc-select-option {
+  padding-block: 6px;
+  align-items: start;
+}
+
+.rc-select-menu-presets .rc-select-check {
+  padding-top: 2px;
+}
+
+.rc-select-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-accent);
+}
+
+/* Highlighted (pointer or keyboard) option: tinted row with a hairline ring */
+.rc-select-option[data-active='true'] {
+  background-color: var(--color-accent-soft);
+  box-shadow: inset 0 0 0 1px var(--color-accent-border);
+}
+
+/* Committed option: check mark plus accent weight */
+.rc-select-option[aria-selected='true'] {
+  font-weight: 600;
+}
+
+.rc-select-option[aria-selected='true'] .rc-select-option-label {
+  color: var(--color-accent);
+}
+
+.rc-select-option[aria-disabled='true'] {
+  color: var(--color-ink-muted);
+  cursor: not-allowed;
+}
+
+.rc-select-group + .rc-select-group,
+.rc-select-option + .rc-select-group {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--color-rule-subtle);
+}
+
+.rc-select-group-label {
+  padding: 4px 8px 2px 26px;
+  font-family: var(--font-body);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-ink-muted);
+  user-select: none;
+}
+
+.rc-select-menu[data-mono='true'] .rc-select-option-label {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.rc-select-menu[data-density='compact'] {
+  min-width: 6rem;
+}
+
+.rc-select-menu[data-density='compact'] .rc-select-option {
+  grid-template-columns: 14px auto minmax(0, 1fr);
+  column-gap: 6px;
+  min-height: 26px;
+  padding-block: 2px;
+}
+
+/* Dense pickers keep hints on the same row, right-aligned and muted */
+.rc-select-menu[data-density='compact'] .rc-select-option-desc {
+  grid-column: 3;
+  display: block;
+  padding-left: 12px;
+  text-align: right;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+@media (pointer: coarse) {
+  .rc-select-option,
+  .rc-select-menu[data-density='compact'] .rc-select-option {
+    min-height: 40px;
+  }
+}
+
+/* ---------- Tooltips (decorative, aria-hidden; names live on the control) ---------- */
+
+[data-rc-tip-host] {
+  position: relative;
+}
+
+.rc-tip {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
+  z-index: 80;
+  width: max-content;
+  max-width: 240px;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  background-color: var(--color-ink);
+  color: var(--color-surface);
+  font-family: var(--font-body);
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.35;
+  letter-spacing: 0;
+  white-space: normal;
+  text-align: left;
+  pointer-events: none;
+  visibility: hidden;
+  transform: translate(var(--rc-tip-x, -50%), 3px);
+  box-shadow: var(--shadow-control-hover);
+  transition:
+    visibility 0s linear,
+    transform var(--dur-fast) var(--ease-out);
+}
+
+.rc-tip[data-align='end'] {
+  --rc-tip-x: 0%;
+  left: auto;
+  right: 0;
+}
+
+.rc-tip[data-align='start'] {
+  --rc-tip-x: 0%;
+  left: 0;
+}
+
+/* Hover shows after a short intent delay; keyboard focus shows immediately. */
+@media (hover: hover) and (pointer: fine) {
+  [data-rc-tip-host]:hover > .rc-tip {
+    visibility: visible;
+    transform: translate(var(--rc-tip-x, -50%), 0);
+    transition-delay: 380ms, 380ms;
+  }
+}
+
+[data-rc-tip-host]:focus-visible > .rc-tip {
+  visibility: visible;
+  transform: translate(var(--rc-tip-x, -50%), 0);
+  transition-delay: 0s, 0s;
+}
+
+:root[data-rc-tooltips-dismissed] .rc-tip,
+[data-rc-tip-host][aria-expanded='true'] > .rc-tip,
+[data-rc-tip-host]:active > .rc-tip {
+  visibility: hidden !important;
+}
+
+/* ---------- Tabs: indicator grows from the centre instead of snapping ---------- */
+
+[role='tablist'] > [role='tab'] {
+  position: relative;
+}
+
+[role='tablist'] > [role='tab'][aria-selected='true'] {
+  border-bottom-color: transparent;
+}
+
+[role='tablist'] > [role='tab']::after {
+  content: '';
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  bottom: -2px;
+  height: 2px;
+  border-radius: 1px;
+  background-color: var(--color-accent);
+  transform: scaleX(0);
+  transition: transform var(--dur-base) var(--ease-out);
+  pointer-events: none;
+}
+
+[role='tablist'] > [role='tab'][aria-selected='true']::after {
+  transform: scaleX(1);
+}
+
+/* Panels settle into place when revealed (layout and content are final immediately). */
+[role='tabpanel']:not([hidden]) {
+  animation: rc-panel-in var(--dur-base) var(--ease-out) backwards;
+}
+
+/* ---------- Changed values on the active replay step ---------- */
+
+.rc-value-changed {
+  border-radius: var(--radius-xs);
+  animation: rc-value-changed var(--dur-expand) var(--ease-out) backwards;
+}
+
+/* ---------- Disabled & destructive affordances ---------- */
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+/* ---------- Reduced motion ---------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .rc-select-menu,
+  .rc-select-menu[data-state='closing'],
+  [role='tabpanel']:not([hidden]),
+  .rc-value-changed {
+    animation: none !important;
+  }
+
+  [role='tablist'] > [role='tab']::after,
+  .rc-select-chevron,
+  .rc-select-option {
+    transition: none;
+  }
+
+  /* Changed values keep a static cue instead of a fading pulse. */
+  .rc-value-changed {
+    background-color: var(--color-info-soft);
+  }
+}

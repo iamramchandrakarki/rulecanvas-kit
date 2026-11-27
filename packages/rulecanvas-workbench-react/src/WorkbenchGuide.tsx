@@ -74,6 +74,8 @@ export interface WorkbenchGuideControlProps {
   readonly triggerClassName?: string | undefined;
   readonly panelClassName?: string | undefined;
   readonly visuallyHiddenClassName?: string | undefined;
+  /** Renders an `aria-hidden` hover/focus tooltip with this class instead of a `title`. */
+  readonly tooltipClassName?: string | undefined;
 }
 
 /**
@@ -89,6 +91,7 @@ export function WorkbenchGuideControl({
   triggerClassName,
   panelClassName,
   visuallyHiddenClassName,
+  tooltipClassName,
 }: WorkbenchGuideControlProps) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -129,7 +132,8 @@ export function WorkbenchGuideControl({
         className={triggerClassName}
         aria-expanded={open}
         aria-controls={panelId}
-        title="Workflow guide and verification glossary"
+        title={tooltipClassName === undefined ? 'Workflow guide and verification glossary' : undefined}
+        data-rc-tip-host={tooltipClassName !== undefined ? 'true' : undefined}
         onClick={() => setOpen((prev) => !prev)}
       >
         <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true" focusable="false">
@@ -145,6 +149,11 @@ export function WorkbenchGuideControl({
         <span>Guide</span>
         {visuallyHiddenClassName !== undefined && (
           <span className={visuallyHiddenClassName}> and glossary</span>
+        )}
+        {tooltipClassName !== undefined && !open && (
+          <span className={tooltipClassName} data-align="end" aria-hidden="true">
+            Workflow guide and glossary
+          </span>
         )}
       </button>
 

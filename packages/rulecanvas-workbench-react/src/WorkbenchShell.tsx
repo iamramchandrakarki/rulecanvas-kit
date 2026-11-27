@@ -7,6 +7,11 @@ export interface WorkbenchThemeSwitchProps {
   readonly className?: string | undefined;
   readonly buttonClassName?: string | undefined;
   readonly activeButtonClassName?: string | undefined;
+  /**
+   * When set, each button renders an `aria-hidden` hover/focus tooltip with this
+   * class instead of a native `title` (pair with `useWorkbenchTooltipDismissal`).
+   */
+  readonly tooltipClassName?: string | undefined;
 }
 
 const THEME_OPTIONS: readonly {
@@ -59,6 +64,7 @@ export function WorkbenchThemeSwitch({
   className,
   buttonClassName,
   activeButtonClassName,
+  tooltipClassName,
 }: WorkbenchThemeSwitchProps) {
   return (
     <div className={className} role="group" aria-label="Color theme">
@@ -73,12 +79,18 @@ export function WorkbenchThemeSwitch({
             type="button"
             className={btnClass || undefined}
             aria-pressed={isActive}
-            title={opt.title}
+            title={tooltipClassName === undefined ? opt.title : undefined}
             data-theme-option={opt.id}
+            data-rc-tip-host={tooltipClassName !== undefined ? 'true' : undefined}
             onClick={() => onChange(opt.id)}
           >
             <ThemeIcon kind={opt.id} />
             <span>{opt.label}</span>
+            {tooltipClassName !== undefined && (
+              <span className={tooltipClassName} data-align="end" aria-hidden="true">
+                {opt.title}
+              </span>
+            )}
           </button>
         );
       })}

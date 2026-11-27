@@ -679,7 +679,12 @@ export function VerificationWorkbenchPane({
                                 {row.changed && before !== undefined && (
                                   <span className="ag-state-before">{formatStateValue(before)} → </span>
                                 )}
-                                <strong>{row.valueText}</strong>
+                                <strong
+                                  key={row.changed ? `changed-${replaySession.cursor}` : 'unchanged'}
+                                  className={row.changed ? 'rc-value-changed' : undefined}
+                                >
+                                  {row.valueText}
+                                </strong>
                               </td>
                               <td>
                                 <span

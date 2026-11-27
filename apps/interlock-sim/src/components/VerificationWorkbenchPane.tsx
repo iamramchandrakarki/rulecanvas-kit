@@ -282,7 +282,12 @@ function StateAndInvariantsContent({ replaySession }: StateAndInvariantsContentP
                     {row.domainText}
                   </td>
                   <td className="is-mono" style={{ fontWeight: 600 }}>
-                    {row.valueText}
+                    <span
+                      key={row.changed ? `changed-${row.valueText}` : 'unchanged'}
+                      className={row.changed ? 'rc-value-changed' : undefined}
+                    >
+                      {row.valueText}
+                    </span>
                   </td>
                   <td>
                     <span

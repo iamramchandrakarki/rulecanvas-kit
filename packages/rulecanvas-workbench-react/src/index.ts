@@ -83,3 +83,29 @@ export {
   type WorkbenchGuideControlProps,
   type WorkbenchWorkflowStep,
 } from './WorkbenchGuide.js';
+
+export {
+  WorkbenchSelect,
+  type WorkbenchSelectItem,
+  type WorkbenchSelectOption,
+  type WorkbenchSelectOptionGroup,
+  type WorkbenchSelectProps,
+} from './WorkbenchSelect.js';
+
+export {
+  EMPTY_TYPEAHEAD,
+  SELECT_PAGE_SIZE,
+  SELECT_TYPEAHEAD_TIMEOUT_MS,
+  edgeEnabledIndex,
+  isTypeaheadActive,
+  isTypeaheadKey,
+  resolveTypeahead,
+  stepEnabledIndex,
+  type SelectNavigationItem,
+  type SelectTypeaheadState,
+} from './select-navigation.js';
+
+export {
+  WORKBENCH_TOOLTIP_DISMISSED_ATTRIBUTE,
+  useWorkbenchTooltipDismissal,
+} from './tooltip.js';

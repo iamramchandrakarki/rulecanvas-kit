@@ -1393,8 +1393,11 @@ describe('AgentGate workbench domain modules and UI', () => {
       }
 
       const controlIds = new Set<string>();
-      for (const match of html.matchAll(/<(input|select|textarea)\b([^>]*)>/g)) {
-        const attrs = match[2] ?? '';
+      // Form controls plus select-only combobox triggers (WorkbenchSelect renders a button)
+      for (const match of html.matchAll(
+        /<(input|select|textarea)\b([^>]*)>|<button\b([^>]*\brole="combobox"[^>]*)>/g,
+      )) {
+        const attrs = match[2] ?? match[3] ?? '';
         const idMatch = attrs.match(/\bid="([^"]+)"/);
         expect(idMatch).not.toBeNull();
         const id = idMatch![1]!;

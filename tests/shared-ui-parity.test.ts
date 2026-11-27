@@ -33,6 +33,11 @@ describe('shared compact AST editor', () => {
     expect(read('interlock-sim', rel)).toBe(read('agent-gate', rel));
   });
 
+  it('ships one shared controls, focus and motion stylesheet', () => {
+    const rel = 'src/styles/controls.css';
+    expect(read('interlock-sim', rel)).toBe(read('agent-gate', rel));
+  });
+
   it('keeps both ExprEditor copies identical apart from app class names and helper import', () => {
     const rel = 'src/components/ExprEditor.tsx';
     const normalize = (src: string) =>

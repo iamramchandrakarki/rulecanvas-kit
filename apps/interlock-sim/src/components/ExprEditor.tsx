@@ -2,10 +2,12 @@ import { useEffect, useId, useState, type ReactNode } from 'react';
 import type { BoolExpr, StateSchema, StateValue, ValidationError, ValueExpr } from '@rulecanvas/core';
 import { formatBoolExpr } from '@rulecanvas/ui';
 import {
+  WorkbenchSelect,
   matchesDraftPrefix,
   useIntegerDraftStore,
   type LiftedIntDraftStore,
   type UseIntegerDraftStoreOptions,
+  type WorkbenchSelectItem,
 } from '@rulecanvas/workbench-react';
 import {
   createDefaultBoolExpr,
@@ -33,37 +35,45 @@ const CX = {
 
 const DEPTH_CAP = 6;
 
-const BOOL_OP_GROUPS: readonly {
-  readonly label: string;
-  readonly ops: readonly { readonly op: BoolExpr['op']; readonly text: string }[];
-}[] = [
+const BOOL_OP_GROUPS: readonly WorkbenchSelectItem<BoolExpr['op']>[] = [
   {
-    label: 'Logic',
-    ops: [
-      { op: 'and', text: 'and' },
-      { op: 'or', text: 'or' },
-      { op: 'not', text: 'not' },
+    group: 'Logic',
+    options: [
+      { value: 'and', label: 'and', description: 'every clause holds' },
+      { value: 'or', label: 'or', description: 'at least one clause holds' },
+      { value: 'not', label: 'not', description: 'negates one clause' },
     ],
   },
   {
-    label: 'Compare',
-    ops: [
-      { op: 'eq', text: '==' },
-      { op: 'neq', text: '!=' },
-      { op: 'lt', text: '<' },
-      { op: 'lte', text: '<=' },
-      { op: 'gt', text: '>' },
-      { op: 'gte', text: '>=' },
-      { op: 'in', text: 'in' },
+    group: 'Compare',
+    options: [
+      { value: 'eq', label: '==', description: 'equal' },
+      { value: 'neq', label: '!=', description: 'not equal' },
+      { value: 'lt', label: '<', description: 'less than' },
+      { value: 'lte', label: '<=', description: 'at most' },
+      { value: 'gt', label: '>', description: 'greater than' },
+      { value: 'gte', label: '>=', description: 'at least' },
+      { value: 'in', label: 'in', description: 'member of a set' },
     ],
   },
   {
-    label: 'Atom',
-    ops: [
-      { op: 'var', text: 'var' },
-      { op: 'lit', text: 'const' },
+    group: 'Atom',
+    options: [
+      { value: 'var', label: 'var', description: 'boolean variable' },
+      { value: 'lit', label: 'const', description: 'true or false' },
     ],
   },
+];
+
+const BOOLEAN_LITERAL_OPTIONS: readonly WorkbenchSelectItem<'true' | 'false'>[] = [
+  { value: 'true', label: 'true' },
+  { value: 'false', label: 'false' },
+];
+
+const LITERAL_KIND_OPTIONS: readonly WorkbenchSelectItem<'boolean' | 'number' | 'string'>[] = [
+  { value: 'string', label: 'str', description: 'string literal' },
+  { value: 'number', label: 'int', description: 'integer literal' },
+  { value: 'boolean', label: 'bool', description: 'boolean literal' },
 ];
 
 /**
@@ -72,14 +82,62 @@ const BOOL_OP_GROUPS: readonly {
  */
 type OperandKind = 'var' | 'lit:string' | 'lit:number' | 'lit:boolean' | 'add' | 'sub';
 
-const OPERAND_KIND_OPTIONS: readonly { readonly kind: OperandKind; readonly text: string }[] = [
-  { kind: 'var', text: 'var' },
-  { kind: 'lit:string', text: 'str' },
-  { kind: 'lit:number', text: 'int' },
-  { kind: 'lit:boolean', text: 'bool' },
-  { kind: 'add', text: '+' },
-  { kind: 'sub', text: '-' },
+const OPERAND_KIND_OPTIONS: readonly WorkbenchSelectItem<OperandKind>[] = [
+  { value: 'var', label: 'var', description: 'state variable' },
+  { value: 'lit:string', label: 'str', description: 'string literal' },
+  { value: 'lit:number', label: 'int', description: 'integer literal' },
+  { value: 'lit:boolean', label: 'bool', description: 'boolean literal' },
+  { value: 'add', label: '+', description: 'sum of two operands' },
+  { value: 'sub', label: '-', description: 'difference of two operands' },
 ];
+
+/** Compact listbox select used for every picker inside the AST editor. */
+function ExprSelect<V extends string>({
+  id,
+  ariaLabel,
+  value,
+  options,
+  onChange,
+  className,
+  title,
+  dataOp,
+}: {
+  readonly id: string;
+  readonly ariaLabel: string;
+  readonly value: V;
+  readonly options: readonly WorkbenchSelectItem<V>[];
+  readonly onChange: (next: V) => void;
+  readonly className: string;
+  readonly title?: string;
+  readonly dataOp?: string;
+}) {
+  return (
+    <WorkbenchSelect<V>
+      id={id}
+      ariaLabel={ariaLabel}
+      value={value}
+      options={options}
+      onChange={onChange}
+      className={`${CX.select} ${className}`}
+      title={title}
+      mono
+      density="compact"
+      triggerData={dataOp !== undefined ? { 'data-op': dataOp } : undefined}
+    />
+  );
+}
+
+/** Variable picker options; an undeclared reference stays visible and selected. */
+function variableOptions(
+  keys: readonly string[],
+  declaredKeys: readonly string[],
+  current: string,
+): readonly WorkbenchSelectItem[] {
+  const offered = keys.map((key) => ({ value: key, label: key }));
+  return declaredKeys.includes(current)
+    ? offered
+    : [{ value: current, label: `${current} (undeclared)` }, ...offered];
+}
 
 export function operandKindOf(value: ValueExpr): OperandKind {
   if (value.op === 'lit') return `lit:${literalKindOf(value.value)}`;
@@ -222,6 +280,7 @@ function IconButton({
   className = '',
   expanded,
   controls,
+  tipAlign = 'end',
 }: {
   readonly label: string;
   readonly onClick: () => void;
@@ -229,18 +288,22 @@ function IconButton({
   readonly className?: string;
   readonly expanded?: boolean;
   readonly controls?: string;
+  readonly tipAlign?: 'start' | 'end';
 }) {
   return (
     <button
       type="button"
       className={`rc-expr-icon-btn ${className}`.trim()}
       aria-label={label}
-      title={label}
       aria-expanded={expanded}
       aria-controls={controls}
+      data-rc-tip-host="true"
       onClick={onClick}
     >
       {children}
+      <span className="rc-tip" data-align={tipAlign} aria-hidden="true">
+        {label}
+      </span>
     </button>
   );
 }
@@ -274,17 +337,14 @@ function LiteralKindPicker({ id, ariaLabel, value, onChange }: LiteralKindPicker
       <label htmlFor={id} className={CX.hidden}>
         Literal type
       </label>
-      <select
+      <ExprSelect
         id={id}
-        className={`${CX.select} rc-expr-kind`}
-        aria-label={ariaLabel}
+        className="rc-expr-kind"
+        ariaLabel={ariaLabel}
         value={value}
-        onChange={(e) => onChange(e.target.value as 'boolean' | 'number' | 'string')}
-      >
-        <option value="string">str</option>
-        <option value="number">int</option>
-        <option value="boolean">bool</option>
-      </select>
+        options={LITERAL_KIND_OPTIONS}
+        onChange={onChange}
+      />
     </>
   );
 }
@@ -349,20 +409,15 @@ export function ValueExprEditor({
       <label htmlFor={opId} className={CX.hidden}>
         Operand kind
       </label>
-      <select
+      <ExprSelect
         id={opId}
-        className={`${CX.select} rc-expr-kind`}
-        aria-label={`${ariaLabelPrefix} kind`}
+        className="rc-expr-kind"
+        ariaLabel={`${ariaLabelPrefix} kind`}
         title="Operand kind: variable, literal (str / int / bool), or arithmetic"
         value={currentKind}
-        onChange={(e) => handleKindChange(e.target.value as OperandKind)}
-      >
-        {OPERAND_KIND_OPTIONS.map((option) => (
-          <option key={option.kind} value={option.kind}>
-            {option.text}
-          </option>
-        ))}
-      </select>
+        options={OPERAND_KIND_OPTIONS}
+        onChange={handleKindChange}
+      />
     </>
   );
 
@@ -411,22 +466,14 @@ export function ValueExprEditor({
           <label htmlFor={varId} className={CX.hidden}>
             Variable
           </label>
-          <select
+          <ExprSelect
             id={varId}
-            className={`${CX.select} rc-expr-var`}
-            aria-label={`${ariaLabelPrefix} variable`}
+            className="rc-expr-var"
+            ariaLabel={`${ariaLabelPrefix} variable`}
             value={value.name}
-            onChange={(e) => onChange({ op: 'var', name: e.target.value })}
-          >
-            {!schemaKeys.includes(value.name) && (
-              <option value={value.name}>{value.name} (undeclared)</option>
-            )}
-            {schemaKeys.map((key) => (
-              <option key={key} value={key}>
-                {key}
-              </option>
-            ))}
-          </select>
+            options={variableOptions(schemaKeys, schemaKeys, value.name)}
+            onChange={(name) => onChange({ op: 'var', name })}
+          />
         </>
       )}
 
@@ -439,16 +486,14 @@ export function ValueExprEditor({
                 Literal value
               </label>
               {litKind === 'boolean' ? (
-                <select
+                <ExprSelect
                   id={litValId}
-                  className={`${CX.select} rc-expr-value`}
-                  aria-label={`${ariaLabelPrefix} boolean literal`}
+                  className="rc-expr-value"
+                  ariaLabel={`${ariaLabelPrefix} boolean literal`}
                   value={value.value ? 'true' : 'false'}
-                  onChange={(e) => onChange({ op: 'lit', value: e.target.value === 'true' })}
-                >
-                  <option value="true">true</option>
-                  <option value="false">false</option>
-                </select>
+                  options={BOOLEAN_LITERAL_OPTIONS}
+                  onChange={(next) => onChange({ op: 'lit', value: next === 'true' })}
+                />
               ) : litKind === 'number' ? (
                 <StrictIntegerInput
                   id={litValId}
@@ -566,24 +611,15 @@ export function BoolExprEditor({
       <label htmlFor={opId} className={CX.hidden}>
         Operator
       </label>
-      <select
+      <ExprSelect
         id={opId}
-        className={`${CX.select} rc-expr-op`}
-        aria-label={`${ariaLabelPrefix} operator`}
-        data-op={value.op}
+        className="rc-expr-op"
+        ariaLabel={`${ariaLabelPrefix} operator`}
+        dataOp={value.op}
         value={value.op}
-        onChange={(e) => handleOpChange(e.target.value as BoolExpr['op'])}
-      >
-        {BOOL_OP_GROUPS.map((group) => (
-          <optgroup key={group.label} label={group.label}>
-            {group.ops.map((option) => (
-              <option key={option.op} value={option.op}>
-                {option.text}
-              </option>
-            ))}
-          </optgroup>
-        ))}
-      </select>
+        options={BOOL_OP_GROUPS}
+        onChange={handleOpChange}
+      />
     </>
   );
 
@@ -616,16 +652,14 @@ export function BoolExprEditor({
             <label htmlFor={litId} className={CX.hidden}>
               Constant value
             </label>
-            <select
+            <ExprSelect
               id={litId}
-              className={`${CX.select} rc-expr-value`}
-              aria-label={`${ariaLabelPrefix} literal`}
+              className="rc-expr-value"
+              ariaLabel={`${ariaLabelPrefix} literal`}
               value={value.value ? 'true' : 'false'}
-              onChange={(e) => onChange({ op: 'lit', value: e.target.value === 'true' })}
-            >
-              <option value="true">true</option>
-              <option value="false">false</option>
-            </select>
+              options={BOOLEAN_LITERAL_OPTIONS}
+              onChange={(next) => onChange({ op: 'lit', value: next === 'true' })}
+            />
           </>
         );
       case 'var':
@@ -635,22 +669,18 @@ export function BoolExprEditor({
             <label htmlFor={varId} className={CX.hidden}>
               Boolean variable
             </label>
-            <select
+            <ExprSelect
               id={varId}
-              className={`${CX.select} rc-expr-var`}
-              aria-label={`${ariaLabelPrefix} boolean variable`}
+              className="rc-expr-var"
+              ariaLabel={`${ariaLabelPrefix} boolean variable`}
               value={value.name}
-              onChange={(e) => onChange({ op: 'var', name: e.target.value })}
-            >
-              {!schemaKeys.includes(value.name) && (
-                <option value={value.name}>{value.name} (undeclared)</option>
+              options={variableOptions(
+                booleanKeys.length > 0 ? booleanKeys : schemaKeys,
+                schemaKeys,
+                value.name,
               )}
-              {(booleanKeys.length > 0 ? booleanKeys : schemaKeys).map((key) => (
-                <option key={key} value={key}>
-                  {key}
-                </option>
-              ))}
-            </select>
+              onChange={(name) => onChange({ op: 'var', name })}
+            />
           </>
         );
       case 'eq':
@@ -712,16 +742,14 @@ export function BoolExprEditor({
                       Set value {itemIdx + 1}
                     </label>
                     {itemKind === 'boolean' ? (
-                      <select
+                      <ExprSelect
                         id={itemValId}
-                        className={`${CX.select} rc-expr-value`}
-                        aria-label={`${ariaLabelPrefix} value ${itemIdx + 1}`}
+                        className="rc-expr-value"
+                        ariaLabel={`${ariaLabelPrefix} value ${itemIdx + 1}`}
                         value={item === true ? 'true' : 'false'}
-                        onChange={(e) => updateInItem(e.target.value === 'true')}
-                      >
-                        <option value="true">true</option>
-                        <option value="false">false</option>
-                      </select>
+                        options={BOOLEAN_LITERAL_OPTIONS}
+                        onChange={(next) => updateInItem(next === 'true')}
+                      />
                     ) : itemKind === 'number' ? (
                       <StrictIntegerInput
                         id={itemValId}
@@ -849,6 +877,7 @@ export function BoolExprEditor({
           <IconButton
             label={`${collapsed ? 'Expand' : 'Collapse'} ${value.op} group of ${value.args.length}`}
             className="rc-expr-toggle"
+            tipAlign="start"
             expanded={!collapsed}
             controls={childrenId}
             onClick={() => setCollapsed((prev) => !prev)}

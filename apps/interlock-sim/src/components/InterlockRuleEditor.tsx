@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type RefObject } from 'react';
 import type { TransitionRule, TransitionSystemModel, ValidationError } from '@rulecanvas/core';
 import { formatBoolExpr, formatUpdateAssignment } from '@rulecanvas/ui';
-import { matchesDraftPrefix } from '@rulecanvas/workbench-react';
+import { WorkbenchSelect, matchesDraftPrefix } from '@rulecanvas/workbench-react';
 import {
   addAssumption,
   appendGuardClause,
@@ -62,7 +62,7 @@ export interface InterlockEditorState {
   readonly model: TransitionSystemModel;
   readonly diagnostics: ModelDiagnosticsIndex;
   readonly resetKey: string | number;
-  readonly ruleSelectRef: RefObject<HTMLSelectElement | null>;
+  readonly ruleSelectRef: RefObject<HTMLButtonElement | null>;
   readonly selectedRule: TransitionRule | null;
   readonly effectiveRuleIndex: number;
   readonly repairableOpenInnerDoor: boolean;
@@ -136,7 +136,7 @@ export function useInterlockEditorState({
   const nextRowIdRef = useRef<number>(0);
   const prevResetKeyRef = useRef<string | number>(resetKey);
   const prevFocusSeqRef = useRef<number>(0);
-  const ruleSelectRef = useRef<HTMLSelectElement | null>(null);
+  const ruleSelectRef = useRef<HTMLButtonElement | null>(null);
   const preserveNextNoticeRef = useRef<boolean>(false);
   const onActivateGuardTabRef = useRef(onActivateGuardTab);
   onActivateGuardTabRef.current = onActivateGuardTab;
@@ -502,19 +502,20 @@ export function GuardInspectorContent({ editor }: { readonly editor: InterlockEd
     <>
       <div className="is-field">
         <label htmlFor="inspector-rule-select">Transition rule</label>
-        <select
-          ref={editor.ruleSelectRef}
+        <WorkbenchSelect
+          triggerRef={editor.ruleSelectRef}
           id="inspector-rule-select"
           className="is-select is-mono"
+          mono
           value={selectedRule?.id ?? ''}
-          onChange={(e) => editor.handleSelectRule(e.target.value)}
-        >
-          {model.rules.map((rule, idx) => (
-            <option key={rule.id} value={rule.id}>
-              {idx + 1}. {rule.id}
-            </option>
-          ))}
-        </select>
+          placeholder="No rule selected"
+          options={model.rules.map((rule, idx) => ({
+            value: rule.id,
+            label: `${idx + 1}. ${rule.id}`,
+            description: rule.label || undefined,
+          }))}
+          onChange={(ruleId) => editor.handleSelectRule(ruleId)}
+        />
         {selectedRule !== null && <span className="is-hint">{selectedRule.label}</span>}
       </div>
 

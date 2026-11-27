@@ -1120,7 +1120,8 @@ svg {
 
 .is-door-leaf {
   transition:
-    transform var(--dur-state) var(--ease-out),
+    transform var(--dur-state) var(--ease-in-out),
+    opacity var(--dur-base) var(--ease-out),
     fill var(--dur-base) var(--ease-out);
 }
 
@@ -1210,7 +1211,7 @@ svg {
   transition:
     fill var(--dur-state) var(--ease-out),
     stroke var(--dur-state) var(--ease-out),
-    transform var(--dur-base) var(--ease-spring);
+    transform var(--dur-base) var(--ease-out);
 }
 
 .is-svg-purge-seg[data-filled='true'] {
@@ -1221,7 +1222,7 @@ svg {
   transform-origin: 460px 137px;
   transform: rotate(0deg);
   transition:
-    transform var(--dur-state) var(--ease-spring),
+    transform var(--dur-state) var(--ease-in-out),
     stroke var(--dur-base) var(--ease-out);
 }
 
@@ -2375,5 +2376,34 @@ svg {
   .is-btn:active:not(:disabled),
   .is-actuator-btn:active {
     transform: none;
+  }
+}
+
+/* === Selection and replay motion (v0.7) === */
+.is-tab {
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    background-color var(--dur-fast) var(--ease-out);
+}
+
+.is-timeline-item,
+.is-table tr,
+.is-telemetry-cell {
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
+}
+
+.is-timeline-btn {
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .is-timeline-item:not([data-active='true']) > .is-timeline-btn:hover {
+    background-color: var(--color-surface-subtle);
+  }
+
+  .is-tab:hover:not([aria-selected='true']) {
+    background-color: var(--color-surface-tint);
   }
 }

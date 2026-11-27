@@ -17,8 +17,6 @@ import type {
 import {
   formatBoolExpr,
   formatRuleSummary,
-  formatStateValue,
-  formatVarDef,
 } from '@rulecanvas/ui';
 import {
   addAssumption,
@@ -55,8 +53,25 @@ import {
 } from '../model-editor.js';
 import { BoolExprEditor, ValueExprEditor, useExpressionDraftStore } from './ExprEditor.js';
 import { StrictIntegerInput } from './StrictIntegerInput.js';
+import { WorkbenchSelect, type WorkbenchSelectOption } from '@rulecanvas/workbench-react';
 
 export type EditorTabId = 'schema' | 'rules' | 'invariants' | 'assumptions' | 'json';
+
+const VAR_KIND_OPTIONS: readonly WorkbenchSelectOption<VarDef['kind']>[] = [
+  { value: 'boolean', label: 'boolean', description: 'true or false' },
+  { value: 'enum', label: 'enum', description: 'one of a fixed list of names' },
+  { value: 'int', label: 'int', description: 'bounded integer range' },
+];
+
+const BOOLEAN_INITIAL_OPTIONS: readonly WorkbenchSelectOption<'true' | 'false'>[] = [
+  { value: 'false', label: 'false' },
+  { value: 'true', label: 'true' },
+];
+
+const QUICK_POLARITY_OPTIONS: readonly WorkbenchSelectOption<'not' | 'var'>[] = [
+  { value: 'not', label: '! (negated)', description: 'clause holds when the variable is false' },
+  { value: 'var', label: 'true (positive)', description: 'clause holds when the variable is true' },
+];
 
 const EDITOR_TABS: readonly { readonly id: EditorTabId; readonly label: string }[] = [
   { id: 'schema', label: 'Schema & State' },
@@ -875,37 +890,32 @@ export function PolicyEditorPane({
     const current = model.initialState[varName];
     if (def.kind === 'boolean') {
       return (
-        <select
+        <WorkbenchSelect<'true' | 'false'>
           id={controlId}
           className="ag-select ag-input-mono"
-          aria-label={`Initial value for ${varName}`}
+          ariaLabel={`Initial value for ${varName}`}
+          mono
           value={current === true ? 'true' : 'false'}
-          onChange={(e) =>
-            onChangeModel(setInitialStateValue(model, varName, e.target.value === 'true'))
-          }
-        >
-          <option value="false">false</option>
-          <option value="true">true</option>
-        </select>
+          options={BOOLEAN_INITIAL_OPTIONS}
+          onChange={(next) => onChangeModel(setInitialStateValue(model, varName, next === 'true'))}
+        />
       );
     }
     if (def.kind === 'enum') {
       const valueStr = typeof current === 'string' ? current : (def.values[0] ?? '');
       return (
-        <select
+        <WorkbenchSelect
           id={controlId}
           className="ag-select ag-input-mono"
-          aria-label={`Initial value for ${varName}`}
+          ariaLabel={`Initial value for ${varName}`}
+          mono
           value={valueStr}
-          onChange={(e) => onChangeModel(setInitialStateValue(model, varName, e.target.value))}
-        >
-          {!def.values.includes(valueStr) && <option value={valueStr}>{valueStr}</option>}
-          {def.values.map((v) => (
-            <option key={v} value={v}>
-              {v}
-            </option>
-          ))}
-        </select>
+          options={[
+            ...(def.values.includes(valueStr) ? [] : [{ value: valueStr, label: valueStr }]),
+            ...def.values.map((v) => ({ value: v, label: v })),
+          ]}
+          onChange={(next) => onChangeModel(setInitialStateValue(model, varName, next))}
+        />
       );
     }
     const numVal = typeof current === 'number' ? current : def.min;
@@ -1088,12 +1098,18 @@ export function PolicyEditorPane({
         <div className="ag-section">
           <div className="ag-section-header">
             <h3 className="ag-section-title">State Schema &amp; Initial State</h3>
-            <span className="ag-mono ag-tabular" style={{ fontSize: 12, color: 'var(--color-ink-muted)' }}>
-              {schemaKeys.length} / 64 variables
-            </span>
+            <span className="ag-meta-inline">{schemaKeys.length} / 64 variables</span>
           </div>
 
-          <div className="ag-item-list">
+          <div className="ag-schema-table" role="group" aria-label="State variables">
+            <div className="ag-schema-head" aria-hidden="true">
+              <span>Variable</span>
+              <span>Type</span>
+              <span>Domain</span>
+              <span>Initial</span>
+              <span />
+            </div>
+
             {schemaKeys.map((key) => {
               const rowId = getSchemaRowId(key);
               const def = model.schema[key]!;
@@ -1105,80 +1121,94 @@ export function PolicyEditorPane({
               const nameError = Object.hasOwn(varNameErrors, rowId) ? varNameErrors[rowId]! : null;
               const minFieldKey = `schema:${rowId}.min`;
               const maxFieldKey = `schema:${rowId}.max`;
+              const isLastVariable = schemaKeys.length <= 1;
 
               return (
-                <div key={rowId} className="ag-item-row">
-                  <div className="ag-row-grid">
-                    <div className="ag-field">
-                      <label htmlFor={`schema-var-name-${rowId}`}>Variable</label>
-                      <input
-                        id={`schema-var-name-${rowId}`}
-                        type="text"
-                        className="ag-input ag-input-mono"
-                        aria-label={`Variable name ${key}`}
-                        aria-invalid={nameError !== null ? 'true' : undefined}
-                        value={nameDraft}
-                        onChange={(e) => handleRenameSchemaVar(rowId, key, def, e.target.value)}
-                        onBlur={() => {
-                          if (nameError === null && nameDraft !== key) {
-                            setVarNameDrafts((prev) => {
-                              const next = { ...prev };
-                              delete next[rowId];
-                              return next;
-                            });
-                          }
-                        }}
-                      />
-                      {nameError !== null && (
-                        <span className="ag-field-error" role="alert">
-                          {nameError}
+                <div
+                  key={rowId}
+                  className="ag-schema-row"
+                  data-kind={def.kind}
+                  data-invalid={varErrors.length > 0 || nameError !== null ? 'true' : undefined}
+                >
+                  <div className="ag-schema-cell ag-schema-cell-name">
+                    <label htmlFor={`schema-var-name-${rowId}`} className="ag-schema-cell-label">
+                      Variable
+                    </label>
+                    <input
+                      id={`schema-var-name-${rowId}`}
+                      type="text"
+                      className="ag-input ag-input-mono"
+                      aria-label={`Variable name ${key}`}
+                      aria-invalid={nameError !== null ? 'true' : undefined}
+                      spellCheck={false}
+                      title={nameDraft}
+                      value={nameDraft}
+                      onChange={(e) => handleRenameSchemaVar(rowId, key, def, e.target.value)}
+                      onBlur={() => {
+                        if (nameError === null && nameDraft !== key) {
+                          setVarNameDrafts((prev) => {
+                            const next = { ...prev };
+                            delete next[rowId];
+                            return next;
+                          });
+                        }
+                      }}
+                    />
+                    {nameError !== null && (
+                      <span className="ag-field-error" role="alert">
+                        {nameError}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="ag-schema-cell">
+                    <label htmlFor={`schema-var-kind-${rowId}`} className="ag-schema-cell-label">
+                      Type
+                    </label>
+                    <WorkbenchSelect<VarDef['kind']>
+                      id={`schema-var-kind-${rowId}`}
+                      className="ag-select ag-input-mono"
+                      ariaLabel={`Type kind for ${key}`}
+                      mono
+                      value={def.kind}
+                      options={VAR_KIND_OPTIONS}
+                      onChange={(kind) => {
+                        pruneDraftsByPrefix(`schema:${rowId}`);
+                        const nextDef: VarDef =
+                          kind === 'boolean'
+                            ? { kind: 'boolean' }
+                            : kind === 'enum'
+                              ? { kind: 'enum', values: ['idle', 'active'] }
+                              : { kind: 'int', min: 0, max: 3 };
+                        onChangeModel(
+                          updateSchemaVariable(model, key, key, nextDef, defaultValueForVarDef(nextDef)),
+                        );
+                      }}
+                    />
+                  </div>
+
+                  <div className="ag-schema-cell ag-schema-cell-domain">
+                    {def.kind === 'boolean' && (
+                      <>
+                        <span className="ag-schema-cell-label" aria-hidden="true">
+                          Domain
                         </span>
-                      )}
-                    </div>
-
-                    <div className="ag-field">
-                      <label htmlFor={`schema-var-kind-${rowId}`}>Kind</label>
-                      <select
-                        id={`schema-var-kind-${rowId}`}
-                        className="ag-select ag-input-mono"
-                        aria-label={`Type kind for ${key}`}
-                        value={def.kind}
-                        onChange={(e) => {
-                          const kind = e.target.value as VarDef['kind'];
-                          pruneDraftsByPrefix(`schema:${rowId}`);
-                          const nextDef: VarDef =
-                            kind === 'boolean'
-                              ? { kind: 'boolean' }
-                              : kind === 'enum'
-                                ? { kind: 'enum', values: ['idle', 'active'] }
-                                : { kind: 'int', min: 0, max: 3 };
-                          onChangeModel(
-                            updateSchemaVariable(
-                              model,
-                              key,
-                              key,
-                              nextDef,
-                              defaultValueForVarDef(nextDef),
-                            ),
-                          );
-                        }}
-                      >
-                        <option value="boolean">boolean</option>
-                        <option value="enum">enum</option>
-                        <option value="int">int</option>
-                      </select>
-                    </div>
-
+                        <span className="ag-schema-domain-fixed">true | false</span>
+                      </>
+                    )}
                     {def.kind === 'enum' && (
-                      <div className="ag-field">
-                        <label htmlFor={`schema-var-enum-${rowId}`}>
-                          Enum values (comma-separated)
+                      <>
+                        <label htmlFor={`schema-var-enum-${rowId}`} className="ag-schema-cell-label">
+                          Values
                         </label>
                         <input
                           id={`schema-var-enum-${rowId}`}
                           type="text"
                           className="ag-input ag-input-mono"
                           aria-label={`Enum values for ${key}`}
+                          aria-describedby={`schema-var-enum-hint-${rowId}`}
+                          spellCheck={false}
+                          title={def.values.join(', ')}
                           value={def.values.join(', ')}
                           onChange={(e) => {
                             const values = e.target.value
@@ -1193,13 +1223,20 @@ export function PolicyEditorPane({
                             );
                           }}
                         />
-                      </div>
+                        <span id={`schema-var-enum-hint-${rowId}`} className="ag-visually-hidden">
+                          Comma-separated values, {def.values.length} declared
+                        </span>
+                      </>
                     )}
-
                     {def.kind === 'int' && (
                       <>
-                        <div className="ag-field">
-                          <label htmlFor={`schema-var-min-${rowId}`}>Min</label>
+                        <span className="ag-schema-cell-label" aria-hidden="true">
+                          Range
+                        </span>
+                        <span className="ag-schema-range">
+                          <label htmlFor={`schema-var-min-${rowId}`} className="ag-visually-hidden">
+                            Min
+                          </label>
                           <StrictIntegerInput
                             id={`schema-var-min-${rowId}`}
                             value={def.min}
@@ -1220,9 +1257,12 @@ export function PolicyEditorPane({
                               )
                             }
                           />
-                        </div>
-                        <div className="ag-field">
-                          <label htmlFor={`schema-var-max-${rowId}`}>Max</label>
+                          <span className="ag-schema-range-sep" aria-hidden="true">
+                            ..
+                          </span>
+                          <label htmlFor={`schema-var-max-${rowId}`} className="ag-visually-hidden">
+                            Max
+                          </label>
                           <StrictIntegerInput
                             id={`schema-var-max-${rowId}`}
                             value={def.max}
@@ -1243,142 +1283,215 @@ export function PolicyEditorPane({
                               )
                             }
                           />
-                        </div>
+                        </span>
                       </>
                     )}
-
-                    <div className="ag-field">
-                      <label htmlFor={`schema-var-init-${rowId}`}>Initial Value</label>
-                      {renderInitialValueEditor(key, def, rowId)}
-                    </div>
-
-                    <div className="ag-inline-actions">
-                      <button
-                        type="button"
-                        className="ag-btn ag-btn-sm ag-btn-danger"
-                        disabled={schemaKeys.length <= 1}
-                        onClick={() => handleRemoveSchemaVar(key, rowId)}
-                      >
-                        Remove
-                      </button>
-                    </div>
                   </div>
 
-                  <div className="ag-mono" style={{ fontSize: 11.5, color: 'var(--color-ink-muted)' }}>
-                    Domain: {formatVarDef(def)} | Initial:{' '}
-                    {model.initialState[key] !== undefined
-                      ? formatStateValue(model.initialState[key]!)
-                      : '<missing>'}
+                  <div className="ag-schema-cell">
+                    <label htmlFor={`schema-var-init-${rowId}`} className="ag-schema-cell-label">
+                      Initial
+                    </label>
+                    {renderInitialValueEditor(key, def, rowId)}
                   </div>
-                  <InlineErrorList errors={varErrors} />
+
+                  <div className="ag-schema-cell ag-schema-cell-actions">
+                    <button
+                      type="button"
+                      className="ag-icon-btn ag-icon-btn-danger"
+                      aria-label={`Remove variable ${key}`}
+                      aria-describedby={isLastVariable ? 'schema-remove-last-hint' : undefined}
+                      disabled={isLastVariable}
+                      data-rc-tip-host="true"
+                      onClick={() => handleRemoveSchemaVar(key, rowId)}
+                    >
+                      <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true" focusable="false">
+                        <path
+                          d="M2.5 3.5h7M4.75 3.5V2.25h2.5V3.5M3.5 3.5l.5 6.25h4l.5-6.25"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="1.2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                      <span className="rc-tip" data-align="end" aria-hidden="true">
+                        {isLastVariable ? 'A model needs at least one variable' : `Remove ${key}`}
+                      </span>
+                    </button>
+                  </div>
+
+                  {varErrors.length > 0 && (
+                    <div className="ag-schema-row-errors">
+                      <InlineErrorList errors={varErrors} />
+                    </div>
+                  )}
                 </div>
               );
             })}
-          </div>
-        </div>
 
-        <div className="ag-section">
-          <h3 className="ag-section-title">Add State Variable</h3>
-          <div className="ag-row-grid">
-            <div className="ag-field">
-              <label htmlFor="new-var-name">Variable Name</label>
-              <input
-                id="new-var-name"
-                type="text"
-                className="ag-input ag-input-mono"
-                placeholder="e.g. reviewTokenValid"
-                aria-invalid={newVarNameError !== null ? 'true' : undefined}
-                value={newVarName}
-                onChange={(e) => setNewVarName(e.target.value)}
-              />
-              {newVarNameError !== null && (
-                <span className="ag-field-error" role="alert">
-                  {newVarNameError}
-                </span>
-              )}
-            </div>
-            <div className="ag-field">
-              <label htmlFor="new-var-kind">Type</label>
-              <select
-                id="new-var-kind"
-                className="ag-select ag-input-mono"
-                value={newVarKind}
-                onChange={(e) => setNewVarKind(e.target.value as VarDef['kind'])}
-              >
-                <option value="boolean">boolean</option>
-                <option value="enum">enum</option>
-                <option value="int">int</option>
-              </select>
-            </div>
-            {newVarKind === 'enum' && (
-              <div className="ag-field">
-                <label htmlFor="new-var-enum">Enum Values</label>
+            <div
+              className="ag-schema-row ag-schema-row-new"
+              data-kind={newVarKind}
+              role="group"
+              aria-labelledby="new-var-heading"
+            >
+              <h4 id="new-var-heading" className="ag-schema-new-title">
+                Add state variable
+              </h4>
+              <div className="ag-schema-cell ag-schema-cell-name">
+                <label htmlFor="new-var-name" className="ag-schema-cell-label">
+                  Variable Name
+                </label>
                 <input
-                  id="new-var-enum"
+                  id="new-var-name"
                   type="text"
                   className="ag-input ag-input-mono"
-                  value={newVarEnumValues}
-                  onChange={(e) => setNewVarEnumValues(e.target.value)}
+                  placeholder="e.g. reviewTokenValid"
+                  spellCheck={false}
+                  aria-invalid={newVarNameError !== null ? 'true' : undefined}
+                  value={newVarName}
+                  onChange={(e) => setNewVarName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (
+                      e.key === 'Enter' &&
+                      trimmedNewVarName.length > 0 &&
+                      newVarNameError === null &&
+                      !newVarIntInvalid
+                    ) {
+                      e.preventDefault();
+                      handleAddSchemaVar();
+                    }
+                  }}
+                />
+                {newVarNameError !== null && (
+                  <span className="ag-field-error" role="alert">
+                    {newVarNameError}
+                  </span>
+                )}
+              </div>
+              <div className="ag-schema-cell">
+                <label htmlFor="new-var-kind" className="ag-schema-cell-label">
+                  Type
+                </label>
+                <WorkbenchSelect<VarDef['kind']>
+                  id="new-var-kind"
+                  className="ag-select ag-input-mono"
+                  mono
+                  value={newVarKind}
+                  options={VAR_KIND_OPTIONS}
+                  onChange={setNewVarKind}
                 />
               </div>
-            )}
-            {newVarKind === 'int' && (
-              <>
-                <div className="ag-field">
-                  <label htmlFor="new-var-min">Min</label>
-                  <input
-                    id="new-var-min"
-                    type="text"
-                    inputMode="numeric"
-                    className="ag-input ag-input-num"
-                    aria-invalid={!parsedNewVarMin.ok ? 'true' : undefined}
-                    value={newVarMin}
-                    onChange={(e) => setNewVarMin(e.target.value)}
-                  />
-                  {!parsedNewVarMin.ok && (
-                    <span className="ag-field-error" role="alert">
-                      {parsedNewVarMin.message}
+              <div className="ag-schema-cell ag-schema-cell-domain">
+                {newVarKind === 'boolean' && (
+                  <>
+                    <span className="ag-schema-cell-label" aria-hidden="true">
+                      Domain
                     </span>
-                  )}
-                </div>
-                <div className="ag-field">
-                  <label htmlFor="new-var-max">Max</label>
-                  <input
-                    id="new-var-max"
-                    type="text"
-                    inputMode="numeric"
-                    className="ag-input ag-input-num"
-                    aria-invalid={!parsedNewVarMax.ok || newVarRangeError !== null ? 'true' : undefined}
-                    value={newVarMax}
-                    onChange={(e) => setNewVarMax(e.target.value)}
-                  />
-                  {!parsedNewVarMax.ok && (
-                    <span className="ag-field-error" role="alert">
-                      {parsedNewVarMax.message}
+                    <span className="ag-schema-domain-fixed">true | false</span>
+                  </>
+                )}
+                {newVarKind === 'enum' && (
+                  <>
+                    <label htmlFor="new-var-enum" className="ag-schema-cell-label">
+                      Enum Values
+                    </label>
+                    <input
+                      id="new-var-enum"
+                      type="text"
+                      className="ag-input ag-input-mono"
+                      placeholder="idle, active"
+                      spellCheck={false}
+                      value={newVarEnumValues}
+                      onChange={(e) => setNewVarEnumValues(e.target.value)}
+                    />
+                  </>
+                )}
+                {newVarKind === 'int' && (
+                  <>
+                    <span className="ag-schema-cell-label" aria-hidden="true">
+                      Range
                     </span>
-                  )}
-                  {newVarRangeError !== null && (
-                    <span className="ag-field-error" role="alert">
-                      {newVarRangeError}
+                    <span className="ag-schema-range">
+                      <label htmlFor="new-var-min" className="ag-visually-hidden">
+                        Min
+                      </label>
+                      <input
+                        id="new-var-min"
+                        type="text"
+                        inputMode="numeric"
+                        className="ag-input ag-input-num"
+                        aria-invalid={!parsedNewVarMin.ok ? 'true' : undefined}
+                        value={newVarMin}
+                        onChange={(e) => setNewVarMin(e.target.value)}
+                      />
+                      <span className="ag-schema-range-sep" aria-hidden="true">
+                        ..
+                      </span>
+                      <label htmlFor="new-var-max" className="ag-visually-hidden">
+                        Max
+                      </label>
+                      <input
+                        id="new-var-max"
+                        type="text"
+                        inputMode="numeric"
+                        className="ag-input ag-input-num"
+                        aria-invalid={!parsedNewVarMax.ok || newVarRangeError !== null ? 'true' : undefined}
+                        value={newVarMax}
+                        onChange={(e) => setNewVarMax(e.target.value)}
+                      />
                     </span>
-                  )}
-                </div>
-              </>
-            )}
-            <div>
-              <button
-                type="button"
-                className="ag-btn ag-btn-primary ag-btn-sm"
-                disabled={
-                  trimmedNewVarName.length === 0 ||
-                  newVarNameError !== null ||
-                  newVarIntInvalid
-                }
-                onClick={handleAddSchemaVar}
-              >
-                + Add Variable
-              </button>
+                    {!parsedNewVarMin.ok && (
+                      <span className="ag-field-error" role="alert">
+                        Min: {parsedNewVarMin.message}
+                      </span>
+                    )}
+                    {!parsedNewVarMax.ok && (
+                      <span className="ag-field-error" role="alert">
+                        Max: {parsedNewVarMax.message}
+                      </span>
+                    )}
+                    {newVarRangeError !== null && (
+                      <span className="ag-field-error" role="alert">
+                        {newVarRangeError}
+                      </span>
+                    )}
+                  </>
+                )}
+              </div>
+              <div className="ag-schema-cell">
+                <span className="ag-schema-cell-label" aria-hidden="true">
+                  Initial
+                </span>
+                <span className="ag-schema-domain-fixed">
+                  {newVarKind === 'boolean'
+                    ? 'false'
+                    : newVarKind === 'enum'
+                      ? 'first value'
+                      : 'min'}
+                </span>
+              </div>
+              <div className="ag-schema-cell ag-schema-cell-actions">
+                <button
+                  type="button"
+                  className="ag-btn ag-btn-primary ag-btn-sm"
+                  disabled={
+                    trimmedNewVarName.length === 0 ||
+                    newVarNameError !== null ||
+                    newVarIntInvalid
+                  }
+                  onClick={handleAddSchemaVar}
+                >
+                  + Add Variable
+                </button>
+              </div>
             </div>
+            {schemaKeys.length <= 1 && (
+              <p id="schema-remove-last-hint" className="ag-hint">
+                A model needs at least one state variable, so the last one cannot be removed.
+              </p>
+            )}
           </div>
         </div>
       </div>
@@ -1616,34 +1729,29 @@ export function PolicyEditorPane({
                               <label htmlFor="quick-clause-polarity" className="ag-inline-label">
                                 Polarity
                               </label>
-                              <select
+                              <WorkbenchSelect<'not' | 'var'>
                                 id="quick-clause-polarity"
                                 className="ag-select ag-input-mono"
-                                aria-label="Quick clause polarity"
+                                ariaLabel="Quick clause polarity"
+                                mono
                                 value={quickClauseNegated ? 'not' : 'var'}
-                                onChange={(e) => setQuickClauseNegated(e.target.value === 'not')}
-                              >
-                                <option value="not">! (negated)</option>
-                                <option value="var">true (positive)</option>
-                              </select>
+                                options={QUICK_POLARITY_OPTIONS}
+                                onChange={(next) => setQuickClauseNegated(next === 'not')}
+                              />
                             </span>
                             <span className="ag-inline-field">
                               <label htmlFor="quick-clause-var" className="ag-inline-label">
                                 Variable
                               </label>
-                              <select
+                              <WorkbenchSelect
                                 id="quick-clause-var"
                                 className="ag-select ag-input-mono"
-                                aria-label="Quick clause boolean variable"
+                                ariaLabel="Quick clause boolean variable"
+                                mono
                                 value={selectedQuickVar}
-                                onChange={(e) => setQuickClauseVar(e.target.value)}
-                              >
-                                {booleanKeys.map((k) => (
-                                  <option key={k} value={k}>
-                                    {k}
-                                  </option>
-                                ))}
-                              </select>
+                                options={booleanKeys.map((k) => ({ value: k, label: k }))}
+                                onChange={setQuickClauseVar}
+                              />
                             </span>
                             {showQuickAppend && (
                               <button
@@ -1707,33 +1815,32 @@ export function PolicyEditorPane({
                                   <label htmlFor={updVarSelectId} className="ag-visually-hidden">
                                     Target variable
                                   </label>
-                                  <select
+                                  <WorkbenchSelect
                                     id={updVarSelectId}
                                     className="ag-select ag-input-mono rc-expr-var ag-update-target"
-                                    aria-label={`Update ${updIdx + 1} target variable for ${rule.id}`}
+                                    ariaLabel={`Update ${updIdx + 1} target variable for ${rule.id}`}
+                                    mono
+                                    density="compact"
                                     value={upd.var}
-                                    onChange={(e) =>
+                                    options={[
+                                      ...(schemaKeys.includes(upd.var)
+                                        ? []
+                                        : [{ value: upd.var, label: `${upd.var} (undeclared)` }]),
+                                      ...schemaKeys.map((k) => ({ value: k, label: k })),
+                                    ]}
+                                    onChange={(nextVar) =>
                                       onChangeModel(
                                         updateRule(
                                           model,
                                           idx,
                                           updateRuleUpdate(rule, updIdx, {
                                             ...upd,
-                                            var: e.target.value,
+                                            var: nextVar,
                                           }),
                                         ),
                                       )
                                     }
-                                  >
-                                    {!schemaKeys.includes(upd.var) && (
-                                      <option value={upd.var}>{upd.var} (undeclared)</option>
-                                    )}
-                                    {schemaKeys.map((k) => (
-                                      <option key={k} value={k}>
-                                        {k}
-                                      </option>
-                                    ))}
-                                  </select>
+                                  />
                                   <span className="rc-expr-punct ag-update-assign" aria-hidden="true">
                                     :=
                                   </span>

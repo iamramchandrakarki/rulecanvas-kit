@@ -109,7 +109,10 @@ function assertClauseTreeConsistency(clause: GuardClauseExplanation): void {
 function assertBidirectionalLabels(html: string): void {
   const labelForMatches = [...html.matchAll(/<label\b[^>]*\bfor="([^"]+)"/g)].map((m) => m[1]!);
   const forSet = new Set<string>(labelForMatches);
-  const controlMatches = [...html.matchAll(/<(input|select|textarea)\b[^>]*>/g)];
+  // Form controls plus select-only combobox triggers (WorkbenchSelect renders a button)
+  const controlMatches = [
+    ...html.matchAll(/<(input|select|textarea)\b[^>]*>|<button\b[^>]*\brole="combobox"[^>]*>/g),
+  ];
   const idsSeen = new Set<string>();
 
   for (const match of controlMatches) {

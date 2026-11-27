@@ -22,12 +22,14 @@ import {
   WorkbenchDiscardDialog,
   WorkbenchGuideControl,
   WorkbenchNavigation,
+  WorkbenchSelect,
   WorkbenchThemeSwitch,
   VerificationBoundsControl,
   readPresetFromSearch,
   useVerificationSnapshot,
   useWorkbenchRoute,
   useWorkbenchTheme,
+  useWorkbenchTooltipDismissal,
   type WorkbenchNavLink,
 } from '@rulecanvas/workbench-react';
 import { DEFAULT_VERIFY_OPTIONS, runPresetComparison } from './comparison.js';
@@ -127,6 +129,7 @@ export function App({
   workerFactory,
 }: AppProps) {
   const theme = useWorkbenchTheme();
+  useWorkbenchTooltipDismissal();
 
   const resolvedInitialVariant: ApprovalLaunderingVariant =
     initialVariant ??
@@ -597,24 +600,27 @@ export function App({
         <div className="ag-topbar-controls">
           <div className="ag-control-field">
             <label htmlFor="preset-select">Preset</label>
-            <select
+            <WorkbenchSelect<ApprovalLaunderingVariant | 'custom'>
               id="preset-select"
               className="ag-select"
+              menuClassName="rc-select-menu-presets"
               value={activePreset ?? 'custom'}
-              onChange={(e) => {
-                const value = e.target.value;
+              options={[
+                ...(activePreset === null
+                  ? [{ value: 'custom' as const, label: 'Custom / Edited Model' }]
+                  : []),
+                ...AGENT_GATE_PRESETS.map((preset) => ({
+                  value: preset.variant,
+                  label: preset.shortLabel,
+                  description: preset.summary,
+                })),
+              ]}
+              onChange={(value) => {
                 if (value !== 'custom') {
-                  selectPreset(value as ApprovalLaunderingVariant);
+                  selectPreset(value);
                 }
               }}
-            >
-              {activePreset === null && <option value="custom">Custom / Edited Model</option>}
-              {AGENT_GATE_PRESETS.map((preset) => (
-                <option key={preset.variant} value={preset.variant}>
-                  {preset.shortLabel}
-                </option>
-              ))}
-            </select>
+            />
           </div>
 
           <VerificationBoundsControl
@@ -679,10 +685,14 @@ export function App({
             className="ag-btn ag-btn-primary"
             disabled={isRunning}
             aria-busy={isRunning ? 'true' : undefined}
-            title="Run bounded BFS verification (Ctrl/Cmd+Enter)"
+            aria-keyshortcuts="Control+Enter Meta+Enter"
+            data-rc-tip-host="true"
             onClick={handleVerifyCurrent}
           >
             Verify Policy
+            <span className="rc-tip" aria-hidden="true">
+              Run bounded verification (Ctrl/Cmd + Enter)
+            </span>
           </button>
 
           <span className="ag-toolbar-divider" aria-hidden="true" />
@@ -703,6 +713,7 @@ export function App({
             triggerClassName="ag-btn ag-guide-trigger"
             panelClassName="ag-guide-panel"
             visuallyHiddenClassName="ag-visually-hidden"
+            tooltipClassName="rc-tip"
           />
 
           <WorkbenchThemeSwitch
@@ -711,6 +722,7 @@ export function App({
             className="ag-theme-switch"
             buttonClassName="ag-theme-btn"
             activeButtonClassName="ag-theme-btn-active"
+            tooltipClassName="rc-tip"
           />
         </div>
       </header>

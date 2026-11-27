@@ -27,6 +27,22 @@ function assert(cond, msg) {
   if (!cond) throw new Error(`Browser E2E failed: ${msg}`);
 }
 
+/**
+ * Chooses `value` in a shared WorkbenchSelect the way a pointer user does: open the
+ * listbox from its combobox trigger, click the option, and wait for the menu to close.
+ */
+async function pickOption(trigger, value, { dispatchOpen = false } = {}) {
+  // dispatchOpen reaches a trigger behind a modal backdrop (the old native-select
+  // path set the value programmatically); the option itself is clicked for real.
+  if (dispatchOpen) await trigger.dispatchEvent('click');
+  else await trigger.click();
+  const listboxId = await trigger.getAttribute('aria-controls');
+  assert(listboxId !== null, `combobox ${await trigger.getAttribute('id')} opened without aria-controls`);
+  const listbox = trigger.page().locator(`[id="${listboxId}"]`);
+  await listbox.locator(`[role="option"][data-value="${value}"]`).click();
+  await listbox.waitFor({ state: 'detached' });
+}
+
 async function checkGuardDraftRoundTrip(context, baseUrl, app, operator) {
   const page = await context.newPage();
   const isAgentGate = app === 'agent-gate';
@@ -35,7 +51,7 @@ async function checkGuardDraftRoundTrip(context, baseUrl, app, operator) {
   const guardLabel = isAgentGate ? `Rule ${originalRule} guard` : `Guard for ${originalRule}`;
   const selectRule = (id) => isAgentGate
     ? page.locator(`.ag-rule-nav-btn[data-rule-id="${id}"]`).click()
-    : page.locator('#inspector-rule-select').selectOption(id);
+    : pickOption(page.locator('#inspector-rule-select'), id);
   const combobox = (label) => page.getByRole('combobox', { name: label, exact: true });
   const button = (name) => page.getByRole('button', { name, exact: true });
   const integer = (label) => page.getByRole('textbox', { name: label, exact: true });
@@ -54,20 +70,20 @@ async function checkGuardDraftRoundTrip(context, baseUrl, app, operator) {
     await verify.click();
     await verdict.and(page.locator('[data-status="VIOLATED"]')).waitFor();
     await selectRule(originalRule);
-    await combobox(`${guardLabel} operator`).selectOption(operator);
+    await pickOption(combobox(`${guardLabel} operator`), operator);
 
     let draftInput;
     let restoredInput;
     let removeEarlierRow;
     if (operator === 'in') {
-      await combobox(`${guardLabel} target variable`).selectOption(isAgentGate ? 'revision' : 'purgeCycles');
+      await pickOption(combobox(`${guardLabel} target variable`), isAgentGate ? 'revision' : 'purgeCycles');
       await button('+ Add value').click();
       draftInput = integer(`${guardLabel} value 2`);
       restoredInput = integer(`${guardLabel} value 1`);
       removeEarlierRow = button('Remove set value 1');
     } else if (operator === 'and' || operator === 'or') {
       await button('+ Add clause').click();
-      await combobox(`${guardLabel} clause 2 operator`).selectOption('gte');
+      await pickOption(combobox(`${guardLabel} clause 2 operator`), 'gte');
       draftInput = integer(`${guardLabel} clause 2 right integer literal`);
       restoredInput = integer(`${guardLabel} clause 1 right integer literal`);
       removeEarlierRow = button('Remove clause 1');
@@ -131,8 +147,8 @@ async function checkCompactAstEditor(context, baseUrl) {
     await expand.click();
     assert(await combobox('Rule publish_release_notes guard clause 1 operator').isVisible(), 'expanded group hides clause rows');
 
-    await combobox('Rule publish_release_notes guard clause 1 right kind').selectOption('var');
-    await combobox('Rule publish_release_notes guard clause 1 right variable').selectOption('stage');
+    await pickOption(combobox('Rule publish_release_notes guard clause 1 right kind'), 'var');
+    await pickOption(combobox('Rule publish_release_notes guard clause 1 right variable'), 'stage');
     assert(
       (await strip.innerText()).trim() === 'stage == stage && approvalValid',
       `operand kind switch produced ${await strip.innerText()}`,
@@ -181,6 +197,138 @@ async function checkDesktopWorkspace(browser, baseUrl) {
     );
   } finally {
     await context.close();
+  }
+}
+
+// Shared WorkbenchSelect: APG select-only combobox keyboard model, type-ahead, Escape and
+// outside-click dismissal with focus kept on the trigger, Tab commit, top-layer menus
+// that are never clipped by scrolling panes, reduced motion, tooltips and WCAG AA.
+async function checkSharedSelect(browser, baseUrl, AxeBuilder) {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  const preset = page.locator('#preset-select');
+  const listboxOf = async (trigger) => page.locator(`[id="${await trigger.getAttribute('aria-controls')}"]`);
+  const activeOption = (trigger) =>
+    trigger.evaluate((el) => {
+      const id = el.getAttribute('aria-activedescendant');
+      return id === null ? null : document.getElementById(id)?.getAttribute('data-value') ?? null;
+    });
+  const focusedId = () => page.evaluate(() => document.activeElement?.id ?? '');
+  try {
+    await page.goto(`${baseUrl}/suite/agent-gate/?preset=broken`);
+    await page.locator('section.ag-verdict[data-status="VIOLATED"]').waitFor();
+    const startUrl = page.url();
+
+    // Keyboard open, navigation, Escape dismissal with focus restoration
+    await preset.focus();
+    await page.keyboard.press('ArrowDown');
+    assert((await preset.getAttribute('aria-expanded')) === 'true', 'ArrowDown did not open the preset listbox');
+    const listbox = await listboxOf(preset);
+    await listbox.waitFor();
+    assert((await listbox.getAttribute('role')) === 'listbox', 'preset menu is not a listbox');
+    assert((await activeOption(preset)) === 'broken', 'opening did not highlight the selected option');
+    assert(
+      (await listbox.locator('[role="option"][aria-selected="true"]').getAttribute('data-value')) === 'broken',
+      'selected option is not marked aria-selected',
+    );
+    await page.keyboard.press('ArrowDown');
+    assert((await activeOption(preset)) === 'naive-patch-a', 'ArrowDown did not move the highlight');
+    await page.keyboard.press('End');
+    assert((await activeOption(preset)) === 'principled-fix', 'End did not jump to the last option');
+    await page.keyboard.press('Home');
+    assert((await activeOption(preset)) === 'broken', 'Home did not jump to the first option');
+    await page.keyboard.press('v');
+    assert((await activeOption(preset)) === 'vacuous-fix', 'type-ahead did not highlight Vacuous Fix');
+    const axe = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']).analyze();
+    const blocking = axe.violations.filter((v) => v.impact === 'critical' || v.impact === 'serious');
+    assert(blocking.length === 0, `axe violations with listbox open: ${blocking.map((v) => v.id).join(', ')}`);
+    await page.keyboard.press('Escape');
+    await listbox.waitFor({ state: 'detached' });
+    assert((await focusedId()) === 'preset-select', 'Escape did not keep focus on the preset trigger');
+    assert((await preset.getAttribute('data-value')) === 'broken' && page.url() === startUrl, 'Escape changed the preset');
+
+    // Outside click dismisses without changing the value
+    await preset.click();
+    await (await listboxOf(preset)).waitFor();
+    await page.locator('.ag-pane-title').first().click();
+    assert((await preset.getAttribute('aria-expanded')) === 'false', 'outside click did not close the listbox');
+    assert((await preset.getAttribute('data-value')) === 'broken', 'outside click changed the preset');
+
+    // Menus inside the independently scrolling editor render in the top layer, unclipped
+    await page.locator('.ag-rule-nav-btn[data-rule-id="publish_release_notes"]').click();
+    const op = page.getByRole('combobox', { name: 'Rule publish_release_notes guard clause 1 operator', exact: true });
+    await op.click();
+    const opMenu = await listboxOf(op);
+    await opMenu.waitFor();
+    const geometry = await opMenu.evaluate(async (el) => {
+      await Promise.all(el.getAnimations().map((animation) => animation.finished));
+      const r = el.getBoundingClientRect();
+      const probe = document.elementFromPoint(r.left + r.width / 2, r.top + Math.min(r.height - 4, 40));
+      let topLayer = false;
+      try {
+        topLayer = el.matches(':popover-open');
+      } catch {}
+      return { top: r.top, bottom: r.bottom, left: r.left, right: r.right, inside: el.contains(probe), topLayer, vh: innerHeight, vw: innerWidth };
+    });
+    assert(geometry.topLayer, 'operator menu is not rendered in the top layer');
+    assert(geometry.inside, 'operator menu is covered or clipped at its centre');
+    assert(
+      geometry.top >= 0 && geometry.left >= 0 && geometry.bottom <= geometry.vh && geometry.right <= geometry.vw,
+      `operator menu escapes the viewport: ${JSON.stringify(geometry)}`,
+    );
+    await page.keyboard.press('Escape');
+
+    // Tab commits the highlighted option and moves focus on (native select parity)
+    const kind = page.getByRole('combobox', { name: 'Rule publish_release_notes guard clause 1 right kind', exact: true });
+    await kind.focus();
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('Home');
+    assert((await activeOption(kind)) === 'var', 'Home did not highlight var in the operand kind menu');
+    await page.keyboard.press('Tab');
+    assert((await kind.getAttribute('data-value')) === 'var', 'Tab did not commit the highlighted operand kind');
+    assert((await focusedId()) !== (await kind.getAttribute('id')), 'Tab did not move focus past the operand kind');
+
+    // Closed type-ahead commits directly, like a native select
+    const value = page.getByRole('combobox', { name: 'Rule publish_release_notes guard clause 1 right variable', exact: true });
+    await value.focus();
+    await page.keyboard.press('r');
+    assert((await value.getAttribute('data-value')) === 'revision', 'closed type-ahead did not select revision');
+
+    // Decorative tooltips appear on keyboard focus and dismiss with Escape (SC 1.4.13)
+    const remove = page.getByRole('button', { name: 'Remove clause 2', exact: true });
+    await remove.focus();
+    await page.keyboard.press('Shift+Tab');
+    await page.keyboard.press('Tab');
+    const tip = remove.locator('.rc-tip');
+    assert((await tip.evaluate((el) => getComputedStyle(el).visibility)) === 'visible', 'focus did not reveal the tooltip');
+    await page.keyboard.press('Escape');
+    assert((await tip.evaluate((el) => getComputedStyle(el).visibility)) === 'hidden', 'Escape did not dismiss the tooltip');
+    assert(errors.length === 0, `console errors during select checks: ${errors.join('; ')}`);
+  } finally {
+    await context.close();
+  }
+
+  // Reduced motion: menus open and close without animation and unmount immediately
+  const reduced = await browser.newContext({ viewport: { width: 1280, height: 800 }, reducedMotion: 'reduce' });
+  const rpage = await reduced.newPage();
+  try {
+    await rpage.goto(`${baseUrl}/suite/interlock-sim/?preset=broken`);
+    await rpage.locator('section.is-verdict[data-status="VIOLATED"]').waitFor();
+    const trigger = rpage.locator('#preset-select');
+    await trigger.click();
+    const menu = rpage.locator(`[id="${await trigger.getAttribute('aria-controls')}"]`);
+    await menu.waitFor();
+    assert(
+      (await menu.evaluate((el) => getComputedStyle(el).animationName)) === 'none',
+      'reduced motion still animates the select menu',
+    );
+    await rpage.keyboard.press('Escape');
+    assert((await rpage.locator('[role="listbox"]').count()) === 0, 'reduced-motion menu did not unmount on Escape');
+  } finally {
+    await reduced.close();
   }
 }
 
@@ -339,6 +487,7 @@ try {
     checkGuardDraftRoundTrip(context, baseUrl, 'interlock-sim', 'gte'),
     checkCompactAstEditor(context, baseUrl),
     checkDesktopWorkspace(browser, baseUrl),
+    checkSharedSelect(browser, baseUrl, AxeBuilder),
   ]);
   const guardDraftFailures = guardDraftChecks.filter((check) => check.status === 'rejected');
   assert(guardDraftFailures.length === 0, guardDraftFailures.map((check) => check.reason.message).join('\n'));
@@ -1011,7 +1160,7 @@ try {
   await fillBound('ag', '#max-states-input', '10000');
 
   // Malformed JSON import validation on AgentGate
-  await page.selectOption('#preset-select', 'broken');
+  await pickOption(page.locator('#preset-select'), 'broken');
   await page.getByText('VIOLATED', { exact: false }).first().waitFor({ state: 'visible' });
   await page.getByRole('tab', { name: 'JSON' }).click();
   const agJsonTextarea = page.locator('#model-json-textarea');
@@ -1022,9 +1171,9 @@ try {
 
   // Reload clean broken preset and test dirty-edit Back/Forward guard + Escape dismissal
   await page.goto(`${baseUrl}/suite/agent-gate/?preset=broken`, { waitUntil: 'networkidle' });
-  await page.locator('#preset-select').selectOption('principled-fix');
+  await pickOption(page.locator('#preset-select'), 'principled-fix');
   await page.waitForURL('**/suite/agent-gate/?preset=principled-fix');
-  await page.selectOption('#preset-select', 'broken');
+  await pickOption(page.locator('#preset-select'), 'broken');
   await page.getByText('VIOLATED', { exact: false }).first().waitFor({ state: 'visible' });
   await page.getByRole('tab', { name: 'Schema & State' }).click();
   await page.fill('#model-name-input', 'Custom Dirty Policy');
@@ -1275,7 +1424,7 @@ try {
   await page.getByRole('button', { name: 'Edit draft guard for equalize_pressure', exact: true }).click();
   await waitForVisibleFocus('#inspector-rule-select');
   assert(
-    (await page.locator('#inspector-rule-select').inputValue()) === 'equalize_pressure',
+    (await page.locator('#inspector-rule-select').getAttribute('data-value')) === 'equalize_pressure',
     'Jumping to a different guard did not update the inspector selection',
   );
   await editDraftGuardBtn.click();
@@ -1343,7 +1492,7 @@ try {
 
   await interlockJsonArea.fill(`${originalInterlockJson}\n `);
   await page.locator('#preset-select').focus();
-  await page.locator('#preset-select').selectOption('vacuous');
+  await pickOption(page.locator('#preset-select'), 'vacuous');
   await page.getByRole('alertdialog').waitFor({ state: 'visible' });
   const interlockDialogFocus = await page.evaluate(
     () => document.activeElement?.textContent?.trim() ?? '',
@@ -1465,7 +1614,7 @@ try {
   const originalJson = await jsonArea.inputValue();
   await jsonArea.fill(`${originalJson}\n `);
   await page.locator('#preset-select').focus();
-  await page.locator('#preset-select').selectOption('naive-patch-a');
+  await pickOption(page.locator('#preset-select'), 'naive-patch-a');
   await page.getByRole('alertdialog').waitFor({ state: 'visible' });
   const focusedInDialog = await page.evaluate(() => document.activeElement?.textContent?.trim() ?? '');
   assert(
@@ -1498,7 +1647,7 @@ try {
   await page
     .getByText('Synchronized current model JSON in the text area.', { exact: true })
     .waitFor({ state: 'visible' });
-  await page.locator('#preset-select').selectOption('naive-patch-a');
+  await pickOption(page.locator('#preset-select'), 'naive-patch-a');
   await page.waitForURL('**/suite/agent-gate/?preset=naive-patch-a');
   assert(
     (await page.getByRole('alertdialog').count()) === 0,
@@ -1507,13 +1656,13 @@ try {
 
   // Back while dirty on principled-fix -> reselect principled-fix -> approve discard -> URL updates back to principled-fix
   await page.goto(`${baseUrl}/suite/agent-gate/?preset=broken`, { waitUntil: 'networkidle' });
-  await page.locator('#preset-select').selectOption('principled-fix');
+  await pickOption(page.locator('#preset-select'), 'principled-fix');
   await page.waitForURL('**/suite/agent-gate/?preset=principled-fix');
   await page.getByRole('tab', { name: 'Schema & State' }).click();
   await page.locator('#model-name-input').fill('Dirty Before Back');
   await page.goBack();
   await page.getByRole('alertdialog').waitFor({ state: 'visible' });
-  await page.locator('#preset-select').selectOption('principled-fix');
+  await pickOption(page.locator('#preset-select'), 'principled-fix', { dispatchOpen: true });
   await page.getByRole('button', { name: 'Discard & Continue' }).click();
   await page.waitForURL('**/suite/agent-gate/?preset=principled-fix');
   assert(
@@ -1568,7 +1717,7 @@ try {
     }
   });
   await fallbackPage.goto(`${baseUrl}/suite/agent-gate/?preset=broken`, { waitUntil: 'networkidle' });
-  await fallbackPage.locator('#preset-select').selectOption('naive-patch-a');
+  await pickOption(fallbackPage.locator('#preset-select'), 'naive-patch-a');
   await fallbackPage.waitForURL('**/suite/agent-gate/?preset=naive-patch-a');
   await fallbackPage.getByRole('tab', { name: 'Schema & State' }).click();
   await fallbackPage.locator('#model-name-input').fill('NoNavApi Dirty Edit');
@@ -1634,7 +1783,7 @@ try {
   // current draft, while Back to a different pre-reload preset still asks.
   const reloadPage = await context.newPage();
   await reloadPage.goto(`${baseUrl}/suite/agent-gate/?preset=broken`);
-  await reloadPage.selectOption('#preset-select', 'principled-fix');
+  await pickOption(reloadPage.locator('#preset-select'), 'principled-fix');
   await reloadPage.waitForURL('**/?preset=principled-fix');
   const priorSession = await reloadPage.evaluate(() => history.state.sessionId);
   await reloadPage.reload();

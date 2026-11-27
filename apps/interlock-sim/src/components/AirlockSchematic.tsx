@@ -1172,7 +1172,12 @@ export function AirlockSchematic({
               </dt>
               <dd>
                 <TelemetryGlyph kind={item.iconKind} />
-                <span>{item.displayValue}</span>
+                <span
+                  key={changed ? `changed-${item.displayValue}` : 'unchanged'}
+                  className={changed ? 'rc-value-changed' : undefined}
+                >
+                  {item.displayValue}
+                </span>
                 {changed && <span className="is-telemetry-change">MODIFIED</span>}
               </dd>
             </div>

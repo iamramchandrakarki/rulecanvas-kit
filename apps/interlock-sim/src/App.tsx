@@ -22,12 +22,14 @@ import {
   WorkbenchDiscardDialog,
   WorkbenchGuideControl,
   WorkbenchNavigation,
+  WorkbenchSelect,
   WorkbenchThemeSwitch,
   VerificationBoundsControl,
   readPresetFromSearch,
   useVerificationSnapshot,
   useWorkbenchRoute,
   useWorkbenchTheme,
+  useWorkbenchTooltipDismissal,
   type WorkbenchNavLink,
 } from '@rulecanvas/workbench-react';
 import { DEFAULT_VERIFY_OPTIONS, runInterlockPresetComparison } from './comparison.js';
@@ -127,6 +129,7 @@ export function App({
   workerFactory,
 }: AppProps) {
   const theme = useWorkbenchTheme();
+  useWorkbenchTooltipDismissal();
 
   const resolvedInitialVariant: InterlockPresetVariant =
     initialVariant ??
@@ -585,24 +588,27 @@ export function App({
         <div className="is-topbar-controls">
           <div className="is-control-field">
             <label htmlFor="preset-select">Preset</label>
-            <select
+            <WorkbenchSelect<InterlockPresetVariant | 'custom'>
               id="preset-select"
               className="is-select"
+              menuClassName="rc-select-menu-presets"
               value={activePreset ?? 'custom'}
-              onChange={(e) => {
-                const val = e.target.value;
+              options={[
+                ...(activePreset === null
+                  ? [{ value: 'custom' as const, label: 'Custom / Edited Interlock' }]
+                  : []),
+                ...INTERLOCK_SIM_PRESETS.map((preset) => ({
+                  value: preset.variant,
+                  label: preset.shortLabel,
+                  description: preset.summary,
+                })),
+              ]}
+              onChange={(val) => {
                 if (val !== 'custom') {
-                  selectPreset(val as InterlockPresetVariant);
+                  selectPreset(val);
                 }
               }}
-            >
-              {activePreset === null && <option value="custom">Custom / Edited Interlock</option>}
-              {INTERLOCK_SIM_PRESETS.map((preset) => (
-                <option key={preset.variant} value={preset.variant}>
-                  {preset.shortLabel}
-                </option>
-              ))}
-            </select>
+            />
           </div>
 
           <VerificationBoundsControl
@@ -667,10 +673,14 @@ export function App({
             className="is-btn is-btn-primary"
             disabled={isRunning}
             aria-busy={isRunning ? 'true' : undefined}
-            title="Run bounded BFS verification (Ctrl/Cmd+Enter)"
+            aria-keyshortcuts="Control+Enter Meta+Enter"
+            data-rc-tip-host="true"
             onClick={handleVerifyCurrent}
           >
             Verify Interlock Model
+            <span className="rc-tip" aria-hidden="true">
+              Run bounded verification (Ctrl/Cmd + Enter)
+            </span>
           </button>
 
           <span className="is-toolbar-divider" aria-hidden="true" />
@@ -691,6 +701,7 @@ export function App({
             triggerClassName="is-btn is-guide-trigger"
             panelClassName="is-guide-panel"
             visuallyHiddenClassName="is-visually-hidden"
+            tooltipClassName="rc-tip"
           />
 
           <WorkbenchThemeSwitch
@@ -699,6 +710,7 @@ export function App({
             className="is-theme-switch"
             buttonClassName="is-theme-btn"
             activeButtonClassName="is-theme-btn-active"
+            tooltipClassName="rc-tip"
           />
         </div>
       </header>
