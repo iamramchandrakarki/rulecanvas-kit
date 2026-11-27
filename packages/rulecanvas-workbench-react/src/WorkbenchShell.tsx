@@ -9,7 +9,7 @@ export interface WorkbenchThemeSwitchProps {
   readonly activeButtonClassName?: string | undefined;
   /**
    * When set, each button renders an `aria-hidden` hover/focus tooltip with this
-   * class instead of a native `title` (pair with `useWorkbenchTooltipDismissal`).
+   * class instead of a native `title` (pair with `useWorkbenchTooltips`).
    */
   readonly tooltipClassName?: string | undefined;
 }

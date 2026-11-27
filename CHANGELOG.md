@@ -24,6 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The root font size is back at the browser default, so the `rem`-based text tokens render at their documented sizes (body 14px, controls 13px). Before, they rendered 12.5% smaller, and InterlockSim fields rendered at 11.4px.
+- At small-laptop widths, edited presets and long verdict badges no longer push the theme switch and Guide controls out of the header. The controls wrap to a second row instead.
+
+### Fixed
+
 - Stale replay steps display the verified snapshot guard and identify actions that open the current draft. Trace-to-editor jumps move focus, respect reduced motion, and preserve numeric guard drafts.
 - Discard dialogs contain keyboard focus in both directions. Dark-theme destructive actions retain readable text on hover.
 - Custom InterlockSim readouts scope goal and invariant evaluations to the displayed step. The sensor readouts fill each row at narrow and wide widths.

@@ -250,6 +250,12 @@ async function checkSharedSelect(browser, baseUrl, AxeBuilder) {
     assert((await focusedId()) === 'preset-select', 'Escape did not keep focus on the preset trigger');
     assert((await preset.getAttribute('data-value')) === 'broken' && page.url() === startUrl, 'Escape changed the preset');
 
+    // Clicking the associated label toggles the menu closed instead of re-opening it
+    await preset.click();
+    await (await listboxOf(preset)).waitFor();
+    await page.locator('label[for="preset-select"]').click();
+    assert((await preset.getAttribute('aria-expanded')) === 'false', 'label click re-opened the listbox');
+
     // Outside click dismisses without changing the value
     await preset.click();
     await (await listboxOf(preset)).waitFor();
@@ -306,9 +312,48 @@ async function checkSharedSelect(browser, baseUrl, AxeBuilder) {
     assert((await tip.evaluate((el) => getComputedStyle(el).visibility)) === 'visible', 'focus did not reveal the tooltip');
     await page.keyboard.press('Escape');
     assert((await tip.evaluate((el) => getComputedStyle(el).visibility)) === 'hidden', 'Escape did not dismiss the tooltip');
+    // Icon-collapsed header utilities keep a visible tooltip inside the viewport
+    const guide = page.locator('.ag-guide-trigger');
+    await guide.focus();
+    await page.keyboard.press('Shift+Tab');
+    await page.keyboard.press('Tab');
+    const guideTip = await guide.locator('.rc-tip').evaluate((el) => {
+      const r = el.getBoundingClientRect();
+      return { w: r.width, h: r.height, left: r.left, right: r.right, vis: getComputedStyle(el).visibility, vw: innerWidth };
+    });
+    assert(
+      guideTip.vis === 'visible' && guideTip.w > 40 && guideTip.h > 10 && guideTip.left >= 0 && guideTip.right <= guideTip.vw,
+      `guide tooltip collapsed or off-screen: ${JSON.stringify(guideTip)}`,
+    );
     assert(errors.length === 0, `console errors during select checks: ${errors.join('; ')}`);
   } finally {
     await context.close();
+  }
+
+  // Edited presets at small-laptop widths: every header control stays inside the viewport
+  const laptop = await browser.newContext({ viewport: { width: 1024, height: 768 } });
+  const lpage = await laptop.newPage();
+  try {
+    for (const app of ['agent-gate', 'interlock-sim']) {
+      await lpage.goto(`${baseUrl}/suite/${app}/?preset=broken`);
+      await lpage.locator('section[data-status="VIOLATED"]').first().waitFor();
+      if (app === 'agent-gate') {
+        await lpage.getByRole('tab', { name: 'Schema & State' }).click();
+        await lpage.fill('#model-name-input', 'Edited policy');
+      } else {
+        await lpage.getByRole('button', { name: 'Apply Principled Repair', exact: true }).click();
+      }
+      await lpage.locator('#preset-select[data-value="custom"]').waitFor();
+      const outside = await lpage.evaluate(() =>
+        [...document.querySelectorAll('header button, header a')]
+          .map((el) => [el.textContent?.trim() || el.getAttribute('aria-label'), el.getBoundingClientRect()])
+          .filter(([, r]) => r.width > 0 && (r.right > innerWidth + 1 || r.left < -1))
+          .map(([name]) => name),
+      );
+      assert(outside.length === 0, `${app} 1024px edited header clips: ${outside.join(', ')}`);
+    }
+  } finally {
+    await laptop.close();
   }
 
   // Reduced motion: menus open and close without animation and unmount immediately

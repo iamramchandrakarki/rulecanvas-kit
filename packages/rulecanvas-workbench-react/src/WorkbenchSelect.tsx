@@ -82,6 +82,33 @@ function assignRef<T>(ref: Ref<T> | undefined, value: T | null): void {
   else if (ref !== null && ref !== undefined) (ref as { current: T | null }).current = value;
 }
 
+/** Nearest ancestor that scrolls vertically; the menu closes when the trigger leaves it. */
+function scrollParentOf(el: HTMLElement): HTMLElement | null {
+  const view = el.ownerDocument.defaultView;
+  for (let node = el.parentElement; node !== null; node = node.parentElement) {
+    const overflowY = view?.getComputedStyle(node).overflowY;
+    if (overflowY === 'auto' || overflowY === 'scroll') return node;
+  }
+  return null;
+}
+
+/** True when the trigger is scrolled out of its pane or hidden under a sticky bar. */
+function isTriggerObscured(trigger: HTMLElement, menu: HTMLElement, scroller: HTMLElement | null): boolean {
+  const view = trigger.ownerDocument.defaultView;
+  if (view === null) return false;
+  const rect = trigger.getBoundingClientRect();
+  if (rect.width === 0 && rect.height === 0) return true;
+  if (rect.bottom < 0 || rect.top > view.innerHeight) return true;
+  if (scroller !== null) {
+    const bounds = scroller.getBoundingClientRect();
+    if (rect.bottom <= bounds.top || rect.top >= bounds.bottom) return true;
+  }
+  const x = Math.min(Math.max(rect.left + rect.width / 2, 0), view.innerWidth - 1);
+  const y = Math.min(Math.max(rect.top + rect.height / 2, 0), view.innerHeight - 1);
+  const hit = trigger.ownerDocument.elementFromPoint(x, y);
+  return hit !== null && !trigger.contains(hit) && !menu.contains(hit);
+}
+
 function supportsPopover(el: HTMLElement): boolean {
   return typeof (el as HTMLElement & { showPopover?: unknown }).showPopover === 'function';
 }
@@ -303,25 +330,34 @@ export function WorkbenchSelect<V extends string = string>({
     const view = doc?.defaultView;
     if (trigger == null || menu === null || doc === undefined || view == null) return;
 
+    const scroller = scrollParentOf(trigger);
+    // Labels delegate their click to the trigger, which toggles the menu itself.
     const inside = (target: EventTarget | null) =>
-      target instanceof Node && (trigger.contains(target) || menu.contains(target));
+      target instanceof Node &&
+      (trigger.contains(target) ||
+        menu.contains(target) ||
+        Array.from(trigger.labels ?? []).some((label) => label.contains(target)));
     const handlePointerDown = (event: PointerEvent) => {
       if (!inside(event.target)) close();
     };
     const reposition = (event?: Event) => {
       if (event !== undefined && event.target instanceof Node && menu.contains(event.target)) return;
-      const rect = trigger.getBoundingClientRect();
-      if (rect.bottom < 0 || rect.top > view.innerHeight || (rect.width === 0 && rect.height === 0)) {
+      if (isTriggerObscured(trigger, menu, scroller)) {
         close();
         return;
       }
       positionMenu(trigger, menu);
     };
     doc.addEventListener('pointerdown', handlePointerDown, true);
+    // Pressing a label must not blur the trigger (blur closes; the label click then toggles).
+    const labels = Array.from(trigger.labels ?? []);
+    const keepFocus = (event: MouseEvent) => event.preventDefault();
+    for (const label of labels) label.addEventListener('mousedown', keepFocus);
     view.addEventListener('scroll', reposition, true);
     view.addEventListener('resize', reposition);
     return () => {
       doc.removeEventListener('pointerdown', handlePointerDown, true);
+      for (const label of labels) label.removeEventListener('mousedown', keepFocus);
       view.removeEventListener('scroll', reposition, true);
       view.removeEventListener('resize', reposition);
     };
@@ -499,7 +535,10 @@ export function WorkbenchSelect<V extends string = string>({
           // Stop Space from re-activating the button (and toggling the menu) on key up.
           if (event.key === ' ') event.preventDefault();
         }}
-        onBlur={() => {
+        onBlur={(event) => {
+          // Focus can land on the menu (e.g. a scrollbar click); keep it open there.
+          const next = event.relatedTarget;
+          if (next instanceof Node && menuEl.current?.contains(next)) return;
           if (isOpen) close();
         }}
       >
@@ -519,8 +558,14 @@ export function WorkbenchSelect<V extends string = string>({
           data-mono={mono ? 'true' : undefined}
           data-density={density === 'compact' ? 'compact' : undefined}
           tabIndex={-1}
-          // Keep focus on the trigger while the pointer interacts with the menu.
-          onMouseDown={(event) => event.preventDefault()}
+          // Keep focus on the trigger while the pointer picks options. Presses on the
+          // menu itself (its scrollbar) stay native so the scrollbar thumb can be dragged.
+          onMouseDown={(event) => {
+            if (event.target !== event.currentTarget) event.preventDefault();
+          }}
+          onFocus={(event) => {
+            if (event.target === event.currentTarget) triggerEl.current?.focus({ preventScroll: true });
+          }}
           onAnimationEnd={(event) => {
             if (event.target === event.currentTarget && phase === 'closing') setPhase('closed');
           }}

@@ -107,5 +107,7 @@ export {
 
 export {
   WORKBENCH_TOOLTIP_DISMISSED_ATTRIBUTE,
-  useWorkbenchTooltipDismissal,
+  WORKBENCH_TOOLTIP_HOST_ATTRIBUTE,
+  placeWorkbenchTooltip,
+  useWorkbenchTooltips,
 } from './tooltip.js';

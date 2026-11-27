@@ -29,7 +29,7 @@ import {
   useVerificationSnapshot,
   useWorkbenchRoute,
   useWorkbenchTheme,
-  useWorkbenchTooltipDismissal,
+  useWorkbenchTooltips,
   type WorkbenchNavLink,
 } from '@rulecanvas/workbench-react';
 import { DEFAULT_VERIFY_OPTIONS, runInterlockPresetComparison } from './comparison.js';
@@ -129,7 +129,7 @@ export function App({
   workerFactory,
 }: AppProps) {
   const theme = useWorkbenchTheme();
-  useWorkbenchTooltipDismissal();
+  useWorkbenchTooltips();
 
   const resolvedInitialVariant: InterlockPresetVariant =
     initialVariant ??

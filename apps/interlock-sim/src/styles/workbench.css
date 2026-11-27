@@ -52,10 +52,14 @@ body {
   background: var(--color-paper);
   color: var(--color-ink);
   font-family: var(--font-body);
-  font-size: var(--text-md);
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   caret-color: var(--color-accent);
+}
+
+/* Root stays at the browser default so rem-based --text-* tokens match their documented sizes */
+body {
+  font-size: var(--text-md);
 }
 
 @keyframes is-fade-in {
@@ -251,7 +255,8 @@ svg {
   align-items: center;
   justify-content: space-between;
   gap: 4px var(--space-3);
-  padding: 4px var(--space-3);
+  min-height: var(--header-h);
+  padding: 6px var(--space-3);
   background: var(--color-surface);
   color: var(--color-ink);
   border-bottom: 1px solid var(--color-rule);
@@ -345,10 +350,28 @@ svg {
   min-width: 0;
 }
 
+/* Desktop: brand stays left; controls keep one row when they fit and wrap right-aligned
+   onto a second row only when an edited preset or a long verdict badge needs the room. */
 @media (min-width: 1024px) {
-  .is-topbar,
-  .is-topbar-controls {
+  .is-topbar {
     flex-wrap: nowrap;
+  }
+
+  .is-topbar-controls {
+    flex: 1 1 auto;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    row-gap: 6px;
+  }
+
+  .is-topbar-controls .rc-select-trigger {
+    max-width: 12rem;
+  }
+}
+
+@media (min-width: 1024px) and (max-width: 1279px) {
+  .is-topbar-controls .rc-select-trigger {
+    max-width: 9.5rem;
   }
 }
 
@@ -382,8 +405,8 @@ svg {
 
 /* Laptop & 1440p widths: theme & guide labels collapse to icons (names stay available to assistive tech) */
 @media (min-width: 1024px) and (max-width: 1519px) {
-  .is-theme-btn > span,
-  .is-guide-trigger > span:not(.is-visually-hidden) {
+  .is-theme-btn > span:not(.rc-tip),
+  .is-guide-trigger > span:not(.is-visually-hidden):not(.rc-tip) {
     position: absolute;
     width: 1px;
     height: 1px;
@@ -724,17 +747,11 @@ svg {
   transition: border-color var(--dur-fast) var(--ease-out);
 }
 
-.is-input:hover,
-.is-select:hover,
-.is-textarea:hover {
-  border-color: var(--color-ink-secondary);
-}
-
 .is-input[aria-invalid='true'],
 .is-select[aria-invalid='true'],
 .is-textarea[aria-invalid='true'] {
-  border-color: var(--color-danger);
-  background: var(--color-danger-soft);
+  border-color: var(--color-error);
+  background: var(--color-error-soft);
 }
 
 .is-input-num {
@@ -769,6 +786,7 @@ svg {
   color: var(--color-ink);
   font-size: 12.5px;
   font-weight: 500;
+  line-height: 1.2;
   white-space: nowrap;
   cursor: pointer;
   transition:
@@ -845,10 +863,6 @@ svg {
 
   .is-actuator-btn:hover {
     border-color: var(--color-accent);
-    background: var(--color-surface-subtle);
-  }
-
-  .is-timeline-btn:hover {
     background: var(--color-surface-subtle);
   }
 }
@@ -2291,8 +2305,8 @@ svg {
 }
 
 @media (max-width: 639px) {
-  .is-theme-btn > span,
-  .is-guide-trigger > span:not(.is-visually-hidden) {
+  .is-theme-btn > span:not(.rc-tip),
+  .is-guide-trigger > span:not(.is-visually-hidden):not(.rc-tip) {
     position: absolute;
     width: 1px;
     height: 1px;

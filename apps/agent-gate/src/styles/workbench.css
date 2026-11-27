@@ -11,11 +11,15 @@ body {
   background-color: var(--color-paper);
   color: var(--color-ink);
   font-family: var(--font-body);
-  font-size: var(--text-md);
   line-height: 1.5;
   overflow-x: clip;
   -webkit-font-smoothing: antialiased;
   caret-color: var(--color-accent);
+}
+
+/* Root stays at the browser default so rem-based --text-* tokens match their documented sizes */
+body {
+  font-size: var(--text-md);
 }
 
 @keyframes ag-fade-in {
@@ -300,13 +304,28 @@ pre,
   min-width: 0;
 }
 
+/* Desktop: brand stays left; controls keep one row when they fit and wrap right-aligned
+   onto a second row only when an edited preset or a long verdict badge needs the room. */
 @media (min-width: 1024px) {
   .ag-topbar {
     flex-wrap: nowrap;
   }
 
   .ag-topbar-controls {
-    flex-wrap: nowrap;
+    flex: 1 1 auto;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    row-gap: 6px;
+  }
+
+  .ag-topbar-controls .rc-select-trigger {
+    max-width: 12rem;
+  }
+}
+
+@media (min-width: 1024px) and (max-width: 1279px) {
+  .ag-topbar-controls .rc-select-trigger {
+    max-width: 9.5rem;
   }
 }
 
@@ -340,8 +359,8 @@ pre,
 
 /* Laptop & 1440p widths: theme & guide labels collapse to icons (names stay available to assistive tech) */
 @media (min-width: 1024px) and (max-width: 1519px) {
-  .ag-theme-btn > span,
-  .ag-guide-trigger > span:not(.ag-visually-hidden) {
+  .ag-theme-btn > span:not(.rc-tip),
+  .ag-guide-trigger > span:not(.ag-visually-hidden):not(.rc-tip) {
     position: absolute;
     width: 1px;
     height: 1px;
@@ -665,7 +684,7 @@ pre,
 .ag-select,
 .ag-textarea {
   font-family: var(--font-body);
-  font-size: 13px;
+  font-size: var(--text-sm);
   color: var(--color-ink);
   background-color: var(--color-surface);
   border: 1px solid var(--color-control-border);
@@ -1735,6 +1754,7 @@ button.ag-timeline-jump:hover {
   .ag-btn,
   .ag-input,
   .ag-select,
+  .ag-tab,
   .ag-rule-nav-btn {
     min-height: 38px;
   }
@@ -1746,8 +1766,8 @@ button.ag-timeline-jump:hover {
 }
 
 @media (max-width: 639px) {
-  .ag-theme-btn > span,
-  .ag-guide-trigger > span:not(.ag-visually-hidden) {
+  .ag-theme-btn > span:not(.rc-tip),
+  .ag-guide-trigger > span:not(.ag-visually-hidden):not(.rc-tip) {
     position: absolute;
     width: 1px;
     height: 1px;
@@ -2319,6 +2339,8 @@ button.ag-timeline-jump:hover {
  * Below a 480px container width each row stacks into a two-line card with labels.
  */
 .ag-schema-table {
+  /* Identifier and domain columns get the spare width; type and initial stay narrow */
+  --schema-cols: minmax(0, 2fr) 84px minmax(0, 1.6fr) minmax(72px, 0.9fr) var(--schema-act, 28px);
   container-type: inline-size;
   container-name: schema;
   display: flex;
@@ -2332,9 +2354,7 @@ button.ag-timeline-jump:hover {
 .ag-schema-head,
 .ag-schema-row {
   display: grid;
-  grid-template-columns:
-    minmax(7.5rem, 1.4fr) 6rem minmax(7.5rem, 1.3fr) minmax(5.5rem, 0.9fr)
-    var(--schema-act, 28px);
+  grid-template-columns: var(--schema-cols);
   column-gap: 6px;
   align-items: center;
   padding-inline: 8px;
@@ -2381,8 +2401,27 @@ button.ag-timeline-jump:hover {
 
 .ag-schema-table :is(.ag-input, .rc-select-trigger) {
   min-height: var(--control-h-sm);
-  padding-block: 3px;
+  padding: 3px 6px;
   font-size: var(--text-xs);
+}
+
+/* Rows with an inline error align to the top so the message never shifts siblings */
+.ag-schema-row:has(.ag-field-error) {
+  align-items: start;
+}
+
+/* Integer drafts: errors wrap below both range inputs at full cell width */
+.ag-schema-range {
+  flex-wrap: wrap;
+}
+
+.ag-schema-range > .ag-strict-int-wrap {
+  display: contents;
+}
+
+.ag-schema-range .ag-field-error {
+  order: 1;
+  flex: 1 0 100%;
 }
 
 /* Column headings carry the visual label on wide tables; cells keep explicit labels */
@@ -2417,7 +2456,9 @@ button.ag-timeline-jump:hover {
 }
 
 .ag-schema-range .ag-input-num {
-  width: 100%;
+  flex: 1 1 0;
+  width: auto;
+  min-width: 0;
 }
 
 .ag-schema-range-sep {
@@ -2437,9 +2478,7 @@ button.ag-timeline-jump:hover {
 }
 
 .ag-schema-row-new {
-  grid-template-columns:
-    minmax(7.5rem, 1.4fr) 6rem minmax(7.5rem, 1.3fr) minmax(5.5rem, 0.9fr)
-    var(--schema-act, 28px);
+  grid-template-columns: var(--schema-cols);
   row-gap: 4px;
   padding-block: 8px;
   border-top: 1px dashed var(--color-rule-strong);
@@ -2516,15 +2555,27 @@ button.ag-timeline-jump:hover {
     display: none;
   }
 
+  /* Narrow panes: the identifier gets a full row; booleans omit the fixed domain */
   .ag-schema-row,
   .ag-schema-row-new {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) var(--schema-act, 28px);
     grid-template-areas:
-      'name type act'
-      'domain init init';
+      'name name act'
+      'type init init'
+      'domain domain domain';
     row-gap: 6px;
     align-items: end;
     padding-block: 8px;
+  }
+
+  .ag-schema-row[data-kind='boolean']:not(.ag-schema-row-new) {
+    grid-template-areas:
+      'name name act'
+      'type init init';
+  }
+
+  .ag-schema-row[data-kind='boolean']:not(.ag-schema-row-new) > .ag-schema-cell-domain {
+    display: none;
   }
 
   .ag-schema-row > .ag-schema-cell:nth-of-type(1) {
@@ -2550,8 +2601,14 @@ button.ag-timeline-jump:hover {
   .ag-schema-row-new {
     grid-template-areas:
       'title title title'
-      'name type type'
-      'domain init init';
+      'name name name'
+      'type type type'
+      'domain domain domain'
+      'init init init';
+  }
+
+  .ag-schema-row-new > .ag-schema-cell-actions {
+    align-items: stretch;
   }
 
   .ag-schema-row-new > .ag-schema-new-title {

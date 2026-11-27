@@ -74,6 +74,44 @@ select:focus-visible,
   outline-color: var(--color-error);
 }
 
+/* Shared field hover: fine pointers only, never on disabled or focused fields */
+@media (hover: hover) and (pointer: fine) {
+  :is(input:not([type='checkbox'], [type='radio'], [type='range']), textarea):hover:not(
+      :disabled,
+      :focus,
+      [aria-invalid='true']
+    ) {
+    border-color: var(--color-ink-secondary);
+  }
+}
+
+/*
+ * AST operand units ([kind | value]) take the single ring on the unit itself. The
+ * focused half keeps an inset underline and a transparent outline, which forced-colors
+ * mode paints in the system highlight colour.
+ */
+.rc-expr-operand:has(
+    > :is(.rc-select-trigger, input):focus-visible,
+    > span > input:focus-visible
+  ) {
+  outline: 2px solid var(--color-focus);
+  outline-offset: -1px;
+}
+
+.rc-expr-operand:has(> span > input[aria-invalid='true']:focus-visible) {
+  outline-color: var(--color-error);
+}
+
+.rc-expr-operand > :is(.rc-select-trigger, input):focus-visible,
+.rc-expr-operand > span > input:focus-visible {
+  outline: 2px solid transparent;
+  outline-offset: -2px;
+}
+
+.rc-expr-operand > span > input[aria-invalid='true']:focus-visible {
+  box-shadow: inset 0 -2px 0 var(--color-error);
+}
+
 /* ---------- WorkbenchSelect trigger ---------- */
 
 /* Zero-specificity base: app field classes (.ag-select, .is-select, *-mono) refine it. */
@@ -369,6 +407,11 @@ select:focus-visible,
 .rc-tip[data-align='start'] {
   --rc-tip-x: 0%;
   left: 0;
+}
+
+.rc-tip[data-side='top'] {
+  top: auto;
+  bottom: calc(100% + 6px);
 }
 
 /* Hover shows after a short intent delay; keyboard focus shows immediately. */

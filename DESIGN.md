@@ -212,7 +212,7 @@ Every interactive component implements all eight states: `default`, `hover`, `ac
 - **Destructive Action:** Removing a variable is a quiet icon button that turns crimson on hover or focus. The last variable cannot be removed, and the reason is stated in its tooltip and in an associated hint.
 
 ### Tooltips
-- **Decorative Only:** `.rc-tip` labels are `aria-hidden` and repeat a control's accessible name or shortcut (icon buttons, theme switch, guide, `Verify` with `Ctrl/Cmd + Enter` also exposed through `aria-keyshortcuts`). They show on keyboard focus immediately and on hover after `380ms`, and `Escape` hides them without moving pointer or focus (WCAG 2.2 SC 1.4.13).
+- **Decorative Only:** `.rc-tip` labels are `aria-hidden` and repeat a control's accessible name or shortcut (icon buttons, theme switch, guide, `Verify` with `Ctrl/Cmd + Enter` also exposed through `aria-keyshortcuts`). They show on keyboard focus immediately and on hover after `380ms`, stay inside the viewport (clamped horizontally, flipped above when there is no room below), and `Escape` hides them without moving pointer or focus (WCAG 2.2 SC 1.4.13).
 
 ### Navigation & Workspace Tabs
 - **Suite Switcher (`WorkbenchNavigation`):** Top-bar links with `aria-current="page"` indicator and race-safe unsaved-edits guard.
