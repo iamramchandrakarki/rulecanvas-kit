@@ -231,15 +231,37 @@ To start outside this repository instead, use the [Skeleton Crew Starter Templat
 
 ## Screenshots
 
-These screenshots show both locally served production builds at `1440×900` CSS pixels.
+These screenshots show the locally served `v0.8.0` static hub and production workbench builds across Light and Dark themes (`1440×900` desktop and `390×844` mobile CSS pixels).
 
-**AgentGate.** The rule navigator and counterexample inspector both point to the publish rule that violates the approval policy. The editor shows its guard, update, and candidate repair.
+### Static Hub (`site/`)
 
-![AgentGate with a vertical rule navigator, the selected publish rule editor, and a five-step counterexample inspector](docs/screenshots/agent-gate.png)
+**Light and Dark desktop views (`1440×900`) and responsive mobile view (`390×844`).** Relative preset entry links open both workbenches under the same origin while keeping theme preferences synchronized.
 
-**InterlockSim.** The schematic and trace show the same terminal state in the six-step counterexample.
+![RuleCanvasKit static hub in Light theme showing AgentGate and InterlockSim preset entry cards](docs/screenshots/hub-light.png)
 
-![InterlockSim schematic, operator controls, verification verdict, and replay timeline](docs/screenshots/interlock-sim.png)
+![RuleCanvasKit static hub in Dark theme showing AgentGate and InterlockSim preset entry cards](docs/screenshots/hub-dark.png)
+
+![RuleCanvasKit static hub at 390px mobile width](docs/screenshots/hub-mobile.png)
+
+### AgentGate (`apps/agent-gate`)
+
+**Broken policy (`Light`, `1440×900`), repaired verdict delta & report export (`Dark`, `1440×900`), and mobile layout (`390×844`).** The broken preset highlights the five-step counterexample in the inspector alongside the `Export report` menu; adding `!modifiedSinceApproval` and re-verifying shows `VERIFIED`, `Goal reachable: Yes`, and `VerdictDeltaRow` (`Previous run: VIOLATED (5 steps) → Now: VERIFIED`).
+
+![AgentGate in Light theme showing the broken preset, five-step counterexample, candidate guard repair, and Export report button](docs/screenshots/agent-gate.png)
+
+![AgentGate in Dark theme after repair showing VERIFIED, Goal reachable: Yes, VerdictDeltaRow comparison, and Export report button](docs/screenshots/agent-gate-dark.png)
+
+![AgentGate at 390px mobile width](docs/screenshots/agent-gate-mobile.png)
+
+### InterlockSim (`apps/interlock-sim`)
+
+**Broken override (`Light`, `1440×900`), guided repair verdict delta & report export (`Dark`, `1440×900`), and mobile layout (`390×844`).** The broken preset highlights the six-step counterexample across the schematic, inline replay toolbar, and `Export report` menu; applying the principled repair and re-verifying displays `VERIFIED`, `Goal reachable: Yes`, and `VerdictDeltaRow` (`Previous run: VIOLATED (6 steps) → Now: VERIFIED`).
+
+![InterlockSim in Light theme showing the schematic, six-step counterexample, inline trace toolbar, and Export report button](docs/screenshots/interlock-sim.png)
+
+![InterlockSim in Dark theme after guided repair showing VERIFIED, Goal reachable: Yes, VerdictDeltaRow comparison, and Export report button](docs/screenshots/interlock-sim-dark.png)
+
+![InterlockSim at 390px mobile width](docs/screenshots/interlock-sim-mobile.png)
 
 For authored illustrative walkthrough storyboards and rehearsal records (distinct from live `@rulecanvas/core` verification outputs), see [docs/demos/README.md](docs/demos/README.md).
 

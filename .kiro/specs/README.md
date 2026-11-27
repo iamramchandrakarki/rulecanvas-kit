@@ -1,6 +1,6 @@
 # Specifications Directory
 
-This directory (`.kiro/specs/`) holds specification artifacts generated and executed in Kiro Spec mode through the IDE or CLI.
+This directory (`.kiro/specs/`) holds Kiro-authored specification artifacts (`requirements.md`, `design.md`, and `tasks.md`). Each entry under `## Status` records whether it executed in Kiro Spec mode (`tasks.meta.json`) or in a Kiro IDE agent session (with `v0.8.0` Spec 2 work implemented in T3 Code per [`docs/TOOL_ATTRIBUTION.md`](../../docs/TOOL_ATTRIBUTION.md)).
 
 Specification execution history and task checklists are never fabricated or pre-populated here.
 

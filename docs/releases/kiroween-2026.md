@@ -2,7 +2,7 @@
 
 ## Freeze the candidate
 
-Use `main` at the `v0.5.0` release revision as the candidate (merged from [PR #17](https://github.com/iamramchandrakarki/rulecanvas-kit/pull/17) at `eb03d2980cdc12db4ebf346fb851b93d29c26337`, with cold-cache `verify-pack` CI fix at `e8299e2dc8950599191dbe63d78ddb29919af220`, [CI run 45782231512](https://github.com/iamramchandrakarki/rulecanvas-kit/actions/runs/45782231512)). The freeze covers the verifier, model format, UI, presets, and runtime dependencies. Keep the existing branches, tags, and evidence. If the selected source revision changes, record its exact SHA and use the passing evidence for that revision.
+Use the `v0.8.0` release candidate on branch `feat/v0.8.0-kiroween-skeleton-crew` (and its approved `main` revision once merged). Record the exact submission SHA and passing GitHub Actions CI run ID here once CI completes after the final commits. The freeze covers the verifier, model format, verification report and delta contracts, CLI gate, UI, presets, static hub, starter template, and runtime dependencies. Keep the existing branches, tags, and evidence. If the selected source revision changes, record its exact SHA and use the passing evidence for that revision.
 
 ## Audit the submission
 
@@ -45,7 +45,7 @@ On Linux, replace `shasum -a 256 -c` with `sha256sum -c`. `pnpm verify:release:p
 
 ## Deploy after approval
 
-Use one free Cloudflare Pages Direct Upload project. Upload the directory in `$site`, whose immediate children are the two app directories. Configuration is static assets with no remote build, no Functions, no custom domain, no access policy, and no navigation environment overrides. Both Vite builds use `base: './'` and link to the sibling directories. Give judges the two app URLs, including the trailing slashes. Cloudflare assigns the actual hostname. [Cloudflare Direct Upload](https://developers.cloudflare.com/pages/get-started/direct-upload/) · [Free plan limits](https://developers.cloudflare.com/pages/platform/limits/)
+Use one free Cloudflare Pages Direct Upload project. Upload the directory in `$site`, which contains the static hub at the root (`index.html` and assets) with `agent-gate/` and `interlock-sim/` as immediate subdirectories. Configuration is static assets with no remote build, no Functions, no custom domain, no access policy, and no navigation environment overrides. Both Vite builds use `base: './'` and link to `../` and sibling directories. Give judges the hub URL and the two app URLs, including the trailing slashes. Cloudflare assigns the actual hostname. [Cloudflare Direct Upload](https://developers.cloudflare.com/pages/get-started/direct-upload/) · [Free plan limits](https://developers.cloudflare.com/pages/platform/limits/)
 
 For a dashboard deployment, open **Workers & Pages → Create application → Drag and drop your files**. Set the project name to `rulecanvaskit` if available, upload `$site`, and deploy. The following CLI sequence is an equivalent option for an authorized Cloudflare account. Run project creation once.
 
@@ -55,7 +55,7 @@ npx --yes wrangler pages project create rulecanvaskit --production-branch main
 npx --yes wrangler pages deploy "$site" --project-name rulecanvaskit --branch main
 ```
 
-For a GitHub Pages fallback, choose **Settings → Pages → Source → GitHub Actions** after approval. A manually triggered workflow should stage both verified archives in one directory, run `actions/configure-pages@v5`, and upload that directory with `actions/upload-pages-artifact@v4`. Deploy the uploaded artifact through `actions/deploy-pages@v4` in the `github-pages` environment with `pages: write` and `id-token: write`. Keep relative assets and sibling links. The expected base is `https://iamramchandrakarki.github.io/rulecanvas-kit`. [GitHub Pages workflow documentation](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages)
+For a GitHub Pages fallback, choose **Settings → Pages → Source → GitHub Actions** after approval. A manually triggered workflow should stage all three verified static archives from the seven-archive CI bundle (`site-static.tar.gz` at the staging root, with `agent-gate-static.tar.gz` and `interlock-sim-static.tar.gz` extracted into `agent-gate/` and `interlock-sim/` beside it), run `actions/configure-pages@v5`, and upload that directory with `actions/upload-pages-artifact@v4`. Deploy the uploaded artifact through `actions/deploy-pages@v4` in the `github-pages` environment with `pages: write` and `id-token: write`. Keep relative assets and sibling links. The expected base is `https://iamramchandrakarki.github.io/rulecanvas-kit`. [GitHub Pages workflow documentation](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages)
 
 ### Verify the public deployment
 
@@ -63,11 +63,12 @@ Replace the example base with the actual Pages URL. Include `/rulecanvas-kit` in
 
 ```bash
 base='https://rulecanvaskit.pages.dev'
+curl -fsSL -o /dev/null -w '%{http_code} %{url_effective}\n' "$base/"
 curl -fsSL -o /dev/null -w '%{http_code} %{url_effective}\n' "$base/agent-gate/?preset=broken"
 curl -fsSL -o /dev/null -w '%{http_code} %{url_effective}\n' "$base/interlock-sim/?preset=broken"
 ```
 
-1. Open each URL in a signed-out browser. Confirm HTTPS and the expected path and preset. Follow the two navigation links and confirm they stay on the same origin and, for GitHub Pages, under the repository prefix.
+1. Open `"$base/"` and each app URL in a signed-out browser. Confirm HTTPS, the expected paths and presets, and working navigation between the static hub and both apps on the same origin (and under the repository prefix for GitHub Pages).
 2. Run both verification actions. Confirm **Execution: Background Web Worker**, AgentGate's five-step violation, and InterlockSim's six-step violation. Inspect the worker request for HTTP 200 and a JavaScript content type. Check for uncaught errors and failed requests.
 3. Open `/agent-gate/?preset=principled-fix` and `/interlock-sim/?preset=fixed` under the same base. Both should show `VERIFIED` and **Goal reachable: Yes**. Reload the pages and confirm the preset remains selected. Check at least one narrow layout.
 4. Record the source SHA, CI run, site deployment ID, direct links, and smoke-test results. If a later deployment fails, restore the previous passing Pages deployment or re-upload its verified directory to the same project, then repeat the smoke test.
@@ -76,8 +77,8 @@ curl -fsSL -o /dev/null -w '%{http_code} %{url_effective}\n' "$base/interlock-si
 
 **Release artifact preflight.** [`.kiro/specs/release-artifact-preflight/`](../../.kiro/specs/release-artifact-preflight/requirements.md) specifies the local release command (`pnpm verify:release:preflight`) and regression suite (`pnpm test:release:preflight`) implemented in `scripts/release-preflight.mjs`, `scripts/release-preflight-archive.py`, `scripts/release-preflight-browser.mjs`, and `tests/release-preflight.test.mjs`.
 
-- Validates directory membership, `SHA256SUMS.txt`, and bounded tar/gzip safety before extracting `agent-gate-static.tar.gz` and `interlock-sim-static.tar.gz` into a staging directory.
-- Serves the staged output on loopback at `/` and `/rulecanvas-kit/` and verifies both workbenches in Chromium with `Background Web Worker` execution, preset verdicts, and reciprocal navigation before publishing the output directory via atomic rename.
+- Validates directory membership, `SHA256SUMS.txt`, and bounded tar/gzip safety before extracting `site-static.tar.gz` into the staging root alongside `agent-gate-static.tar.gz` and `interlock-sim-static.tar.gz` into `agent-gate/` and `interlock-sim/` subdirectories.
+- Serves the staged output on loopback at `/` and `/rulecanvas-kit/` and verifies the static hub and both workbenches in Chromium with `Background Web Worker` execution, preset verdicts, and reciprocal navigation before publishing the output directory via atomic rename.
 
 [Kiro requirements-first spec workflow](https://kiro.dev/docs/specs/feature-specs/requirements-first/)
 
@@ -95,7 +96,7 @@ The rules use a pass/fail check for category fit and tool use before five equall
 
 ## Approval order
 
-Confirm entrant attestations and the exact source revision. Obtain approval for the PR merge and static deployment, then verify the public URLs. Obtain approval for the public YouTube upload and verify playback. Approve any GitHub tag and release separately using the [release notes](workbench-integration.md). Fill in the [submission checklist](../SKELETON_CREW_SUBMISSION.md#submission-checklist) and obtain Devpost submission approval before the deadline.
+Confirm entrant attestations and the exact source revision. Obtain approval for the PR merge and static deployment, then verify the public URLs. Obtain approval for the public YouTube upload and verify playback. Approve any GitHub tag and release separately using the [release notes](v0.8.0.md). Fill in the [submission checklist](../SKELETON_CREW_SUBMISSION.md#submission-checklist) and obtain Devpost submission approval before the deadline.
 
 After approval for a GitHub release, set `release_tag`, `release_sha`, and `release_archives` to the approved tag, verified post-merge revision, and its archive directory. If the merge produces a new SHA, use its passing CI and artifacts. Keep the published tag separate from the Devpost entry deadline.
 
@@ -112,7 +113,7 @@ git push origin "refs/tags/$release_tag"
 gh release create "$release_tag" \
   --repo iamramchandrakarki/rulecanvas-kit \
   --verify-tag \
-  --notes-file docs/releases/workbench-integration.md \
+  --notes-file docs/releases/v0.8.0.md \
   "$release_archives"/*.tar.gz \
   "$release_archives"/*.tgz \
   "$release_archives/SHA256SUMS.txt"
