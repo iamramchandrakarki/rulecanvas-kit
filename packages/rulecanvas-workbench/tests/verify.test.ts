@@ -840,6 +840,34 @@ describe('@rulecanvas/workbench verification transport and ownership contracts',
         options,
       ).ok,
     ).toBe(false);
+    // Repeated copies of a genuine runtime diagnostic are accepted, while a trailing non-matching entry is rejected.
+    expect(
+      sanitizeAndFreezeVerifyResult(
+        {
+          ...genuine,
+          errors: Array.from({ length: 100 }, () => ({ ...genuine.errors[0]! })),
+        },
+        invalidModel,
+        options,
+      ).ok,
+    ).toBe(true);
+    expect(
+      sanitizeAndFreezeVerifyResult(
+        {
+          ...genuine,
+          errors: [
+            ...Array.from({ length: 100 }, () => ({ ...genuine.errors[0]! })),
+            {
+              code: 'OUT_OF_DOMAIN_TRANSITION',
+              path: 'rules.missing.updates.x',
+              message: 'Forged trailing out-of-domain diagnostic.',
+            },
+          ],
+        },
+        invalidModel,
+        options,
+      ).ok,
+    ).toBe(false);
     // Runtime out-of-domain diagnostics without paired stats and trace are rejected.
     expect(
       sanitizeAndFreezeVerifyResult(

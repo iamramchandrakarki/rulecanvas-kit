@@ -564,29 +564,31 @@ function readGoalReachable(record: Record<string, unknown>): GoalReachRead | nul
   return { present: true, value: prop.value };
 }
 
+function runtimeDiagnosticKey(diagnostic: ValidationError): string {
+  return `${diagnostic.code.length}:${diagnostic.code}:${diagnostic.path.length}:${diagnostic.path}:${diagnostic.message}`;
+}
+
 function allRuntimeDiagnosticsReproduced(
   model: TransitionSystemModel,
   endpoint: StateSnapshot,
   runtimeErrors: readonly ValidationError[],
 ): boolean {
-  for (const diagnostic of runtimeErrors) {
-    let reproduced = false;
-    for (const rule of model.rules) {
-      const stepped = stepModel(model, endpoint, rule.id);
-      if (stepped.ok) {
-        continue;
-      }
-      const produced = stepped.error;
-      if (
-        produced.code === diagnostic.code &&
-        produced.path === diagnostic.path &&
-        produced.message === diagnostic.message
-      ) {
-        reproduced = true;
-        break;
-      }
+  const reproduced = new Set<string>();
+  for (const rule of model.rules) {
+    const stepped = stepModel(model, endpoint, rule.id);
+    if (stepped.ok) {
+      continue;
     }
-    if (!reproduced) {
+    const produced = stepped.error;
+    if (produced.code === 'OUT_OF_DOMAIN_TRANSITION') {
+      reproduced.add(runtimeDiagnosticKey(produced));
+    }
+  }
+  if (reproduced.size === 0) {
+    return false;
+  }
+  for (const diagnostic of runtimeErrors) {
+    if (!reproduced.has(runtimeDiagnosticKey(diagnostic))) {
       return false;
     }
   }

@@ -403,6 +403,31 @@ describe('@rulecanvas/ui verification report', () => {
         },
       };
       expect(buildVerificationReportFromSnapshot(forgedStats).ok).toBe(false);
+
+      const repeatedDiagnostics = {
+        ...snapshot,
+        result: {
+          ...snapshot.result,
+          errors: Array.from({ length: 100 }, () => ({ ...snapshot.result.errors[0]! })),
+        },
+      };
+      expect(buildVerificationReportFromSnapshot(repeatedDiagnostics).ok).toBe(true);
+
+      const trailingForged = {
+        ...snapshot,
+        result: {
+          ...snapshot.result,
+          errors: [
+            ...Array.from({ length: 100 }, () => ({ ...snapshot.result.errors[0]! })),
+            {
+              code: 'OUT_OF_DOMAIN_TRANSITION',
+              path: 'rules.missing.updates.x',
+              message: 'Forged trailing out-of-domain diagnostic.',
+            },
+          ],
+        },
+      };
+      expect(buildVerificationReportFromSnapshot(trailingForged).ok).toBe(false);
     });
 
     it('rejects a structurally identical but forged report object', () => {

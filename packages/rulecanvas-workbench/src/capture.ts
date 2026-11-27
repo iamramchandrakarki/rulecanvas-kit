@@ -557,6 +557,10 @@ function validateOwnedErrors(rawErrors: unknown): rawErrors is ValidationError[]
   return true;
 }
 
+function runtimeDiagnosticKey(diagnostic: ValidationError): string {
+  return `${diagnostic.code.length}:${diagnostic.code}:${diagnostic.path.length}:${diagnostic.path}:${diagnostic.message}`;
+}
+
 export function sanitizeAndFreezeVerifyResult(
   raw: unknown,
   capturedModel: TransitionSystemModel,
@@ -654,27 +658,22 @@ export function sanitizeAndFreezeVerifyResult(
           message: 'INVALID verification result trace does not replay deterministically.',
         };
       }
-      for (const diagnostic of runtimeErrors) {
-        let reproduced = false;
-        for (const rule of capturedModel.rules) {
-          const stepped = stepModel(capturedModel, replay.finalState, rule.id);
-          if (
-            !stepped.ok &&
-            stepped.error.code === diagnostic.code &&
-            stepped.error.path === diagnostic.path &&
-            stepped.error.message === diagnostic.message
-          ) {
-            reproduced = true;
-            break;
-          }
+      const reproduced = new Set<string>();
+      for (const rule of capturedModel.rules) {
+        const stepped = stepModel(capturedModel, replay.finalState, rule.id);
+        if (!stepped.ok && stepped.error.code === 'OUT_OF_DOMAIN_TRANSITION') {
+          reproduced.add(runtimeDiagnosticKey(stepped.error));
         }
-        if (!reproduced) {
-          return {
-            ok: false,
-            message:
-              'INVALID verification result trace does not reproduce its out-of-domain diagnostic.',
-          };
-        }
+      }
+      if (
+        reproduced.size === 0 ||
+        !runtimeErrors.every((diagnostic) => reproduced.has(runtimeDiagnosticKey(diagnostic)))
+      ) {
+        return {
+          ok: false,
+          message:
+            'INVALID verification result trace does not reproduce its out-of-domain diagnostic.',
+        };
       }
 
       const trace = replay.steps.map((step) => ({

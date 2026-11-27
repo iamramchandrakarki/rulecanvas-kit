@@ -429,4 +429,45 @@ describe('report and worker result validation parity', () => {
     expectParity(VERIFIED_WITH_GOAL, OPTIONS, 'not-an-object', false);
     expectParity(VERIFIED_WITH_GOAL, OPTIONS, null, false);
   });
+
+  it('handles repeated runtime diagnostics across many-rule models without per-diagnostic rule re-evaluation', () => {
+    const rules: TransitionRule[] = [
+      ...RUNTIME_DEPTH_N.rules,
+      ...Array.from({ length: 30 }, (_, index) => ({
+        id: `noop_${index}`,
+        label: `No-op ${index}`,
+        guard: boolLit(false),
+        updates: [{ var: 'x', value: intLit(0) }],
+      })),
+    ];
+    expect(rules).toHaveLength(32);
+    const manyRuleOod = makeModel({ max: 1, rules });
+    const base = genuine(manyRuleOod, OPTIONS) as {
+      status: 'INVALID';
+      errors: Array<{ code: string; path: string; message: string }>;
+      stats: Record<string, unknown>;
+      trace: unknown[];
+    };
+    expect(base.status).toBe('INVALID');
+    expect(base.errors).toHaveLength(1);
+
+    const repeatedErrors = Array.from({ length: 200 }, () => ({ ...base.errors[0]! }));
+    expectParity(manyRuleOod, OPTIONS, { ...base, errors: repeatedErrors }, true);
+    expectParity(
+      manyRuleOod,
+      OPTIONS,
+      {
+        ...base,
+        errors: [
+          ...repeatedErrors,
+          {
+            code: 'OUT_OF_DOMAIN_TRANSITION',
+            path: 'rules.missing.updates.x',
+            message: 'Forged trailing out-of-domain diagnostic.',
+          },
+        ],
+      },
+      false,
+    );
+  });
 });
