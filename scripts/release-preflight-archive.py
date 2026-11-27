@@ -114,6 +114,9 @@ def validate(tf, stream_len, reject_top_level=()):
         if ti.type not in (tarfile.REGTYPE, tarfile.AREGTYPE, tarfile.DIRTYPE) or getattr(ti, "sparse", None) is not None:
             raise Reject("%s: not a regular file or directory" % entry_label(ti))
         segments = normalise(ti)
+        for seg in segments:
+            if seg.casefold() in (".ds_store", "__macosx", "thumbs.db", "desktop.ini") or seg.startswith("._"):
+                raise Reject("%s: unintended filesystem metadata artifact" % entry_label(ti))
         is_dir = ti.type == tarfile.DIRTYPE
         if segments and segments[0].casefold() in reject_top_level:
             raise Reject("%s: top-level %s collides with a reserved directory" % (entry_label(ti), ascii(segments[0])))

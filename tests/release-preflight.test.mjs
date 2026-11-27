@@ -493,3 +493,59 @@ describe('release preflight: browser-stage failures', () => {
     });
   }
 });
+
+describe('release preflight: filesystem metadata artifacts', () => {
+  const metadataMembers = [
+    { title: 'root .DS_Store', entry: { name: './.DS_Store', type: 'file', text: 'junk' } },
+    { title: 'nested .DS_Store', entry: { name: './assets/.DS_Store', type: 'file', text: 'junk' } },
+    { title: 'lowercase .ds_store', entry: { name: './.ds_store', type: 'file', text: 'junk' } },
+    { title: '__MACOSX directory', entry: { name: './__MACOSX', type: 'dir' } },
+    { title: '__MACOSX AppleDouble entry', entry: { name: './__MACOSX/._index.html', type: 'file', text: 'junk' } },
+    { title: 'root AppleDouble ._index.html', entry: { name: './._index.html', type: 'file', text: 'junk' } },
+    { title: 'Thumbs.db', entry: { name: './Thumbs.db', type: 'file', text: 'junk' } },
+  ];
+
+  for (const { title, entry } of metadataMembers) {
+    test(`rejects ${title} in agent-gate-static.tar.gz`, () => {
+      const fixture = createFixture({ agentEntries: [...distEntries('agent-gate'), entry] });
+      assertFailure(fixture, runFixture(fixture), 'archive', [
+        'agent-gate-static.tar.gz',
+        'unintended filesystem metadata artifact',
+      ]);
+    });
+
+    test(`rejects ${title} in site-static.tar.gz`, () => {
+      const fixture = createFixture({ siteEntries: [...treeEntries(SITE_DIR), entry] });
+      assertFailure(fixture, runFixture(fixture), 'archive', [
+        'site-static.tar.gz',
+        'unintended filesystem metadata artifact',
+      ]);
+    });
+  }
+
+  for (const { title, entry } of metadataMembers) {
+    test(`rejects ${title} in library .tgz`, () => {
+      const fixture = createFixture();
+      const libName = LIB_NAMES[0];
+      const pkgEntry =
+        entry.type === 'dir'
+          ? { name: `package/${entry.name.replace(/^\.\//, '')}`, type: 'dir' }
+          : { name: `package/${entry.name.replace(/^\.\//, '')}`, type: 'file', text: entry.text };
+      buildArchives([
+        {
+          out: path.join(fixture.archiveDir, libName),
+          entries: [
+            { name: 'package', type: 'dir' },
+            { name: 'package/package.json', type: 'file', text: JSON.stringify({ name: libName, version: '0.0.0' }) },
+            pkgEntry,
+          ],
+        },
+      ]);
+      writeManifest(fixture.archiveDir);
+      assertFailure(fixture, runFixture(fixture), 'archive', [
+        libName,
+        'unintended filesystem metadata artifact',
+      ]);
+    });
+  }
+});
