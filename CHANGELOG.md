@@ -7,31 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-27
+
+See [docs/releases/v0.7.0.md](./docs/releases/v0.7.0.md) for package versions, verification summary, and known limitations.
+
 ### Added
 
-- A shared workbench shell, persistent System, Light, and Dark themes, and self-hosted IBM Plex fonts for AgentGate and InterlockSim.
-- A three-pane AgentGate workspace with a persistent rule navigator, focused guard and update editor, and tabbed verification inspector.
-- An InterlockSim workspace that pairs the discrete airlock schematic and operator console with tabbed trace, state, and guard inspection.
+- Shared workbench shell (`WorkbenchShell`), persistent System, Light, and Dark themes (`useWorkbenchTheme`, `WorkbenchThemeSwitch`), and self-hosted IBM Plex Sans and IBM Plex Mono fonts for AgentGate and InterlockSim.
+- Three-pane fixed-viewport AgentGate workspace with an independently scrolling rule navigator, compact guard and update AST editor, and tabbed verification inspector.
+- InterlockSim workspace pairing the pinned discrete airlock schematic and scrolling operator console with tabbed trace, state, and guard inspection.
+- `VerificationBoundsControl` disclosure popover and `WorkbenchGuideControl` workflow/terminology popover in `@rulecanvas/workbench-react`.
+- `WorkbenchSelect` in `@rulecanvas/workbench-react`: an APG select-only combobox that replaces every native `<select>` in both workbenches, rendering its themed listbox in the browser top layer with viewport flip/clamp, keyboard navigation, and type-ahead.
+- Escape-dismissible, viewport-clamped tooltips (`useWorkbenchTooltips`) for icon-only controls and the `Ctrl/Cmd + Enter` verification shortcut.
 - Browser screenshots and illustrative walkthroughs for both workbenches.
-- `WorkbenchSelect` in `@rulecanvas/workbench-react`: an accessible select-only combobox that replaces every native select in both workbenches. Its themed menu renders above scrolling panes, flips at viewport edges, and supports full keyboard navigation and type-ahead.
-- Escape-dismissible tooltips for icon-only controls and the `Ctrl/Cmd + Enter` verification shortcut.
 
 ### Changed
 
+- Unified design tokens (`DESIGN.md`) and shared `controls.css` / `expr-editor.css` stylesheets across both workbenches, with parity tests enforcing synchronization.
 - AgentGate edits state variables in a compact table with shared column headings that stacks into two-line rows in narrow panes.
-- Fields and select triggers show one focus ring instead of an outline separated from the border.
-- Motion uses one 90–280 ms scale without overshoot. Tab indicators, panels, AST groups, menus and changed replay values animate. Reduced-motion settings disable all of it.
+- Fields and select triggers render a single focus ring over their border instead of an outline separated from the border.
+- Motion uses a single 90–280 ms scale without overshoot for tab indicators, panels, AST groups, menus, schematic travel, and changed replay values; `prefers-reduced-motion` disables transitions and animations.
+- Verification engines (`@rulecanvas/core`), shared UI formatters/replay (`@rulecanvas/ui`), and worker transport/codec (`@rulecanvas/workbench`) semantics remain unchanged from `v0.5.0`.
 
 ### Fixed
 
-- The root font size is back at the browser default, so the `rem`-based text tokens render at their documented sizes (body 14px, controls 13px). Before, they rendered 12.5% smaller, and InterlockSim fields rendered at 11.4px.
-- At small-laptop widths, edited presets and long verdict badges no longer push the theme switch and Guide controls out of the header. The controls wrap to a second row instead.
-
-### Fixed
-
-- Stale replay steps display the verified snapshot guard and identify actions that open the current draft. Trace-to-editor jumps move focus, respect reduced motion, and preserve numeric guard drafts.
-- Discard dialogs contain keyboard focus in both directions. Dark-theme destructive actions retain readable text on hover.
-- Custom InterlockSim readouts scope goal and invariant evaluations to the displayed step. The sensor readouts fill each row at narrow and wide widths.
+- Restored the 16px browser-default root font size so `rem`-based text tokens render at their documented sizes across both workbenches.
+- Wrapped header controls cleanly at small-laptop widths (`1024–1279px`) so edited presets and long verdict badges do not overflow the theme switch or Guide controls.
+- Kept `WorkbenchSelect` scrollbars draggable, preserved focus on the trigger when interacting with the menu or toggling via its `<label>`, and closed the menu when its trigger scrolls out of view.
+- Prevented icon-collapse rules from clipping `.rc-tip` tooltips and clamped/flipped tooltips within viewport bounds.
+- Scoped stale replay steps to display the verified snapshot guard and clearly label draft-opening actions; trace-to-editor jumps move focus, respect reduced motion, and preserve numeric guard drafts across rule switches and AST deletions.
+- Contained keyboard focus in both directions inside discard dialogs and preserved readable dark-theme destructive hover contrast.
+- Scoped custom InterlockSim readouts and invariant evaluations to the displayed replay step and filled sensor rows cleanly across narrow and wide widths.
 
 ## [0.5.0] - 2026-11-26
 
@@ -153,7 +159,9 @@ See [docs/releases/v0.2.0.md](./docs/releases/v0.2.0.md) and the [`v0.2.0`](http
   - GitHub Actions CI workflow (`.github/workflows/ci.yml`) running build, strict ES2022 typecheck, tests, seeded PBT, boundary checks, anti-skip hygiene, tracked workspace config verification, and benchmarks.
   - Open-source documentation and repository templates (`README.md`, `docs/ARCHITECTURE.md`, `CONTRIBUTING.md`, `SECURITY.md`, `CHANGELOG.md`, GitHub issue and pull request templates).
 
-[Unreleased]: https://github.com/iamramchandrakarki/rulecanvas-kit/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/iamramchandrakarki/rulecanvas-kit/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/iamramchandrakarki/rulecanvas-kit/compare/v0.5.0...v0.7.0
+[0.5.0]: https://github.com/iamramchandrakarki/rulecanvas-kit/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/iamramchandrakarki/rulecanvas-kit/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/iamramchandrakarki/rulecanvas-kit/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/iamramchandrakarki/rulecanvas-kit/compare/v0.1.0...v0.2.0

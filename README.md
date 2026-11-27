@@ -64,7 +64,7 @@ docs/
   TOOL_ATTRIBUTION.md    # Development tooling disclosure and specification policy
   SKELETON_CREW_SUBMISSION.md # Honest Devpost Skeleton Crew draft and sub-three-minute demo script
   demos/                 # Illustrative walkthrough storyboards and rehearsal records (isolated from apps/*)
-  releases/              # Release notes (v0.2.0, v0.3.0, v0.4.0)
+  releases/              # Release notes (v0.2.0, v0.3.0, v0.4.0, workbench-integration, v0.7.0)
   specs/                 # Formal requirements, design, and task specifications for @rulecanvas/core
 DESIGN.md                # Visual design system, Light/Dark precision tokens, typography, and schematic conventions
 ```
@@ -78,7 +78,7 @@ Boundary tests automatically enforce an acyclic 4-library package graph (`@rulec
 | `@rulecanvas/core` | `0.1.0` | Packable | `.` | Pure ES2022 GTS validator, BFS verifier, and replay APIs | [packages/rulecanvas-core/README.md](./packages/rulecanvas-core/README.md) |
 | `@rulecanvas/ui` | `0.2.0` | Packable | `.` | Formatters, replay controller, HTML renderers, and diagnostics | [packages/rulecanvas-ui/README.md](./packages/rulecanvas-ui/README.md) |
 | `@rulecanvas/workbench` | `0.5.0` | Private | `./verify`, `./verify-worker`, `./model-json` | Worker/main-thread transport, detached capture, portable JSON codec | [packages/rulecanvas-workbench/README.md](./packages/rulecanvas-workbench/README.md) |
-| `@rulecanvas/workbench-react` | `0.5.0` | Private | `.` | React 19 workbench controls, snapshot hook, nav, and `?preset=` routing | [packages/rulecanvas-workbench-react/README.md](./packages/rulecanvas-workbench-react/README.md) |
+| `@rulecanvas/workbench-react` | `0.7.0` | Private | `.` | React 19 workbench controls, snapshot hook, nav, and `?preset=` routing | [packages/rulecanvas-workbench-react/README.md](./packages/rulecanvas-workbench-react/README.md) |
 
 ## Installation and Quick Start
 
