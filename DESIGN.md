@@ -179,7 +179,7 @@ RuleCanvasKit is **flat-by-default**, conveying hierarchy through surface lumina
 
 - **Engineering Radii:** Controls, badges, inputs, and dialogs use crisp `2px`–`4px` corners (`--radius-xs: 2px`, `--radius-sm: 3px`, `--radius-md: 4px`). Pill radii (`9999px`) and large consumer radii (`>= 10px`) are prohibited.
 - **Schematic Geometry (`InterlockSim`):** The airlock schematic uses subtle CAD/P&ID conventions: `1px`–`2px` vector bulkheads, geometric seal indicators, airflow direction chevrons, segmented HEPA cycle bars, and clean vector sensor glyphs (never ASCII approximations like `[||]` or `***`).
-- **Browser Surfaces:** Scrollbars (`scrollbar-color`), text selection (`::selection`), carets (`caret-color`), and `:focus-visible` rings (`2px solid var(--color-focus)` with `2px` offset) are themed directly from semantic tokens in both Light and Dark modes.
+- **Browser Surfaces:** Scrollbars (`scrollbar-color`), text selection (`::selection`), carets (`caret-color`), and `:focus-visible` rings are themed directly from semantic tokens in both Light and Dark modes.
 
 ## Components
 
@@ -197,8 +197,22 @@ Every interactive component implements all eight states: `default`, `hover`, `ac
 
 ### Inputs / Fields
 - **Style:** `3px` radius, `min-height: 32px`, `1px solid var(--color-control-border)`, paired bidirectionally with an explicit `<label for="...">`.
-- **Focus & Error:** `2px solid var(--color-focus)` outline on `:focus-visible`; `aria-invalid="true"` switches border to `--color-error` and binds inline `role="alert"` recovery copy via `aria-describedby`.
+- **Focus & Error:** Fields and select triggers draw one `2px solid var(--color-focus)` ring over their `1px` border (`outline-offset: -1px`), so there is no gap and no second outline. Buttons keep a `2px` ring with a `2px` offset so the ring stays visible on filled primary buttons. Inside AST operand units (`[kind | value]`), the unit border turns focus-coloured and the focused half gets an inset `2px` underline. `aria-invalid="true"` switches the border, and the focus ring, to `--color-error` and binds inline `role="alert"` recovery copy via `aria-describedby`.
 - **Numeric Bounds & AST Literals:** Always rendered as `type="text" inputMode="numeric"` in `IBM Plex Mono` (`tabular-nums`), preserving raw drafts across tab switches without browser spinner coercion.
+
+### Select Menus (`WorkbenchSelect`)
+- **Pattern:** WAI-ARIA select-only combobox. The trigger is a `<button role="combobox">` paired with the same `<label for>` a native select used; focus stays on the trigger and the highlighted option is exposed through `aria-activedescendant`, so Escape, selection and outside clicks restore focus without extra work.
+- **Keyboard:** `ArrowUp` / `ArrowDown` / `Home` / `End` / `PageUp` / `PageDown` move the highlight without wrapping, `Enter` / `Space` / `Alt+ArrowUp` commit, `Tab` commits and moves on, `Escape` dismisses without change. Typing on a closed trigger selects the matching option directly, like a native select; typing while open moves the highlight, and repeating a character cycles through matches.
+- **Placement:** The listbox renders in the browser top layer (`popover="manual"`) with fixed positioning, so independently scrolling or `overflow: hidden` panes never clip it. It opens below the trigger, flips above when there is more room there, clamps to an `8px` viewport margin and caps at `320px` before scrolling.
+- **States:** Highlighted option: `--color-accent-soft` row with a `1px` `--color-accent-border` inset ring. Selected option: check mark, `600` weight and accent label. Disabled option: muted ink, skipped by navigation and type-ahead. Scenario pickers and AST pickers add one muted hint line (or a right-aligned hint in `compact` density) explaining each option.
+
+### Compact Schema Table (`AgentGate`)
+- **Layout:** One `28px` row per variable under shared `Variable / Type / Domain / Initial` headings. Domain configuration stays inline: `true | false` for booleans, comma-separated values for enums, `min .. max` for integers. The add-variable form is the table's last row and defaults the initial value (`false`, first enum value, or `min`).
+- **Readability & Responsiveness:** Long identifiers keep the widest column and expose the full name in the field `title`. Below a `480px` container width each row stacks into a two-line card with visible per-field labels.
+- **Destructive Action:** Removing a variable is a quiet icon button that turns crimson on hover or focus. The last variable cannot be removed, and the reason is stated in its tooltip and in an associated hint.
+
+### Tooltips
+- **Decorative Only:** `.rc-tip` labels are `aria-hidden` and repeat a control's accessible name or shortcut (icon buttons, theme switch, guide, `Verify` with `Ctrl/Cmd + Enter` also exposed through `aria-keyshortcuts`). They show on keyboard focus immediately and on hover after `380ms`, and `Escape` hides them without moving pointer or focus (WCAG 2.2 SC 1.4.13).
 
 ### Navigation & Workspace Tabs
 - **Suite Switcher (`WorkbenchNavigation`):** Top-bar links with `aria-current="page"` indicator and race-safe unsaved-edits guard.
@@ -209,14 +223,16 @@ Every interactive component implements all eight states: `default`, `hover`, `ac
 - **Synchronized Containment Schematic (`InterlockSim`):** Renders outer corridor, airlock chamber, doors, differential pressure, UV-C lamp, occupancy, HEPA purge counter, and maintenance override directly from the replay session state, with explicit snapshot provenance (`Snapshot: ...`, `OUTDATED` warning when edits are pending, and step-scoped invariant labels).
 
 ### Motion
-- **Purposeful Motion Token Scale:** Every transition maps to one of five calibrated durations and natural cubic-bezier curves (`--ease-out: cubic-bezier(0.22, 1, 0.36, 1)`, `--ease-in-out: cubic-bezier(0.45, 0, 0.25, 1)`, `--ease-spring: cubic-bezier(0.2, 1.12, 0.36, 1)`):
-  - `--dur-instant` (`90ms`): Active press feedback and icon-button micro-responses.
-  - `--dur-fast` (`140ms`): Control hover/focus, tab indicators, rule/step selection, and AST guide highlights.
-  - `--dur-base` (`200ms`): Popovers (`VerificationBoundsControl`, `WorkbenchGuideControl`), modal dialogs, verdict updates, and AST clause highlight reveals.
-  - `--dur-expand` (`260ms`): Comparison matrix drawer reveals.
-  - `--dur-state` (`340ms`): InterlockSim discrete schematic transitions (dual-leaf bulkhead doors, negative-pressure airflow chevrons, UV-C rays, personnel occupancy silhouette, HEPA purge segments, and maintenance override key switch rotation).
-- **Contrast-Safe Entrance Motion:** Reveal animations use GPU-composited `transform`, `clip-path`, and tinted background settling rather than fading text from `opacity: 0`, ensuring WCAG 2.2 AA contrast at every animation frame.
-- **Reduced Motion:** `@media (prefers-reduced-motion: reduce)` disables all non-essential transitions, transforms, and animations immediately while preserving identical state labels, badges, and functional cues.
+- **Purposeful Motion Token Scale:** Every transition maps to one of five durations between `90ms` and `280ms` and three curves (`--ease-out: cubic-bezier(0.22, 1, 0.36, 1)` for entrances and state changes, `--ease-in: cubic-bezier(0.4, 0, 1, 1)` for exits, `--ease-in-out: cubic-bezier(0.45, 0, 0.25, 1)` for mechanical travel). No control overshoots or bounces.
+  - `--dur-instant` (`90ms`): Press feedback, option highlight, menu exit.
+  - `--dur-fast` (`140ms`): Hover and focus, menu entry, chevrons, rule and trace-step selection tints.
+  - `--dur-base` (`200ms`): Popovers, dialogs, tab indicators, tab-panel and rule-detail reveals, AST group expansion, verdict updates.
+  - `--dur-expand` (`260ms`): Comparison drawer and the changed-value cue on the active replay step.
+  - `--dur-state` (`280ms`): InterlockSim schematic travel: door leaves, airflow chevrons, UV-C rays, occupancy silhouette, HEPA purge segments, override key rotation.
+- **Shared Layer:** `controls.css` (byte-identical in both apps) owns select menu entry and exit, tab indicators, tab-panel settling, AST group expansion and the changed-value cue. Values whose replay step changed them re-mount with a short info-tint pulse, so the cue marks exactly the variables the step modified.
+- **Honest Motion:** Animations are cosmetic. Verdicts, state values, door states and enabled actions render in their final state immediately; motion never delays verification or model execution.
+- **Contrast-Safe Entrance Motion:** Reveal animations use GPU-composited `transform`, `clip-path`, and tinted background settling rather than fading text from `opacity: 0`, ensuring WCAG 2.2 AA contrast at every animation frame. Only the `90ms` menu exit fades out.
+- **Reduced Motion:** `@media (prefers-reduced-motion: reduce)` disables transitions and animations, and select menus mount and unmount without animation. Changed values keep a static tint instead of a pulse, and all state labels, badges and functional cues stay identical.
 
 ### Discoverability & First-Time Workflow
 - **Unified Header Grouping:** Subtle `1px` toolbar dividers separate Scenario/Bounds configuration, Live Verdict + single Primary `Verify` action, and secondary Utilities (`Compare Presets`, `Guide` & glossary popover, `System / Light / Dark` theme switch).

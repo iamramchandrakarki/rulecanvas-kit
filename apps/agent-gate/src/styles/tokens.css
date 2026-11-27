@@ -182,7 +182,6 @@
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --ease-in: cubic-bezier(0.4, 0, 1, 1);
   --ease-in-out: cubic-bezier(0.45, 0, 0.25, 1);
-  --ease-spring: cubic-bezier(0.2, 1.12, 0.36, 1);
   --dur-instant: 90ms; /* press feedback, menu exit, option highlight */
   --dur-fast: 140ms; /* hover, focus, menu entry, chevrons */
   --dur-base: 200ms; /* popovers, dialogs, tab indicator, panel reveal */

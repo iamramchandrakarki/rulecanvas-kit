@@ -144,6 +144,7 @@ index.ts              (re-exports public modules from format.ts, replay-controll
 - `WorkbenchNavigation` and `isSafeSameOriginNavigationHref` for reciprocal same-origin navigation between RuleCanvasKit workbenches.
 - `createWorkbenchHistoryController`, `useWorkbenchRoute`, `readPresetFromSearch`, and `buildCanonicalPresetUrl` for preset URL query routing (`?preset=...`) with race-safe dirty-editor discard confirmation (`Navigation API traverseTo` when available, with synchronous fresh-session `history.replaceState` recovery fallback).
 - `useWorkbenchTheme`, `resolveWorkbenchTheme`, `applyDocumentTheme`, `readStoredThemePreference`, `writeStoredThemePreference`, `isThemePreference`, `WORKBENCH_THEME_STORAGE_KEY`, `WorkbenchThemeSwitch`, `WorkbenchBrandMark`, and `WorkbenchDiscardDialog` for SSR-safe persistent theme switching (`system` / `light` / `dark` with Light fallback), brand mark rendering, and accessible discard-confirmation dialogs.
+- `WorkbenchSelect` (with pure keyboard helpers `stepEnabledIndex`, `edgeEnabledIndex`, `resolveTypeahead`) for an APG select-only combobox whose listbox renders in the browser top layer, and `useWorkbenchTooltipDismissal` for Escape-dismissible decorative tooltips. Styling lives in each app's byte-identical `src/styles/controls.css`; the package ships no CSS.
 
 ## Packaging and End-to-End Verification Gates
 

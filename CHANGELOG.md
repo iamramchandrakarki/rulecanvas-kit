@@ -13,6 +13,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A three-pane AgentGate workspace with a persistent rule navigator, focused guard and update editor, and tabbed verification inspector.
 - An InterlockSim workspace that pairs the discrete airlock schematic and operator console with tabbed trace, state, and guard inspection.
 - Browser screenshots and illustrative walkthroughs for both workbenches.
+- `WorkbenchSelect` in `@rulecanvas/workbench-react`: an accessible select-only combobox that replaces every native select in both workbenches. Its themed menu renders above scrolling panes, flips at viewport edges, and supports full keyboard navigation and type-ahead.
+- Escape-dismissible tooltips for icon-only controls and the `Ctrl/Cmd + Enter` verification shortcut.
+
+### Changed
+
+- AgentGate edits state variables in a compact table with shared column headings that stacks into two-line rows in narrow panes.
+- Fields and select triggers show one focus ring instead of an outline separated from the border.
+- Motion uses one 90–280 ms scale without overshoot. Tab indicators, panels, AST groups, menus and changed replay values animate. Reduced-motion settings disable all of it.
 
 ### Fixed
 
