@@ -74,3 +74,12 @@ export {
   type WorkbenchDiscardDialogProps,
   type WorkbenchThemeSwitchProps,
 } from './WorkbenchShell.js';
+
+export {
+  DEFAULT_WORKBENCH_GLOSSARY,
+  DEFAULT_WORKBENCH_WORKFLOW,
+  WorkbenchGuideControl,
+  type WorkbenchGlossaryTerm,
+  type WorkbenchGuideControlProps,
+  type WorkbenchWorkflowStep,
+} from './WorkbenchGuide.js';

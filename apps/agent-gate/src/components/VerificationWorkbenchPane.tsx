@@ -328,7 +328,8 @@ export function VerificationWorkbenchPane({
         {/* 7. Verdict Card built strictly via @rulecanvas/ui buildVerdictSummaryView */}
         {!isRunning && verifiedSnapshot !== null && verdictView !== null && (
           <section
-            className="ag-verdict"
+            key={`${verifiedSnapshot.modelLabel}-${verdictView.status}-${isStale ? 'stale' : 'fresh'}`}
+            className="ag-verdict ag-verdict-committed"
             role={verdictView.role}
             aria-live="polite"
             data-status={verdictView.status}
@@ -372,7 +373,10 @@ export function VerificationWorkbenchPane({
 
             {candidateRepairRuleId !== undefined && onInspectRule !== undefined && !isStale && (
               <div className="ag-verdict-repair">
-                <span>Require a fresh approval after draft edits.</span>
+                <div className="ag-verdict-repair-copy">
+                  <span className="ag-verdict-next-label">Next step</span>
+                  <span>Require a fresh approval after draft edits.</span>
+                </div>
                 <button
                   type="button"
                   className="ag-btn ag-btn-sm ag-btn-active"

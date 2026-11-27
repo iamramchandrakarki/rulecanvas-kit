@@ -10,6 +10,7 @@ export interface AirlockSchematicProps {
   readonly schema?: StateSchema | undefined;
   readonly state: StateSnapshot;
   readonly changedVars: readonly string[];
+  readonly highlightedVars?: readonly string[] | undefined;
   readonly violatedInvariantIds: readonly string[];
   readonly evaluatedInvariantIds?: readonly string[] | undefined;
   readonly invariants?: TransitionSystemModel['invariants'] | undefined;
@@ -26,7 +27,15 @@ export interface AirlockSchematicProps {
 interface TelemetryReadout {
   readonly varName: string;
   readonly label: string;
-  readonly iconKind: 'door-open' | 'door-closed' | 'pressure' | 'uv' | 'occupancy' | 'purge' | 'override' | 'na';
+  readonly iconKind:
+    | 'door-open'
+    | 'door-closed'
+    | 'pressure'
+    | 'uv'
+    | 'occupancy'
+    | 'purge'
+    | 'override'
+    | 'na';
   readonly displayValue: string;
   readonly available: boolean;
 }
@@ -105,6 +114,7 @@ export function AirlockSchematic({
   schema,
   state,
   changedVars,
+  highlightedVars = [],
   violatedInvariantIds,
   evaluatedInvariantIds = [],
   invariants,
@@ -210,7 +220,9 @@ export function AirlockSchematic({
           : goalReached
             ? `GOAL AT STEP ${stepNumber}: REACHED`
             : `GOAL AT STEP ${stepNumber}: NOT REACHED`;
+
   const changedSet = new Set(changedVars);
+  const highlightedSet = new Set(highlightedVars);
 
   const safetyBadgeTone = !isEvaluated
     ? 'warning'
@@ -374,6 +386,9 @@ export function AirlockSchematic({
         ? 'var(--schematic-chamber-neg)'
         : 'var(--schematic-chamber-eq)';
 
+  const isHighlighted = (v: string) => highlightedSet.has(v);
+  const isChanged = (v: string) => changedSet.has(v);
+
   return (
     <section className="is-pane is-schematic-pane" aria-label="Discrete BSL-3 airlock schematic">
       <div className="is-pane-header">
@@ -399,21 +414,20 @@ export function AirlockSchematic({
         </div>
       </div>
 
-      <div className="is-schematic-well" data-stale={isStale ? 'true' : 'false'}>
+      <div
+        className="is-schematic-well"
+        data-stale={isStale ? 'true' : 'false'}
+        data-breach={hasViolation ? 'true' : 'false'}
+      >
         <svg
           className="is-schematic-svg"
-          viewBox="0 0 740 220"
+          viewBox="0 0 740 212"
           role="img"
           aria-label={ariaSummary}
         >
           <title>BSL-3 Bio-Containment Airlock P&amp;ID State Diagram</title>
           <defs>
-            <pattern
-              id="is-cad-grid"
-              width="20"
-              height="20"
-              patternUnits="userSpaceOnUse"
-            >
+            <pattern id="is-cad-grid" width="20" height="20" patternUnits="userSpaceOnUse">
               <path
                 d="M 20 0 L 0 0 0 20"
                 fill="none"
@@ -421,22 +435,29 @@ export function AirlockSchematic({
                 strokeWidth="1"
               />
             </pattern>
+            <clipPath id="is-outer-door-slot">
+              <rect x="144" y="60" width="34" height="96" />
+            </clipPath>
+            <clipPath id="is-inner-door-slot">
+              <rect x="522" y="60" width="34" height="96" />
+            </clipPath>
           </defs>
-          <rect x="0" y="0" width="740" height="220" fill="url(#is-cad-grid)" />
+          <rect x="0" y="0" width="740" height="212" fill="url(#is-cad-grid)" />
 
           {/* Corridor / Exterior Zone */}
           <rect
             x="10"
-            y="24"
+            y="22"
             width="132"
             height="172"
+            rx="2"
             fill="var(--schematic-corridor-bg)"
             stroke="var(--color-control-border)"
             strokeWidth="1"
           />
           <text
             x="22"
-            y="46"
+            y="44"
             fill="var(--color-ink-secondary)"
             fontSize="11.5"
             fontFamily="var(--font-body)"
@@ -446,116 +467,122 @@ export function AirlockSchematic({
           </text>
           <text
             x="22"
-            y="66"
+            y="64"
             fill="var(--color-ink-muted)"
-            fontSize="11.5"
+            fontSize="11"
             fontFamily="var(--font-mono)"
           >
             P = 0 Pa (ref)
           </text>
 
-          {/* Outer Door Bulkhead */}
-          <rect
-            x="142"
-            y="24"
-            width="38"
-            height="38"
-            fill="var(--schematic-bulkhead)"
-            stroke="var(--color-control-border)"
-          />
-          <rect
-            x="142"
-            y="158"
-            width="38"
-            height="38"
-            fill="var(--schematic-bulkhead)"
-            stroke="var(--color-control-border)"
-          />
-          {outerDoor === 'closed' ? (
-            <>
+          {/* Outer Door Bulkhead & Animated Sliding Leaves */}
+          <g
+            className="is-svg-module is-svg-door-assembly"
+            data-var="outerDoor"
+            data-door-state={outerDoor}
+            data-changed={isChanged('outerDoor') ? 'true' : undefined}
+            data-hovered={isHighlighted('outerDoor') ? 'true' : undefined}
+          >
+            <rect
+              className="is-svg-module-ring"
+              x="140"
+              y="20"
+              width="42"
+              height="176"
+              rx="3"
+              fill="none"
+            />
+            <rect
+              x="142"
+              y="22"
+              width="38"
+              height="38"
+              fill="var(--schematic-bulkhead)"
+              stroke="var(--color-control-border)"
+            />
+            <rect
+              x="142"
+              y="156"
+              width="38"
+              height="38"
+              fill="var(--schematic-bulkhead)"
+              stroke="var(--color-control-border)"
+            />
+            <line
+              className="is-door-open-axis"
+              x1="161"
+              y1="62"
+              x2="161"
+              y2="154"
+              stroke={outerStroke}
+              strokeWidth="2"
+              strokeDasharray="4 4"
+            />
+            <g clipPath="url(#is-outer-door-slot)">
               <rect
+                className="is-door-leaf is-door-leaf-top"
                 x="156"
-                y="62"
+                y="60"
                 width="10"
-                height="96"
-                fill="var(--color-ink)"
+                height="48"
+                rx="1"
+                fill={outerDoor === 'open' ? outerStroke : 'var(--color-ink)'}
                 stroke="var(--color-surface)"
                 strokeWidth="1"
               />
-              <text
-                x="161"
-                y="17"
-                textAnchor="middle"
-                fill="var(--color-ink-secondary)"
-                fontSize="11"
-                fontWeight="600"
-                fontFamily="var(--font-mono)"
-              >
-                OUTER: SEALED
-              </text>
-            </>
-          ) : outerDoor === 'open' ? (
-            <>
-              <line
-                x1="161"
-                y1="64"
-                x2="161"
-                y2="156"
-                stroke={outerStroke}
-                strokeWidth="2"
-                strokeDasharray="4 4"
-              />
-              <rect x="146" y="64" width="30" height="7" fill={outerStroke} />
-              <rect x="146" y="149" width="30" height="7" fill={outerStroke} />
-              <text
-                x="161"
-                y="17"
-                textAnchor="middle"
-                fill={outerStroke}
-                fontSize="11"
-                fontWeight="600"
-                fontFamily="var(--font-mono)"
-              >
-                OUTER: OPEN
-              </text>
-            </>
-          ) : (
-            <>
-              <line
-                x1="161"
-                y1="64"
-                x2="161"
-                y2="156"
-                stroke={outerStroke}
+              <rect
+                className="is-door-leaf is-door-leaf-bot"
+                x="156"
+                y="108"
+                width="10"
+                height="48"
+                rx="1"
+                fill={outerDoor === 'open' ? outerStroke : 'var(--color-ink)'}
+                stroke="var(--color-surface)"
                 strokeWidth="1"
-                strokeDasharray="2 4"
               />
-              <text
-                x="161"
-                y="17"
-                textAnchor="middle"
-                fill="var(--color-ink-muted)"
-                fontSize="10.5"
-                fontFamily="var(--font-mono)"
-              >
-                OUTER: N/A
-              </text>
-            </>
-          )}
+              <line
+                className="is-door-seal-seam"
+                x1="154"
+                y1="108"
+                x2="168"
+                y2="108"
+                stroke="var(--color-surface)"
+                strokeWidth="1.5"
+              />
+            </g>
+            <text
+              x="161"
+              y="15"
+              textAnchor="middle"
+              fill={outerDoor === 'open' ? outerStroke : 'var(--color-ink-secondary)'}
+              fontSize="10.5"
+              fontWeight="600"
+              fontFamily="var(--font-mono)"
+            >
+              {outerDoor === 'closed'
+                ? 'OUTER: SEALED'
+                : outerDoor === 'open'
+                  ? 'OUTER: OPEN'
+                  : 'OUTER: N/A'}
+            </text>
+          </g>
 
           {/* Central Airlock Chamber */}
           <rect
+            className="is-svg-chamber"
             x="180"
-            y="24"
+            y="22"
             width="340"
             height="172"
+            rx="2"
             fill={chamberFill}
             stroke={chamberStroke}
             strokeWidth="2"
           />
           <text
             x="194"
-            y="46"
+            y="44"
             fill="var(--color-ink)"
             fontSize="12"
             fontFamily="var(--font-body)"
@@ -564,341 +591,447 @@ export function AirlockSchematic({
             Airlock Chamber
           </text>
 
-          {/* Pressure Readout Instrument */}
-          <rect
-            x="194"
-            y="56"
-            width="156"
-            height="28"
-            rx="2"
-            fill="var(--color-surface)"
-            stroke={
-              pressure === 'negative'
-                ? 'var(--color-info)'
-                : pressure === 'equalized'
-                  ? 'var(--color-warning-border)'
-                  : 'var(--color-rule)'
-            }
-          />
-          <text
-            x="204"
-            y="74"
-            fill={
-              pressure === 'negative'
-                ? 'var(--color-info)'
-                : pressure === 'equalized'
-                  ? 'var(--color-warning)'
-                  : 'var(--color-ink-muted)'
-            }
-            fontSize="11"
-            fontWeight="600"
-            fontFamily="var(--font-mono)"
+          {/* Discrete Negative-Pressure Inward Seal Chevrons */}
+          <g
+            className="is-svg-airflow"
+            data-active={pressure === 'negative' && !hasViolation ? 'true' : 'false'}
+            aria-hidden="true"
           >
-            {pressure === 'negative'
-              ? 'ΔP: NEGATIVE (-Pa)'
-              : pressure === 'equalized'
-                ? 'ΔP: EQUALIZED (0 Pa)'
-                : 'ΔP: N/A'}
-          </text>
+            <path
+              d="M189 90l4 4-4 4M196 90l4 4-4 4"
+              fill="none"
+              stroke="var(--color-info)"
+              strokeWidth="1.4"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            <path
+              d="M511 90l-4 4 4 4M504 90l-4 4 4 4"
+              fill="none"
+              stroke="var(--color-info)"
+              strokeWidth="1.4"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </g>
 
-          {/* UV-C Lamp Fixture */}
-          <rect
-            x="362"
-            y="32"
-            width="144"
-            height="28"
-            rx="2"
-            fill={uvState === 'active' ? 'var(--color-accent-fill)' : 'var(--color-surface)'}
-            stroke={uvHazard ? 'var(--color-danger)' : 'var(--color-control-border)'}
-          />
-          <text
-            x="434"
-            y="50"
-            textAnchor="middle"
-            fill={uvState === 'active' ? 'var(--color-accent-ink)' : 'var(--color-ink-secondary)'}
-            fontSize="11"
-            fontWeight="600"
-            fontFamily="var(--font-mono)"
+          {/* Pressure Readout Instrument */}
+          <g
+            className="is-svg-module"
+            data-var="pressure"
+            data-changed={isChanged('pressure') ? 'true' : undefined}
+            data-hovered={isHighlighted('pressure') ? 'true' : undefined}
           >
-            {uvState === 'active' ? 'UV-C: ACTIVE' : uvState === 'off' ? 'UV-C: OFF' : 'UV-C: N/A'}
-          </text>
-          {uvState === 'active' && (
-            <g stroke="var(--color-accent)" strokeWidth="1.2" strokeDasharray="3 3" opacity="0.85">
-              <line x1="385" y1="60" x2="372" y2="100" />
-              <line x1="434" y1="60" x2="434" y2="100" />
-              <line x1="483" y1="60" x2="496" y2="100" />
+            <rect
+              className="is-svg-instrument"
+              x="194"
+              y="54"
+              width="156"
+              height="28"
+              rx="3"
+              fill="var(--color-surface)"
+              stroke={
+                pressure === 'negative'
+                  ? 'var(--color-info)'
+                  : pressure === 'equalized'
+                    ? 'var(--color-warning-border)'
+                    : 'var(--color-rule)'
+              }
+            />
+            <text
+              x="204"
+              y="72"
+              fill={
+                pressure === 'negative'
+                  ? 'var(--color-info)'
+                  : pressure === 'equalized'
+                    ? 'var(--color-warning)'
+                    : 'var(--color-ink-muted)'
+              }
+              fontSize="11"
+              fontWeight="600"
+              fontFamily="var(--font-mono)"
+            >
+              {pressure === 'negative'
+                ? 'ΔP: NEGATIVE (-Pa)'
+                : pressure === 'equalized'
+                  ? 'ΔP: EQUALIZED (0 Pa)'
+                  : 'ΔP: N/A'}
+            </text>
+          </g>
+
+          {/* UV-C Lamp Fixture & Animated Beam Rays */}
+          <g
+            className="is-svg-module"
+            data-var="uvSterilizer"
+            data-changed={isChanged('uvSterilizer') ? 'true' : undefined}
+            data-hovered={isHighlighted('uvSterilizer') ? 'true' : undefined}
+          >
+            <rect
+              className="is-svg-instrument"
+              x="362"
+              y="30"
+              width="144"
+              height="28"
+              rx="3"
+              fill={uvState === 'active' ? 'var(--color-accent-fill)' : 'var(--color-surface)'}
+              stroke={uvHazard ? 'var(--color-danger)' : 'var(--color-control-border)'}
+            />
+            <text
+              x="434"
+              y="48"
+              textAnchor="middle"
+              fill={uvState === 'active' ? 'var(--color-accent-ink)' : 'var(--color-ink-secondary)'}
+              fontSize="11"
+              fontWeight="600"
+              fontFamily="var(--font-mono)"
+            >
+              {uvState === 'active' ? 'UV-C: ACTIVE' : uvState === 'off' ? 'UV-C: OFF' : 'UV-C: N/A'}
+            </text>
+            <g
+              className="is-svg-uv-rays"
+              data-active={uvState === 'active' ? 'true' : 'false'}
+              stroke={uvHazard ? 'var(--color-danger)' : 'var(--color-accent)'}
+              strokeWidth="1.4"
+              strokeDasharray="3 3"
+              aria-hidden="true"
+            >
+              <line x1="385" y1="58" x2="372" y2="96" />
+              <line x1="434" y1="58" x2="434" y2="96" />
+              <line x1="483" y1="58" x2="496" y2="96" />
             </g>
-          )}
+          </g>
 
           {/* Personnel Occupancy Module */}
-          <rect
-            x="194"
-            y="102"
-            width="102"
-            height="78"
-            rx="2"
-            fill="var(--color-surface)"
-            stroke={occupiedState === 'occupied' ? 'var(--color-info)' : 'var(--color-rule)'}
-          />
-          <text
-            x="245"
-            y="119"
-            textAnchor="middle"
-            fill="var(--color-ink-muted)"
-            fontSize="10.5"
-            fontFamily="var(--font-body)"
-            fontWeight="500"
+          <g
+            className="is-svg-module"
+            data-var="occupied"
+            data-changed={isChanged('occupied') ? 'true' : undefined}
+            data-hovered={isHighlighted('occupied') ? 'true' : undefined}
           >
-            Occupancy
-          </text>
-          {occupiedState === 'occupied' ? (
-            <g>
-              <circle cx="245" cy="134" r="6" fill="var(--color-info)" />
+            <rect
+              className="is-svg-instrument"
+              x="194"
+              y="100"
+              width="102"
+              height="78"
+              rx="3"
+              fill="var(--color-surface)"
+              stroke={
+                uvHazard
+                  ? 'var(--color-danger)'
+                  : occupiedState === 'occupied'
+                    ? 'var(--color-info)'
+                    : 'var(--color-rule)'
+              }
+            />
+            <text
+              x="245"
+              y="117"
+              textAnchor="middle"
+              fill="var(--color-ink-muted)"
+              fontSize="10.5"
+              fontFamily="var(--font-body)"
+              fontWeight="500"
+            >
+              Occupancy
+            </text>
+            <g
+              className="is-svg-person"
+              data-occupied={occupiedState === 'occupied' ? 'true' : 'false'}
+              aria-hidden={occupiedState !== 'occupied'}
+            >
+              <circle
+                cx="245"
+                cy="132"
+                r="6"
+                fill={uvHazard ? 'var(--color-danger)' : 'var(--color-info)'}
+              />
               <path
-                d="M233 154c1.5-7 6-10 12-10s10.5 3 12 10"
+                d="M233 152c1.5-7 6-10 12-10s10.5 3 12 10"
                 fill="none"
-                stroke="var(--color-info)"
+                stroke={uvHazard ? 'var(--color-danger)' : 'var(--color-info)'}
                 strokeWidth="2"
                 strokeLinecap="round"
               />
-              <text
-                x="245"
-                y="172"
-                textAnchor="middle"
-                fill="var(--color-ink)"
-                fontSize="10.5"
-                fontWeight="600"
-                fontFamily="var(--font-mono)"
-              >
-                OCCUPIED
-              </text>
             </g>
-          ) : (
             <text
               x="245"
-              y="152"
+              y="169"
               textAnchor="middle"
-              fill="var(--color-ink-muted)"
-              fontSize="11"
+              fill={
+                occupiedState === 'occupied'
+                  ? uvHazard
+                    ? 'var(--color-danger)'
+                    : 'var(--color-ink)'
+                  : 'var(--color-ink-muted)'
+              }
+              fontSize="10.5"
+              fontWeight={occupiedState === 'occupied' ? '600' : '500'}
               fontFamily="var(--font-mono)"
             >
-              {occupiedState === 'empty' ? 'UNOCCUPIED' : 'N/A'}
+              {occupiedState === 'occupied'
+                ? 'OCCUPIED'
+                : occupiedState === 'empty'
+                  ? 'UNOCCUPIED'
+                  : 'N/A'}
             </text>
-          )}
+          </g>
 
           {/* HEPA Purge Cycle Bar [0..2] */}
-          <rect
-            x="306"
-            y="102"
-            width="98"
-            height="78"
-            rx="2"
-            fill="var(--color-surface)"
-            stroke="var(--color-rule)"
-          />
-          <text
-            x="355"
-            y="119"
-            textAnchor="middle"
-            fill="var(--color-ink-muted)"
-            fontSize="10.5"
-            fontFamily="var(--font-body)"
-            fontWeight="500"
+          <g
+            className="is-svg-module"
+            data-var="purgeCycles"
+            data-changed={isChanged('purgeCycles') ? 'true' : undefined}
+            data-hovered={isHighlighted('purgeCycles') ? 'true' : undefined}
           >
-            HEPA Purge
-          </text>
-          <rect
-            x="320"
-            y="130"
-            width="30"
-            height="18"
-            rx="1.5"
-            fill={
-              purgeCycles !== null && purgeCycles >= 1 ? 'var(--color-success)' : 'var(--color-surface-subtle)'
-            }
-            stroke="var(--color-control-border)"
-          />
-          <rect
-            x="360"
-            y="130"
-            width="30"
-            height="18"
-            rx="1.5"
-            fill={
-              purgeCycles !== null && purgeCycles >= 2 ? 'var(--color-success)' : 'var(--color-surface-subtle)'
-            }
-            stroke="var(--color-control-border)"
-          />
-          <text
-            x="355"
-            y="170"
-            textAnchor="middle"
-            fill={purgeCycles !== null ? 'var(--color-ink)' : 'var(--color-ink-muted)'}
-            fontSize="10.5"
-            fontWeight="600"
-            fontFamily="var(--font-mono)"
-          >
-            {purgeCycles !== null ? `${purgeCycles} / ${purgeMax} cycles` : 'N/A'}
-          </text>
+            <rect
+              className="is-svg-instrument"
+              x="306"
+              y="100"
+              width="98"
+              height="78"
+              rx="3"
+              fill="var(--color-surface)"
+              stroke="var(--color-rule)"
+            />
+            <text
+              x="355"
+              y="117"
+              textAnchor="middle"
+              fill="var(--color-ink-muted)"
+              fontSize="10.5"
+              fontFamily="var(--font-body)"
+              fontWeight="500"
+            >
+              HEPA Purge
+            </text>
+            <rect
+              className="is-svg-purge-seg"
+              data-filled={purgeCycles !== null && purgeCycles >= 1 ? 'true' : 'false'}
+              x="320"
+              y="128"
+              width="30"
+              height="18"
+              rx="2"
+              fill={
+                purgeCycles !== null && purgeCycles >= 1
+                  ? 'var(--color-success)'
+                  : 'var(--color-surface-subtle)'
+              }
+              stroke={
+                purgeCycles !== null && purgeCycles >= 1
+                  ? 'var(--color-success)'
+                  : 'var(--color-control-border)'
+              }
+            />
+            <rect
+              className="is-svg-purge-seg"
+              data-filled={purgeCycles !== null && purgeCycles >= 2 ? 'true' : 'false'}
+              x="360"
+              y="128"
+              width="30"
+              height="18"
+              rx="2"
+              fill={
+                purgeCycles !== null && purgeCycles >= 2
+                  ? 'var(--color-success)'
+                  : 'var(--color-surface-subtle)'
+              }
+              stroke={
+                purgeCycles !== null && purgeCycles >= 2
+                  ? 'var(--color-success)'
+                  : 'var(--color-control-border)'
+              }
+            />
+            <text
+              x="355"
+              y="169"
+              textAnchor="middle"
+              fill={purgeCycles !== null ? 'var(--color-ink)' : 'var(--color-ink-muted)'}
+              fontSize="10.5"
+              fontWeight="600"
+              fontFamily="var(--font-mono)"
+            >
+              {purgeCycles !== null ? `${purgeCycles} / ${purgeMax} cycles` : 'N/A'}
+            </text>
+          </g>
 
           {/* Maintenance Override Key Switch */}
-          <rect
-            x="414"
-            y="102"
-            width="92"
-            height="78"
-            rx="2"
-            fill={overrideState === 'engaged' ? 'var(--color-warning-soft)' : 'var(--color-surface)'}
-            stroke={overrideState === 'engaged' ? 'var(--color-warning-border)' : 'var(--color-rule)'}
-          />
-          <text
-            x="460"
-            y="119"
-            textAnchor="middle"
-            fill="var(--color-ink-muted)"
-            fontSize="10.5"
-            fontFamily="var(--font-body)"
-            fontWeight="500"
+          <g
+            className="is-svg-module"
+            data-var="maintenanceOverride"
+            data-changed={isChanged('maintenanceOverride') ? 'true' : undefined}
+            data-hovered={isHighlighted('maintenanceOverride') ? 'true' : undefined}
           >
-            Override Key
-          </text>
-          <circle
-            cx="460"
-            cy="139"
-            r="9"
-            fill={overrideState === 'engaged' ? 'var(--color-warning)' : 'var(--color-surface-subtle)'}
-            stroke="var(--color-control-border)"
-          />
-          <line
-            x1="460"
-            y1="139"
-            x2={overrideState === 'engaged' ? '467' : '460'}
-            y2={overrideState === 'engaged' ? '139' : '132'}
-            stroke={overrideState === 'engaged' ? 'var(--color-surface)' : 'var(--color-ink-secondary)'}
-            strokeWidth="2"
-            strokeLinecap="round"
-          />
-          <text
-            x="460"
-            y="170"
-            textAnchor="middle"
-            fill={
-              overrideState === 'engaged'
-                ? 'var(--color-warning)'
-                : overrideState === 'off'
-                  ? 'var(--color-ink-secondary)'
-                  : 'var(--color-ink-muted)'
-            }
-            fontSize="10.5"
-            fontWeight="600"
-            fontFamily="var(--font-mono)"
-          >
-            {overrideState === 'engaged' ? 'ENGAGED' : overrideState === 'off' ? 'OFF' : 'N/A'}
-          </text>
+            <rect
+              className="is-svg-instrument"
+              x="414"
+              y="100"
+              width="92"
+              height="78"
+              rx="3"
+              fill={overrideState === 'engaged' ? 'var(--color-warning-soft)' : 'var(--color-surface)'}
+              stroke={overrideState === 'engaged' ? 'var(--color-warning-border)' : 'var(--color-rule)'}
+            />
+            <text
+              x="460"
+              y="117"
+              textAnchor="middle"
+              fill="var(--color-ink-muted)"
+              fontSize="10.5"
+              fontFamily="var(--font-body)"
+              fontWeight="500"
+            >
+              Override Key
+            </text>
+            <circle
+              className="is-svg-key-barrel"
+              cx="460"
+              cy="137"
+              r="9.5"
+              fill={overrideState === 'engaged' ? 'var(--color-warning)' : 'var(--color-surface-subtle)'}
+              stroke={overrideState === 'engaged' ? 'var(--color-warning)' : 'var(--color-control-border)'}
+            />
+            <line
+              className="is-svg-key-blade"
+              data-engaged={overrideState === 'engaged' ? 'true' : 'false'}
+              x1="460"
+              y1="137"
+              x2="460"
+              y2="130"
+              stroke={overrideState === 'engaged' ? 'var(--color-surface)' : 'var(--color-ink-secondary)'}
+              strokeWidth="2.2"
+              strokeLinecap="round"
+            />
+            <text
+              x="460"
+              y="169"
+              textAnchor="middle"
+              fill={
+                overrideState === 'engaged'
+                  ? 'var(--color-warning)'
+                  : overrideState === 'off'
+                    ? 'var(--color-ink-secondary)'
+                    : 'var(--color-ink-muted)'
+              }
+              fontSize="10.5"
+              fontWeight="600"
+              fontFamily="var(--font-mono)"
+            >
+              {overrideState === 'engaged' ? 'ENGAGED' : overrideState === 'off' ? 'OFF' : 'N/A'}
+            </text>
+          </g>
 
-          {/* Inner Door Bulkhead */}
-          <rect
-            x="520"
-            y="24"
-            width="38"
-            height="38"
-            fill="var(--schematic-bulkhead)"
-            stroke="var(--color-control-border)"
-          />
-          <rect
-            x="520"
-            y="158"
-            width="38"
-            height="38"
-            fill="var(--schematic-bulkhead)"
-            stroke="var(--color-control-border)"
-          />
-          {innerDoor === 'closed' ? (
-            <>
+          {/* Inner Door Bulkhead & Animated Sliding Leaves */}
+          <g
+            className="is-svg-module is-svg-door-assembly"
+            data-var="innerDoor"
+            data-door-state={innerDoor}
+            data-changed={isChanged('innerDoor') ? 'true' : undefined}
+            data-hovered={isHighlighted('innerDoor') ? 'true' : undefined}
+          >
+            <rect
+              className="is-svg-module-ring"
+              x="518"
+              y="20"
+              width="42"
+              height="176"
+              rx="3"
+              fill="none"
+            />
+            <rect
+              x="520"
+              y="22"
+              width="38"
+              height="38"
+              fill="var(--schematic-bulkhead)"
+              stroke="var(--color-control-border)"
+            />
+            <rect
+              x="520"
+              y="156"
+              width="38"
+              height="38"
+              fill="var(--schematic-bulkhead)"
+              stroke="var(--color-control-border)"
+            />
+            <line
+              className="is-door-open-axis"
+              x1="539"
+              y1="62"
+              x2="539"
+              y2="154"
+              stroke={innerStroke}
+              strokeWidth="2"
+              strokeDasharray="4 4"
+            />
+            <g clipPath="url(#is-inner-door-slot)">
               <rect
+                className="is-door-leaf is-door-leaf-top"
                 x="534"
-                y="62"
+                y="60"
                 width="10"
-                height="96"
-                fill="var(--color-ink)"
+                height="48"
+                rx="1"
+                fill={innerDoor === 'open' ? innerStroke : 'var(--color-ink)'}
                 stroke="var(--color-surface)"
                 strokeWidth="1"
               />
-              <text
-                x="539"
-                y="17"
-                textAnchor="middle"
-                fill="var(--color-ink-secondary)"
-                fontSize="11"
-                fontWeight="600"
-                fontFamily="var(--font-mono)"
-              >
-                INNER: SEALED
-              </text>
-            </>
-          ) : innerDoor === 'open' ? (
-            <>
-              <line
-                x1="539"
-                y1="64"
-                x2="539"
-                y2="156"
-                stroke={innerStroke}
-                strokeWidth="2"
-                strokeDasharray="4 4"
-              />
-              <rect x="524" y="64" width="30" height="7" fill={innerStroke} />
-              <rect x="524" y="149" width="30" height="7" fill={innerStroke} />
-              <text
-                x="539"
-                y="17"
-                textAnchor="middle"
-                fill={innerStroke}
-                fontSize="11"
-                fontWeight="600"
-                fontFamily="var(--font-mono)"
-              >
-                INNER: OPEN
-              </text>
-            </>
-          ) : (
-            <>
-              <line
-                x1="539"
-                y1="64"
-                x2="539"
-                y2="156"
-                stroke={innerStroke}
+              <rect
+                className="is-door-leaf is-door-leaf-bot"
+                x="534"
+                y="108"
+                width="10"
+                height="48"
+                rx="1"
+                fill={innerDoor === 'open' ? innerStroke : 'var(--color-ink)'}
+                stroke="var(--color-surface)"
                 strokeWidth="1"
-                strokeDasharray="2 4"
               />
-              <text
-                x="539"
-                y="17"
-                textAnchor="middle"
-                fill="var(--color-ink-muted)"
-                fontSize="10.5"
-                fontFamily="var(--font-mono)"
-              >
-                INNER: N/A
-              </text>
-            </>
-          )}
+              <line
+                className="is-door-seal-seam"
+                x1="532"
+                y1="108"
+                x2="546"
+                y2="108"
+                stroke="var(--color-surface)"
+                strokeWidth="1.5"
+              />
+            </g>
+            <text
+              x="539"
+              y="15"
+              textAnchor="middle"
+              fill={innerDoor === 'open' ? innerStroke : 'var(--color-ink-secondary)'}
+              fontSize="10.5"
+              fontWeight="600"
+              fontFamily="var(--font-mono)"
+            >
+              {innerDoor === 'closed'
+                ? 'INNER: SEALED'
+                : innerDoor === 'open'
+                  ? 'INNER: OPEN'
+                  : 'INNER: N/A'}
+            </text>
+          </g>
 
           {/* Inner BSL-3 Containment Lab Zone */}
           <rect
+            className="is-svg-lab"
             x="558"
-            y="24"
+            y="22"
             width="172"
             height="172"
+            rx="2"
             fill={containmentBreach ? 'var(--schematic-chamber-breach)' : 'var(--schematic-lab-bg)'}
             stroke={containmentBreach ? 'var(--color-danger)' : 'var(--color-info)'}
             strokeWidth="1.5"
           />
           <text
             x="570"
-            y="46"
-            fill="var(--color-info)"
+            y="44"
+            fill={containmentBreach ? 'var(--color-danger)' : 'var(--color-info)'}
             fontSize="11.5"
             fontFamily="var(--font-body)"
             fontWeight="600"
@@ -907,7 +1040,7 @@ export function AirlockSchematic({
           </text>
           <text
             x="570"
-            y="66"
+            y="64"
             fill="var(--color-ink-secondary)"
             fontSize="11"
             fontFamily="var(--font-mono)"
@@ -915,19 +1048,20 @@ export function AirlockSchematic({
             Negative seal zone
           </text>
           {containmentBreach && (
-            <g>
+            <g className="is-svg-breach-callout">
               <rect
                 x="568"
-                y="124"
+                y="122"
                 width="152"
-                height="44"
-                rx="2"
+                height="46"
+                rx="3"
                 fill="var(--color-danger-soft)"
                 stroke="var(--color-danger)"
+                strokeWidth="1.2"
               />
               <text
                 x="644"
-                y="142"
+                y="141"
                 textAnchor="middle"
                 fill="var(--color-danger)"
                 fontSize="11"
@@ -938,7 +1072,7 @@ export function AirlockSchematic({
               </text>
               <text
                 x="644"
-                y="158"
+                y="157"
                 textAnchor="middle"
                 fill="var(--color-ink)"
                 fontSize="10"
@@ -981,7 +1115,14 @@ export function AirlockSchematic({
             </div>
             <div className="is-compact-subgrid">
               <span>UV-C: {uvState.toUpperCase()}</span>
-              <span>Occupancy: {occupiedState === 'occupied' ? 'OCCUPIED' : occupiedState === 'empty' ? 'UNOCCUPIED' : 'N/A'}</span>
+              <span>
+                Occupancy:{' '}
+                {occupiedState === 'occupied'
+                  ? 'OCCUPIED'
+                  : occupiedState === 'empty'
+                    ? 'UNOCCUPIED'
+                    : 'N/A'}
+              </span>
               <span>HEPA: {purgeCycles !== null ? `${purgeCycles}/${purgeMax} cycles` : 'N/A'}</span>
               <span>Override: {overrideState.toUpperCase()}</span>
             </div>
@@ -1015,12 +1156,14 @@ export function AirlockSchematic({
       <dl className="is-telemetry-grid" aria-label="Airlock discrete telemetry readouts">
         {telemetries.map((item) => {
           const changed = changedSet.has(item.varName);
+          const hovered = highlightedSet.has(item.varName);
           return (
             <div
               key={item.varName}
               className="is-telemetry-cell"
               data-var={item.varName}
               data-changed={changed ? 'true' : 'false'}
+              data-hovered={hovered ? 'true' : undefined}
               data-available={item.available ? 'true' : 'false'}
             >
               <dt>

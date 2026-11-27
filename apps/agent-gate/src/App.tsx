@@ -20,6 +20,7 @@ import {
 import {
   WorkbenchBrandMark,
   WorkbenchDiscardDialog,
+  WorkbenchGuideControl,
   WorkbenchNavigation,
   WorkbenchThemeSwitch,
   VerificationBoundsControl,
@@ -291,6 +292,11 @@ export function App({
     return map;
   }, [isStale, replaySession]);
 
+  const activeTraceRuleId =
+    !isStale && replaySession?.activeStep !== null && replaySession?.activeStep !== undefined
+      ? replaySession.activeStep.ruleId
+      : null;
+
   const runVerification = (
     targetModel: TransitionSystemModel,
     targetLabel: string,
@@ -541,11 +547,13 @@ export function App({
       if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && pendingPrompt === null) {
         event.preventDefault();
         handleVerifyCurrent();
+      } else if (event.key === 'Escape' && showComparison && pendingPrompt === null) {
+        setShowComparison(false);
       }
     };
     window.addEventListener('keydown', handleGlobalShortcut);
     return () => window.removeEventListener('keydown', handleGlobalShortcut);
-  }, [handleVerifyCurrent, pendingPrompt]);
+  }, [handleVerifyCurrent, pendingPrompt, showComparison]);
 
   const scrollToSection = (elementId: string) => {
     if (typeof document === 'undefined') return;
@@ -624,6 +632,8 @@ export function App({
             visuallyHiddenClassName="ag-visually-hidden"
           />
 
+          <span className="ag-toolbar-divider" aria-hidden="true" />
+
           {isRunning ? (
             <span className="ag-badge" data-tone="running" role="status">
               <span aria-hidden="true">…</span> RUNNING
@@ -675,6 +685,8 @@ export function App({
             Verify Policy
           </button>
 
+          <span className="ag-toolbar-divider" aria-hidden="true" />
+
           <button
             type="button"
             className={showComparison ? 'ag-btn ag-btn-active' : 'ag-btn ag-btn-secondary'}
@@ -683,6 +695,15 @@ export function App({
           >
             Compare All 5 Presets
           </button>
+
+          <WorkbenchGuideControl
+            appTitle="AgentGate"
+            appSummary="Explore how flawed AI-agent approval policies allow unauthorized publishing, inspect the exact counterexample trace, and verify principled guard repairs."
+            className="ag-guide"
+            triggerClassName="ag-btn ag-guide-trigger"
+            panelClassName="ag-guide-panel"
+            visuallyHiddenClassName="ag-visually-hidden"
+          />
 
           <WorkbenchThemeSwitch
             value={theme.preference}
@@ -759,6 +780,9 @@ export function App({
           diagnostics={diagnostics}
           resetKey={editorResetKey}
           activeTraceStepsByRuleId={activeTraceStepsByRuleId}
+          activeTraceRuleId={activeTraceRuleId}
+          isStale={isStale}
+          onVerifyNow={handleVerifyCurrent}
           focusedRuleRequest={focusedRuleRequest}
           onChangeModel={handleChangeModel}
           onImportModel={handleImportModel}

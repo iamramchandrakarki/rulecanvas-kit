@@ -82,6 +82,9 @@ export interface PolicyEditorPaneProps {
   readonly diagnostics: ModelDiagnosticsIndex;
   readonly resetKey?: string | number | undefined;
   readonly activeTraceStepsByRuleId?: ReadonlyMap<string, readonly number[]> | undefined;
+  readonly activeTraceRuleId?: string | null | undefined;
+  readonly isStale?: boolean | undefined;
+  readonly onVerifyNow?: (() => void) | undefined;
   readonly focusedRuleRequest?: FocusedRuleRequest | null | undefined;
   readonly onChangeModel: (next: TransitionSystemModel) => void;
   readonly onImportModel: (imported: TransitionSystemModel) => void;
@@ -262,6 +265,9 @@ export function PolicyEditorPane({
   diagnostics,
   resetKey = 0,
   activeTraceStepsByRuleId,
+  activeTraceRuleId = null,
+  isStale = false,
+  onVerifyNow,
   focusedRuleRequest = null,
   onChangeModel,
   onImportModel,
@@ -942,7 +948,7 @@ export function PolicyEditorPane({
               <button
                 ref={addRuleButtonRef}
                 type="button"
-                className="ag-btn ag-btn-primary ag-btn-sm"
+                className="ag-btn ag-btn-secondary ag-btn-sm"
                 onClick={handleAddRule}
               >
                 + Add Rule
@@ -958,6 +964,7 @@ export function PolicyEditorPane({
                   const hasRuleErrors =
                     ruleErrors.length > 0 || countIntDraftErrorsByPrefix(`rule:${rowId}`) > 0;
                   const isSelected = activeSelectedRuleRowId === rowId;
+                  const isActiveTraceRule = activeTraceRuleId === rule.id;
                   return (
                     <button
                       key={rowId}
@@ -966,6 +973,7 @@ export function PolicyEditorPane({
                       data-rule-id={rule.id}
                       data-selected={isSelected ? 'true' : 'false'}
                       aria-pressed={isSelected}
+                      data-trace-active={isActiveTraceRule ? 'true' : undefined}
                       onClick={() => selectRuleRow(rowId, false)}
                     >
                       <span className="ag-rule-nav-row">
@@ -1485,6 +1493,10 @@ export function PolicyEditorPane({
                       const candidateGuard =
                         appendRuleGuardClause(model, idx, candidateClause).rules[idx]?.guard ??
                         rule.guard;
+                      const candidateText = formatBoolExpr(candidateGuard);
+                      const addedSuffix = candidateText.startsWith(summary.guardText)
+                        ? candidateText.slice(summary.guardText.length)
+                        : '';
                       return (
                         <div
                           className="ag-rule-candidate"
@@ -1500,13 +1512,20 @@ export function PolicyEditorPane({
                             <dd className="ag-mono">{summary.guardText}</dd>
                             <dt>Candidate</dt>
                             <dd className="ag-mono" data-candidate="true">
-                              {formatBoolExpr(candidateGuard)}
+                              {addedSuffix.trim().length > 0 ? (
+                                <>
+                                  {summary.guardText}{' '}
+                                  <mark className="ag-diff-add">{addedSuffix.trim()}</mark>
+                                </>
+                              ) : (
+                                candidateText
+                              )}
                             </dd>
                           </dl>
                           <div className="ag-rule-candidate-foot">
                             <p className="ag-rule-candidate-note">
-                              Staging edits this draft rule only. The verdict stays outdated until
-                              you run Verify Policy.
+                              Blocks publishing when the draft was edited after approval. Staging
+                              edits this draft only; run Verify Policy to re-verify.
                             </p>
                             <button
                               type="button"
@@ -1521,6 +1540,31 @@ export function PolicyEditorPane({
                         </div>
                       );
                     })()}
+
+                  {!showPrincipledShortcut &&
+                    isStale &&
+                    rule.id === 'publish_release_notes' &&
+                    guardContainsNegatedVar(rule.guard, 'modifiedSinceApproval') && (
+                      <div className="ag-repair-staged" role="status">
+                        <div className="ag-repair-staged-copy">
+                          <strong>Repair staged in draft (unverified)</strong>
+                          <span>
+                            Added <code className="ag-mono">!modifiedSinceApproval</code>. Run
+                            Verify Policy to confirm whether invariants hold and the goal stays
+                            reachable.
+                          </span>
+                        </div>
+                        {onVerifyNow !== undefined && (
+                          <button
+                            type="button"
+                            className="ag-btn ag-btn-sm ag-btn-active"
+                            onClick={onVerifyNow}
+                          >
+                            Run Verification
+                          </button>
+                        )}
+                      </div>
+                    )}
 
                   <InlineErrorList errors={ruleErrors} />
 

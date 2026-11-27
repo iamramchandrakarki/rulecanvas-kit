@@ -401,7 +401,38 @@ export function useInterlockEditorState({
   };
 }
 
-export function GuidedRepairCallout({ editor }: { readonly editor: InterlockEditorState }) {
+export function GuidedRepairCallout({
+  editor,
+  isStale = false,
+  onVerifyNow,
+}: {
+  readonly editor: InterlockEditorState;
+  readonly isStale?: boolean | undefined;
+  readonly onVerifyNow?: (() => void) | undefined;
+}) {
+  if (editor.openInnerDoorRepaired && isStale) {
+    return (
+      <div className="is-repair-staged" role="status">
+        <div className="is-repair-staged-copy">
+          <strong>Principled repair staged in draft (unverified)</strong>
+          <span>
+            <code className="is-mono">pressure == &quot;negative&quot;</code> is now enforced
+            outside the override branch on <code className="is-mono">open_inner_door</code>. Run
+            Verify Interlock Model to confirm the verdict.
+          </span>
+        </div>
+        {onVerifyNow !== undefined && (
+          <button
+            type="button"
+            className="is-btn is-btn-sm is-btn-active"
+            onClick={onVerifyNow}
+          >
+            Run Verification
+          </button>
+        )}
+      </div>
+    );
+  }
   if (!editor.repairableOpenInnerDoor || editor.openInnerDoorRepaired) {
     return null;
   }
@@ -409,6 +440,9 @@ export function GuidedRepairCallout({ editor }: { readonly editor: InterlockEdit
   const candidateGuard = applyPrincipledInterlockRepair(editor.model).rules.find(
     (r) => r.id === 'open_inner_door',
   )?.guard;
+  const candidateText = candidateGuard !== undefined ? formatBoolExpr(candidateGuard) : '';
+  const highlightToken = '&& pressure == "negative"';
+  const highlightIdx = candidateText.indexOf(highlightToken);
   return (
     <div
       className="is-repair-callout"
@@ -425,7 +459,15 @@ export function GuidedRepairCallout({ editor }: { readonly editor: InterlockEdit
           <dd className="is-mono">{formatBoolExpr(currentGuard)}</dd>
           <dt>Candidate</dt>
           <dd className="is-mono" data-candidate="true">
-            {formatBoolExpr(candidateGuard)}
+            {highlightIdx >= 0 ? (
+              <>
+                {candidateText.slice(0, highlightIdx)}
+                <mark className="is-diff-add">{highlightToken}</mark>
+                {candidateText.slice(highlightIdx + highlightToken.length)}
+              </>
+            ) : (
+              candidateText
+            )}
           </dd>
         </dl>
       )}

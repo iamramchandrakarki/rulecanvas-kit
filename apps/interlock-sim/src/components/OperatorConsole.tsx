@@ -16,6 +16,7 @@ export interface OperatorConsoleProps {
   readonly onApplyManualStep: (ruleId: string) => void;
   readonly onRestoreVerdictTrace: () => void;
   readonly onInspectRule?: ((ruleId: string) => void) | undefined;
+  readonly onHoverVars?: ((vars: readonly string[]) => void) | undefined;
 }
 
 function ClauseNode({ clause }: { readonly clause: GuardClauseExplanation }) {
@@ -61,6 +62,7 @@ export function OperatorConsole({
   onApplyManualStep,
   onRestoreVerdictTrace,
   onInspectRule,
+  onHoverVars,
 }: OperatorConsoleProps) {
   const explained = explainRuleGuards(snapshotModel, replaySession.currentState);
   const rulesById = new Map(snapshotModel.rules.map((r) => [r.id, r]));
@@ -164,6 +166,7 @@ export function OperatorConsole({
             <ul className="is-transition-grid">
               {enabledExplanations.map((item) => {
                 const rule = rulesById.get(item.ruleId);
+                const targetVars = rule !== undefined ? rule.updates.map((upd) => upd.var) : [];
                 const updatesText =
                   rule !== undefined
                     ? rule.updates.map((upd) => formatUpdateAssignment(upd)).join('; ')
@@ -174,7 +177,14 @@ export function OperatorConsole({
                       type="button"
                       className="is-actuator-btn"
                       data-rule-id={item.ruleId}
-                      onClick={() => onApplyManualStep(item.ruleId)}
+                      onMouseEnter={() => onHoverVars?.(targetVars)}
+                      onMouseLeave={() => onHoverVars?.([])}
+                      onFocus={() => onHoverVars?.(targetVars)}
+                      onBlur={() => onHoverVars?.([])}
+                      onClick={() => {
+                        onHoverVars?.([]);
+                        onApplyManualStep(item.ruleId);
+                      }}
                     >
                       <span className="is-actuator-head">
                         <span className="is-actuator-id">

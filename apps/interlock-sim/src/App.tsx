@@ -20,6 +20,7 @@ import {
 import {
   WorkbenchBrandMark,
   WorkbenchDiscardDialog,
+  WorkbenchGuideControl,
   WorkbenchNavigation,
   WorkbenchThemeSwitch,
   VerificationBoundsControl,
@@ -194,6 +195,7 @@ export function App({
   const previousFocusRef = useRef<HTMLElement | null>(null);
 
   const [showComparison, setShowComparison] = useState<boolean>(initialShowComparison);
+  const [hoveredSchematicVars, setHoveredSchematicVars] = useState<readonly string[]>([]);
   const lastValidBoundsRef = useRef<VerifyOptions>(DEFAULT_VERIFY_OPTIONS);
 
   const maxStatesParsed = useMemo(() => parseStrictIntegerDraft(maxStatesText), [maxStatesText]);
@@ -522,16 +524,22 @@ export function App({
   }, [pendingPrompt !== null]);
 
   useEffect(() => {
+    setHoveredSchematicVars([]);
+  }, [replaySession?.cursor, activePreset]);
+
+  useEffect(() => {
     if (typeof window === 'undefined') return;
     const handleGlobalShortcut = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && pendingPrompt === null) {
         event.preventDefault();
         handleVerifyCurrent();
+      } else if (event.key === 'Escape' && showComparison && pendingPrompt === null) {
+        setShowComparison(false);
       }
     };
     window.addEventListener('keydown', handleGlobalShortcut);
     return () => window.removeEventListener('keydown', handleGlobalShortcut);
-  }, [handleVerifyCurrent, pendingPrompt]);
+  }, [handleVerifyCurrent, pendingPrompt, showComparison]);
 
   const draftRuleIds = useMemo(() => new Set(model.rules.map((r) => r.id)), [model.rules]);
 
@@ -612,6 +620,8 @@ export function App({
             visuallyHiddenClassName="is-visually-hidden"
           />
 
+          <span className="is-toolbar-divider" aria-hidden="true" />
+
           {isRunning ? (
             <span className="is-badge" data-tone="running" role="status">
               <span aria-hidden="true">…</span> RUNNING
@@ -663,6 +673,8 @@ export function App({
             Verify Interlock Model
           </button>
 
+          <span className="is-toolbar-divider" aria-hidden="true" />
+
           <button
             type="button"
             className={showComparison ? 'is-btn is-btn-active' : 'is-btn'}
@@ -671,6 +683,15 @@ export function App({
           >
             Compare Presets (3)
           </button>
+
+          <WorkbenchGuideControl
+            appTitle="InterlockSim"
+            appSummary="Simulate a discrete BSL-3 airlock interlock model, watch state changes on the P&ID schematic, replay counterexamples, and verify guard repairs."
+            className="is-guide"
+            triggerClassName="is-btn is-guide-trigger"
+            panelClassName="is-guide-panel"
+            visuallyHiddenClassName="is-visually-hidden"
+          />
 
           <WorkbenchThemeSwitch
             value={theme.preference}
@@ -755,6 +776,7 @@ export function App({
             schema={replaySession?.model.schema ?? model.schema}
             state={replaySession?.currentState ?? model.initialState}
             changedVars={replaySession?.changedVars ?? []}
+            highlightedVars={hoveredSchematicVars}
             violatedInvariantIds={replaySession?.violatedInvariantIds ?? []}
             evaluatedInvariantIds={
               replaySession !== null ? replaySession.model.invariants.map((inv) => inv.id) : []
@@ -791,6 +813,7 @@ export function App({
               onApplyManualStep={handleApplyManualStep}
               onRestoreVerdictTrace={handleRestoreVerdictTrace}
               onInspectRule={handleInspectRule}
+              onHoverVars={setHoveredSchematicVars}
             />
           ) : (
             <section className="is-pane" aria-label="Operator simulation console">

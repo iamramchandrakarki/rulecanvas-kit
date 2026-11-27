@@ -465,6 +465,7 @@ interface IntegratedInspectorBodyProps {
   readonly hasPendingEditedAssumptions: boolean;
   readonly onJumpToStep: (stepIndex: number) => void;
   readonly onInspectRule?: ((ruleId: string) => void) | undefined;
+  readonly onVerifyNow: () => void;
   readonly editorProps: IntegratedInterlockEditorProps;
 }
 
@@ -482,6 +483,7 @@ function IntegratedInspectorBody({
   hasPendingEditedAssumptions,
   onJumpToStep,
   onInspectRule,
+  onVerifyNow,
   editorProps,
 }: IntegratedInspectorBodyProps) {
   const [activeTab, setActiveTab] = useState<UnifiedTabId>('trace-guard');
@@ -528,7 +530,7 @@ function IntegratedInspectorBody({
 
   return (
     <>
-      <GuidedRepairCallout editor={editorState} />
+      <GuidedRepairCallout editor={editorState} isStale={isStale} onVerifyNow={onVerifyNow} />
 
       <div
         className="is-tablist"
@@ -816,7 +818,8 @@ export function VerificationWorkbenchPane({
       {/* 7. Verdict Card */}
       {!isRunning && verifiedSnapshot !== null && verdictView !== null && (
         <section
-          className="is-verdict"
+          key={`${verifiedSnapshot.modelLabel}-${verdictView.status}-${isStale ? 'stale' : 'fresh'}`}
+          className="is-verdict is-verdict-committed"
           role={verdictView.role}
           aria-live="polite"
           data-status={verdictView.status}
@@ -931,6 +934,7 @@ export function VerificationWorkbenchPane({
           hasPendingEditedAssumptions={hasPendingEditedAssumptions}
           onJumpToStep={onJumpToStep}
           onInspectRule={onInspectRule}
+          onVerifyNow={onVerifyNow}
           editorProps={editor}
         />
       ) : (

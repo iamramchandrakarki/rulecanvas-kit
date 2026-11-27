@@ -209,8 +209,20 @@ Every interactive component implements all eight states: `default`, `hover`, `ac
 - **Synchronized Containment Schematic (`InterlockSim`):** Renders outer corridor, airlock chamber, doors, differential pressure, UV-C lamp, occupancy, HEPA purge counter, and maintenance override directly from the replay session state, with explicit snapshot provenance (`Snapshot: ...`, `OUTDATED` warning when edits are pending, and step-scoped invariant labels).
 
 ### Motion
-- **Purposeful Transitions:** Restrict transitions to `120ms`–`180ms` using `--ease-out: cubic-bezier(0.22, 1, 0.36, 1)` on `opacity`, `transform`, `background-color`, and `border-color`.
-- **Reduced Motion:** `@media (prefers-reduced-motion: reduce)` disables all non-essential transitions and animations immediately.
+- **Purposeful Motion Token Scale:** Every transition maps to one of five calibrated durations and natural cubic-bezier curves (`--ease-out: cubic-bezier(0.22, 1, 0.36, 1)`, `--ease-in-out: cubic-bezier(0.45, 0, 0.25, 1)`, `--ease-spring: cubic-bezier(0.2, 1.12, 0.36, 1)`):
+  - `--dur-instant` (`90ms`): Active press feedback and icon-button micro-responses.
+  - `--dur-fast` (`140ms`): Control hover/focus, tab indicators, rule/step selection, and AST guide highlights.
+  - `--dur-base` (`200ms`): Popovers (`VerificationBoundsControl`, `WorkbenchGuideControl`), modal dialogs, verdict updates, and AST clause highlight reveals.
+  - `--dur-expand` (`260ms`): Comparison matrix drawer reveals.
+  - `--dur-state` (`340ms`): InterlockSim discrete schematic transitions (dual-leaf bulkhead doors, negative-pressure airflow chevrons, UV-C rays, personnel occupancy silhouette, HEPA purge segments, and maintenance override key switch rotation).
+- **Contrast-Safe Entrance Motion:** Reveal animations use GPU-composited `transform`, `clip-path`, and tinted background settling rather than fading text from `opacity: 0`, ensuring WCAG 2.2 AA contrast at every animation frame.
+- **Reduced Motion:** `@media (prefers-reduced-motion: reduce)` disables all non-essential transitions, transforms, and animations immediately while preserving identical state labels, badges, and functional cues.
+
+### Discoverability & First-Time Workflow
+- **Unified Header Grouping:** Subtle `1px` toolbar dividers separate Scenario/Bounds configuration, Live Verdict + single Primary `Verify` action, and secondary Utilities (`Compare Presets`, `Guide` & glossary popover, `System / Light / Dark` theme switch).
+- **On-Demand Workflow & Terminology (`WorkbenchGuideControl`):** Accessible `Guide` popover documents the 4-step workflow (`Choose scenario -> Run Verify -> Inspect evidence -> Stage & re-verify`) and plain-language definitions for `Invariant`, `Guard`, `Counterexample`, `Reachable state`, `Transition`, `Verification bounds`, and `Vacuous verification` without occupying permanent workspace space.
+- **Semantic Repair Diffs & Staged Confirmation:** Candidate repairs highlight the exact added/relocated guard clause with semantic diff tokens (`--color-diff-add-bg` / `--color-diff-add-border` / `--color-diff-add-ink`), and staging a repair displays an explicit unverified-draft confirmation strip with a direct `Run Verification` trigger.
+- **AST Group & Console-to-Schematic Coupling:** `and` (cobalt), `or` (amber caution), and `not` (danger accent) AST groups carry distinct operator tints and tree guide rails. In `InterlockSim`, hovering or focusing an enabled actuator highlights the affected schematic modules and telemetry cells in real time.
 
 ## Do's and Don'ts
 

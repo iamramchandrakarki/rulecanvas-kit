@@ -9,19 +9,31 @@
  *   .rc-expr-operand         inline ValueExpr editor (var / lit / add / sub)
  */
 
+@keyframes rc-clause-in {
+  from {
+    transform: translateY(-2px);
+    background-color: var(--color-accent-soft);
+  }
+  to {
+    transform: translateY(0);
+    background-color: transparent;
+  }
+}
+
 .rc-expr-node {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 5px;
   min-width: 0;
 }
 
 .rc-expr-node-inline,
 .rc-expr-operand {
   display: inline-flex;
+  flex-direction: row;
   flex-wrap: wrap;
   align-items: center;
-  gap: 3px;
+  gap: 4px;
   min-width: 0;
   max-width: 100%;
 }
@@ -30,7 +42,7 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 4px 6px;
+  gap: 5px 6px;
   min-width: 0;
   min-height: var(--control-h-xs);
 }
@@ -78,16 +90,34 @@
   min-width: 10ch;
 }
 
-/* Operator selects carry the expression's structure: stronger weight */
+/* Operator selects carry the expression's structure: distinct AND vs OR vs NOT cues */
 .rc-expr-node select.rc-expr-op {
   font-weight: 600;
   color: var(--color-ink);
   background-color: var(--color-surface-subtle);
   min-width: 5ch;
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
 }
 
-.rc-expr-node select.rc-expr-op:is([data-op='and'], [data-op='or'], [data-op='not']) {
+.rc-expr-node select.rc-expr-op[data-op='and'] {
   color: var(--color-accent);
+  background-color: var(--color-accent-soft);
+  border-color: var(--color-accent-border);
+}
+
+.rc-expr-node select.rc-expr-op[data-op='or'] {
+  color: var(--color-warning);
+  background-color: var(--color-warning-soft);
+  border-color: var(--color-warning-border);
+}
+
+.rc-expr-node select.rc-expr-op[data-op='not'] {
+  color: var(--color-danger);
+  background-color: var(--color-danger-soft);
+  border-color: var(--color-danger-border);
 }
 
 /*
@@ -97,8 +127,17 @@
 .rc-expr-operand {
   gap: 0;
   border: 1px solid var(--color-control-border);
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   background-color: var(--color-surface);
+  overflow: hidden;
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
+}
+
+.rc-expr-operand:focus-within {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 1px var(--color-accent-border);
 }
 
 .rc-expr-operand > :is(select, input),
@@ -151,11 +190,11 @@
 
 .rc-expr-preview {
   display: block;
-  padding: 5px 8px;
+  padding: 6px 10px;
   margin-bottom: 2px;
   background-color: var(--color-code-bg);
   border: 1px solid var(--color-code-border);
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
 }
 
 .rc-expr-collapsed-preview {
@@ -171,24 +210,46 @@
   white-space: nowrap;
 }
 
+.rc-expr-group[data-op='or'] > .rc-expr-group-head > .rc-expr-group-hint {
+  color: var(--color-warning);
+  font-weight: 500;
+}
+
 .rc-expr-add.rc-expr-add {
   min-height: var(--control-h-xs);
   padding: 1px 8px;
   font-size: var(--text-xs);
-  border-style: dashed;
+  border-style: solid;
   border-color: var(--color-rule-strong);
   color: var(--color-ink-secondary);
-  background-color: transparent;
+  background-color: var(--color-surface);
 }
 
 .rc-expr-clauses {
   list-style: none;
   margin: 0 0 0 11px;
-  padding: 2px 0 2px 14px;
-  border-left: 1px solid var(--color-rule-strong);
+  padding: 3px 0 3px 14px;
+  border-left: 1.5px solid var(--color-rule);
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 5px;
+  transition: border-color var(--dur-fast) var(--ease-out);
+}
+
+.rc-expr-group[data-op='and'] > .rc-expr-clauses {
+  border-left-color: var(--color-accent-border);
+}
+
+.rc-expr-group[data-op='or'] > .rc-expr-clauses {
+  border-left-color: var(--color-warning-border);
+}
+
+.rc-expr-clauses:focus-within {
+  border-left-color: var(--color-accent);
+}
+
+.rc-expr-group[data-op='or'] > .rc-expr-clauses:focus-within {
+  border-left-color: var(--color-warning);
 }
 
 .rc-expr-clauses[hidden] {
@@ -206,8 +267,10 @@
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: start;
   gap: 6px;
-  padding: 1px 2px 1px 0;
-  border-radius: var(--radius-xs);
+  padding: 3px 4px 3px 4px;
+  border-radius: var(--radius-sm);
+  animation: rc-clause-in var(--dur-base) var(--ease-out) both;
+  transition: background-color var(--dur-fast) var(--ease-out);
 }
 
 /* Tree connector from the group's guide line into each clause row */
@@ -215,19 +278,32 @@
   content: '';
   position: absolute;
   left: -14px;
-  top: calc(var(--control-h-xs) / 2 + 1px);
-  width: 10px;
-  border-top: 1px solid var(--color-rule-strong);
+  top: calc(var(--control-h-xs) / 2 + 3px);
+  width: 11px;
+  border-top: 1px solid var(--color-rule);
+  transition: border-color var(--dur-fast) var(--ease-out);
+}
+
+.rc-expr-group[data-op='or'] > .rc-expr-clauses > .rc-expr-clause::before {
+  border-top-color: var(--color-warning-border);
 }
 
 .rc-expr-clause:focus-within {
   background-color: var(--color-surface-subtle);
 }
 
+.rc-expr-clause > .rc-expr-remove {
+  opacity: 0.65;
+}
+
+.rc-expr-clause:focus-within > .rc-expr-remove {
+  opacity: 1;
+}
+
 .rc-expr-children:not(.rc-expr-clauses) {
   margin-left: 11px;
   padding-left: 14px;
-  border-left: 1px solid var(--color-rule-strong);
+  border-left: 1.5px solid var(--color-danger-border);
 }
 
 /* Icon buttons: remove clause / set value, collapse toggle */
@@ -246,9 +322,15 @@
   color: var(--color-ink-muted);
   cursor: pointer;
   transition:
-    background-color var(--dur-fast) var(--ease-out),
-    color var(--dur-fast) var(--ease-out),
-    border-color var(--dur-fast) var(--ease-out);
+    background-color var(--dur-instant) var(--ease-out),
+    color var(--dur-instant) var(--ease-out),
+    border-color var(--dur-instant) var(--ease-out),
+    opacity var(--dur-fast) var(--ease-out),
+    transform var(--dur-instant) var(--ease-out);
+}
+
+.rc-expr-icon-btn:active {
+  transform: scale(0.94);
 }
 
 .rc-expr-icon-btn:focus-visible {
@@ -283,6 +365,14 @@
   .rc-expr-clause:hover {
     background-color: var(--color-surface-subtle);
   }
+
+  .rc-expr-clause:hover > .rc-expr-remove {
+    opacity: 1;
+  }
+
+  .rc-expr-operand:hover {
+    border-color: var(--color-ink-secondary);
+  }
 }
 
 /* in-set values */
@@ -300,8 +390,9 @@
   gap: 2px;
   padding: 1px;
   border: 1px solid var(--color-rule);
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   background-color: var(--color-surface);
+  animation: rc-clause-in var(--dur-base) var(--ease-out) both;
 }
 
 .rc-expr-set-item .rc-expr-icon-btn {
@@ -317,7 +408,7 @@
 .rc-expr-diagnostics {
   list-style: none;
   margin: 0;
-  padding: 2px 0 2px 8px;
+  padding: 3px 0 3px 8px;
   border-left: 2px solid var(--color-error);
   color: var(--color-error);
   font-size: var(--text-2xs);
@@ -347,12 +438,22 @@
   }
 
   .rc-expr-clause::before {
-    top: 18px;
+    top: 19px;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .rc-expr-toggle svg {
+  .rc-expr-clause,
+  .rc-expr-set-item {
+    animation: none;
+  }
+
+  .rc-expr-toggle svg,
+  .rc-expr-icon-btn {
     transition: none;
+  }
+
+  .rc-expr-icon-btn:active {
+    transform: none;
   }
 }
