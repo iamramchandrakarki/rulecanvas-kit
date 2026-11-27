@@ -573,26 +573,24 @@ function allRuntimeDiagnosticsReproduced(
   endpoint: StateSnapshot,
   runtimeErrors: readonly ValidationError[],
 ): boolean {
-  const reproduced = new Set<string>();
-  for (const rule of model.rules) {
-    const stepped = stepModel(model, endpoint, rule.id);
-    if (stepped.ok) {
-      continue;
-    }
-    const produced = stepped.error;
-    if (produced.code === 'OUT_OF_DOMAIN_TRANSITION') {
-      reproduced.add(runtimeDiagnosticKey(produced));
-    }
+  const unmatched = new Set<string>();
+  for (const diagnostic of runtimeErrors) {
+    unmatched.add(runtimeDiagnosticKey(diagnostic));
   }
-  if (reproduced.size === 0) {
+  if (unmatched.size === 0) {
     return false;
   }
-  for (const diagnostic of runtimeErrors) {
-    if (!reproduced.has(runtimeDiagnosticKey(diagnostic))) {
-      return false;
+  for (const rule of model.rules) {
+    const stepped = stepModel(model, endpoint, rule.id);
+    if (stepped.ok || stepped.error.code !== 'OUT_OF_DOMAIN_TRANSITION') {
+      continue;
+    }
+    unmatched.delete(runtimeDiagnosticKey(stepped.error));
+    if (unmatched.size === 0) {
+      return true;
     }
   }
-  return true;
+  return false;
 }
 
 // ---------------------------------------------------------------------------

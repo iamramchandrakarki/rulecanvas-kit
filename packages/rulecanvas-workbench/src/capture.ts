@@ -658,17 +658,19 @@ export function sanitizeAndFreezeVerifyResult(
           message: 'INVALID verification result trace does not replay deterministically.',
         };
       }
-      const reproduced = new Set<string>();
-      for (const rule of capturedModel.rules) {
-        const stepped = stepModel(capturedModel, replay.finalState, rule.id);
-        if (!stepped.ok && stepped.error.code === 'OUT_OF_DOMAIN_TRANSITION') {
-          reproduced.add(runtimeDiagnosticKey(stepped.error));
+      const unmatched = new Set<string>(runtimeErrors.map(runtimeDiagnosticKey));
+      if (unmatched.size > 0) {
+        for (const rule of capturedModel.rules) {
+          const stepped = stepModel(capturedModel, replay.finalState, rule.id);
+          if (!stepped.ok && stepped.error.code === 'OUT_OF_DOMAIN_TRANSITION') {
+            unmatched.delete(runtimeDiagnosticKey(stepped.error));
+            if (unmatched.size === 0) {
+              break;
+            }
+          }
         }
       }
-      if (
-        reproduced.size === 0 ||
-        !runtimeErrors.every((diagnostic) => reproduced.has(runtimeDiagnosticKey(diagnostic)))
-      ) {
+      if (runtimeErrors.length === 0 || unmatched.size > 0) {
         return {
           ok: false,
           message:
