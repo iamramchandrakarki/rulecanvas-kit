@@ -32,14 +32,47 @@ Exit codes:
   2  CLI usage error, unreadable file, or invalid model JSON/schema
 `;
 
-function writeError(code, message, errors) {
+function writeStream(stream, text) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const cleanup = () => {
+      stream.removeListener('error', onError);
+    };
+    const onError = (err) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(err);
+    };
+    stream.once('error', onError);
+    try {
+      stream.write(text, 'utf8', (err) => {
+        if (settled) return;
+        settled = true;
+        if (err) {
+          // Defer listener removal past nextTick so Node's emitErrorNT has a handler.
+          const timer = setImmediate(cleanup);
+          if (typeof timer.unref === 'function') timer.unref();
+          reject(err);
+        } else {
+          cleanup();
+          resolve();
+        }
+      });
+    } catch (err) {
+      onError(err);
+    }
+  });
+}
+
+async function writeError(code, message, errors) {
   const payload = {
     ok: false,
     code,
     message,
     ...(errors !== undefined ? { errors } : {}),
   };
-  process.stderr.write(`${JSON.stringify(payload, null, 2)}\n`);
+  await writeStream(process.stderr, `${JSON.stringify(payload, null, 2)}\n`);
 }
 
 function parseBoundInt(raw, flagName, min, max) {
@@ -180,15 +213,33 @@ function parseCliArgs(argv) {
   };
 }
 
-function main() {
+async function safeWriteError(code, message, errors) {
+  try {
+    await writeError(code, message, errors);
+  } catch {
+    // Best-effort stderr diagnostic; ignore secondary stderr write errors.
+  }
+}
+
+async function main() {
   const cli = parseCliArgs(process.argv.slice(2));
   if (!cli.ok) {
-    writeError(cli.code, cli.message);
-    process.exit(2);
+    await safeWriteError(cli.code, cli.message);
+    process.exitCode = 2;
+    return;
   }
   if (cli.help) {
-    process.stdout.write(USAGE);
-    process.exit(0);
+    try {
+      await writeStream(process.stdout, USAGE);
+    } catch (err) {
+      const code = err && typeof err === 'object' && 'code' in err ? String(err.code) : 'WRITE_ERROR';
+      const detail = err instanceof Error ? err.message : String(err);
+      await safeWriteError('STDOUT_WRITE_FAILED', `Unable to write usage to stdout (${code}): ${detail}`);
+      process.exitCode = 2;
+      return;
+    }
+    process.exitCode = 0;
+    return;
   }
 
   let rawText;
@@ -197,19 +248,21 @@ function main() {
   } catch (err) {
     const code = err && typeof err === 'object' && 'code' in err ? String(err.code) : 'READ_ERROR';
     const detail = err instanceof Error ? err.message : String(err);
-    writeError('UNREADABLE_MODEL_FILE', `Unable to read "${cli.modelPath}" (${code}): ${detail}`);
-    process.exit(2);
+    await safeWriteError('UNREADABLE_MODEL_FILE', `Unable to read "${cli.modelPath}" (${code}): ${detail}`);
+    process.exitCode = 2;
+    return;
   }
 
   const codec = createModelJsonCodec(DEFAULT_MODEL_JSON_LIMITS, { duplicateKeys: 'reject' });
   const decoded = codec.decode(rawText);
   if (!decoded.ok) {
-    writeError(
+    await safeWriteError(
       'MODEL_DECODE_FAILED',
       `Model JSON validation failed with ${decoded.errors.length} error(s).`,
       decoded.errors,
     );
-    process.exit(2);
+    process.exitCode = 2;
+    return;
   }
 
   const built = verifyAndBuildReport(decoded.model, {
@@ -217,22 +270,36 @@ function main() {
     maxDepth: cli.maxDepth,
   });
   if (!built.ok) {
-    writeError(
+    await safeWriteError(
       'REPORT_BUILD_FAILED',
       `Verification report failed with ${built.errors.length} error(s).`,
       built.errors,
     );
-    process.exit(2);
+    process.exitCode = 2;
+    return;
   }
 
   const { report } = built;
   const output = cli.markdown
     ? formatVerificationReportMarkdown(report)
     : serializeVerificationReportJson(report);
-  process.stdout.write(output.endsWith('\n') ? output : `${output}\n`);
+  const line = output.endsWith('\n') ? output : `${output}\n`;
+  try {
+    await writeStream(process.stdout, line);
+  } catch (err) {
+    const code = err && typeof err === 'object' && 'code' in err ? String(err.code) : 'WRITE_ERROR';
+    const detail = err instanceof Error ? err.message : String(err);
+    await safeWriteError('STDOUT_WRITE_FAILED', `Unable to write report to stdout (${code}): ${detail}`);
+    process.exitCode = 2;
+    return;
+  }
 
   const passed = report.verdict === 'VERIFIED' && (!report.vacuousGoalWarning || cli.allowVacuous);
-  process.exit(passed ? 0 : 1);
+  process.exitCode = passed ? 0 : 1;
 }
 
-main();
+main().catch(async (err) => {
+  const detail = err instanceof Error ? err.message : String(err);
+  await safeWriteError('INTERNAL_ERROR', detail);
+  process.exitCode = 2;
+});

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -25,6 +25,7 @@ function runCli(args) {
   return spawnSync(process.execPath, [CLI_SCRIPT, ...args], {
     cwd: REPO_ROOT,
     encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024,
   });
 }
 
@@ -142,6 +143,36 @@ const RUNTIME_INVALID_MODEL = {
       id: 'non-negative',
       label: 'Count stays non-negative',
       holds: { op: 'gte', left: { op: 'var', name: 'count' }, right: { op: 'lit', value: 0 } },
+    },
+  ],
+  assumptions: BASE_ASSUMPTIONS,
+};
+
+const COUNTEREXAMPLE_5000_MODEL = {
+  id: 'counterexample-5000',
+  name: '5000-Step Counterexample Model',
+  schema: {
+    x: { kind: 'int', min: 0, max: 5000 },
+  },
+  initialState: { x: 0 },
+  rules: [
+    {
+      id: 'inc',
+      label: 'Increment x while x < 5000',
+      guard: { op: 'lt', left: { op: 'var', name: 'x' }, right: { op: 'lit', value: 5000 } },
+      updates: [
+        {
+          var: 'x',
+          value: { op: 'add', left: { op: 'var', name: 'x' }, right: { op: 'lit', value: 1 } },
+        },
+      ],
+    },
+  ],
+  invariants: [
+    {
+      id: 'x-below-5000',
+      label: 'x stays below 5000',
+      holds: { op: 'lt', left: { op: 'var', name: 'x' }, right: { op: 'lit', value: 5000 } },
     },
   ],
   assumptions: BASE_ASSUMPTIONS,
@@ -299,5 +330,76 @@ describe('scripts/check-model.mjs CLI', () => {
 
     const dupRes = runCli([duplicateKeyJson]);
     assert.match(dupRes.stderr, /DUPLICATE_JSON_KEY/);
+  });
+
+  test('pipes full 5,000-step JSON output (>64 KiB) without truncation', () => {
+    const filePath = writeFixture('counterexample-5000.json', COUNTEREXAMPLE_5000_MODEL);
+    const res = runCli([filePath, '--max-states', '10000', '--max-depth', '6000']);
+    assert.equal(res.status, 1);
+    assert.equal(res.stderr, '');
+    assert.ok(Buffer.byteLength(res.stdout, 'utf8') > 65536);
+    const report = JSON.parse(res.stdout);
+    assert.equal(report.verdict, 'VIOLATED');
+    assert.equal(report.provenance, 'recomputed-core');
+    assert.equal(report.trace.length, 5000);
+    assert.equal(report.trace[0].stepIndex, 1);
+    assert.equal(report.trace[4999].stepIndex, 5000);
+    assert.equal(report.terminalState.x, 5000);
+  });
+
+  test('pipes full 5,000-step Markdown output (>64 KiB) without truncation', () => {
+    const filePath = writeFixture('counterexample-5000-md.json', COUNTEREXAMPLE_5000_MODEL);
+    const res = runCli([filePath, '--markdown', '--max-states', '10000', '--max-depth', '6000']);
+    assert.equal(res.status, 1);
+    assert.equal(res.stderr, '');
+    assert.ok(Buffer.byteLength(res.stdout, 'utf8') > 65536);
+    assert.ok(res.stdout.startsWith('# Verification Audit Report'));
+    assert.ok(res.stdout.includes('Step 1:'));
+    assert.ok(res.stdout.includes('Step 5000:'));
+    assert.ok(res.stdout.includes('</details>'));
+    assert.ok(res.stdout.includes('## Scope disclaimer'));
+    assert.ok(res.stdout.indexOf('## Scope disclaimer') > res.stdout.indexOf('</details>'));
+  });
+
+  test('exits cleanly with nonzero status on broken stdout pipe without hanging', async () => {
+    const filePath = writeFixture('counterexample-5000-epipe.json', COUNTEREXAMPLE_5000_MODEL);
+    const result = await new Promise((resolve, reject) => {
+      const child = spawn(
+        process.execPath,
+        [CLI_SCRIPT, filePath, '--max-states', '10000', '--max-depth', '6000'],
+        { cwd: REPO_ROOT, stdio: ['ignore', 'pipe', 'pipe'] },
+      );
+      const stderrChunks = [];
+      let destroyed = false;
+      const timer = setTimeout(() => {
+        child.kill('SIGKILL');
+        reject(new Error('CLI process hung on broken stdout pipe'));
+      }, 15_000);
+
+      child.stdout.on('data', () => {
+        if (!destroyed) {
+          destroyed = true;
+          child.stdout.destroy();
+        }
+      });
+      child.stdout.on('error', () => {
+        // Ignore stream destruction error on test side.
+      });
+      child.stderr.on('data', (chunk) => {
+        stderrChunks.push(chunk);
+      });
+      child.on('error', (err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+      child.on('close', (code, signal) => {
+        clearTimeout(timer);
+        resolve({ code, signal, stderr: Buffer.concat(stderrChunks).toString('utf8') });
+      });
+    });
+
+    assert.equal(result.signal, null);
+    assert.equal(result.code, 2);
+    assert.match(result.stderr, /STDOUT_WRITE_FAILED/);
   });
 });
