@@ -287,15 +287,21 @@
               repository.
             </p>
             <p>
+              From the repository root, run <code>pnpm check:model</code> on any saved model JSON to emit a
+              <code>recomputed-core</code> JSON or Markdown report. Vacuous passes exit non-zero unless
+              <code>--allow-vacuous</code> is set.
+            </p>
+            <p>
               <a class="text-link" href="https://github.com/iamramchandrakarki/rulecanvas-kit/tree/main/templates/workbench-starter" rel="noopener noreferrer">Read the template README</a>
             </p>
           </div>
-          <div class="code-block">
-            <div class="code-head">
-              <span>Shell</span>
-              <button type="button" class="copy-btn" data-copy-target="starter-commands">Copy</button>
-            </div>
-            <pre id="starter-commands"><code>git clone https://github.com/iamramchandrakarki/rulecanvas-kit.git
+          <div style="display: grid; gap: var(--space-4); min-width: 0;">
+            <div class="code-block">
+              <div class="code-head">
+                <span>Shell — Starter template</span>
+                <button type="button" class="copy-btn" data-copy-target="starter-commands">Copy</button>
+              </div>
+              <pre id="starter-commands"><code>git clone https://github.com/iamramchandrakarki/rulecanvas-kit.git
 cd rulecanvas-kit
 pnpm install
 pnpm run pack:local          <span class="c"># writes ../rulecanvas-tarballs/*.tgz</span>
@@ -304,7 +310,19 @@ cd ../my-workbench
 pnpm install
 pnpm test                    <span class="c"># node --test tests/</span>
 pnpm build                   <span class="c"># vite build into dist/</span></code></pre>
-            <p class="code-note" role="status" aria-live="polite"></p>
+              <p class="code-note" role="status" aria-live="polite"></p>
+            </div>
+            <div class="code-block">
+              <div class="code-head">
+                <span>Shell — Model CLI</span>
+                <button type="button" class="copy-btn" data-copy-target="cli-commands">Copy</button>
+              </div>
+              <pre id="cli-commands"><code>pnpm run build:libs
+pnpm check:model model.json
+pnpm check:model model.json --markdown
+pnpm check:model model.json --allow-vacuous</code></pre>
+              <p class="code-note" role="status" aria-live="polite"></p>
+            </div>
           </div>
         </div>
       </section>

@@ -25,7 +25,7 @@ A `VERIFIED` verdict covers this finite model within its state and depth bounds.
 | Package | Used for |
 |---|---|
 | `@rulecanvas/core` | Model types; `verifyModel` and `replayTrace` in the tests |
-| `@rulecanvas/ui` | `buildVerdictSummaryView` |
+| `@rulecanvas/ui` | `buildVerdictSummaryView`, `buildVerificationReportFromSnapshot`, `formatVerificationReportMarkdown`, `serializeVerificationReportJson`, `sanitizeReportFilename`; `verifyAndBuildReport` in the tests |
 | `@rulecanvas/workbench/model-json` | `createModelJsonCodec(undefined, { duplicateKeys: 'reject' })` decodes the editable JSON. The first argument overrides size limits, and the second sets the parsing policy. |
 | `@rulecanvas/workbench/verify` | `createVerifyClient` with a module worker and main-thread fallback |
 | `@rulecanvas/workbench/verify-worker` | `installVerifyWorker` in `src/verify.worker.ts` |
@@ -72,6 +72,20 @@ If you keep the tarballs somewhere else, update the four `file:` paths in both `
 ## How the repository checks this template
 
 `pnpm verify:pack` in the RuleCanvasKit repository copies this directory into a temporary folder. It installs the freshly packed tarballs offline, runs `node --test`, `tsc` under `NodeNext` and `Bundler`, and `vite build`, and checks that the worker bundle is emitted. The browser gate then serves the built `dist/` under a subpath and checks both variants in a real browser.
+
+## Report export and CLI checks
+
+The Verdict pane includes **Copy Markdown**, **Download Markdown**, and **Download JSON** actions built from the current non-stale committed snapshot (`validated-snapshot` provenance; disabled while running or when the JSON draft has unverified edits).
+
+From the RuleCanvasKit repository root, you can also verify any saved model JSON directly with core verification (`recomputed-core` provenance):
+
+```bash
+pnpm check:model model.json
+pnpm check:model model.json --markdown
+pnpm check:model model.json --allow-vacuous
+```
+
+`pnpm check:model` exits `0` only on `VERIFIED` with a reachable goal (or no declared goal, unless `--allow-vacuous` is passed for a vacuous `VERIFIED` result). `VIOLATED`, `INCONCLUSIVE`, and runtime `INVALID` exit `1`; CLI or JSON decode errors exit `2`.
 
 ## Make it yours
 

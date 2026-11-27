@@ -1,6 +1,12 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import type { TraceStep, ValidationError } from '@rulecanvas/core';
-import { buildVerdictSummaryView } from '@rulecanvas/ui';
+import {
+  buildVerdictSummaryView,
+  buildVerificationReportFromSnapshot,
+  formatVerificationReportMarkdown,
+  sanitizeReportFilename,
+  serializeVerificationReportJson,
+} from '@rulecanvas/ui';
 import { createModelJsonCodec } from '@rulecanvas/workbench/model-json';
 import { createVerifyClient } from '@rulecanvas/workbench/verify';
 import {
@@ -51,6 +57,21 @@ function formatValue(value: unknown): string {
   return typeof value === 'string' ? `"${value}"` : String(value);
 }
 
+function downloadText(filename: string, mimeType: string, text: string): void {
+  const blob = new Blob([text], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.style.display = 'none';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  requestAnimationFrame(() => {
+    URL.revokeObjectURL(url);
+  });
+}
+
 function TraceList({ steps }: { readonly steps: readonly TraceStep[] }) {
   return (
     <ol className="trace">
@@ -76,6 +97,7 @@ export function App() {
   const [initialExport] = useState(() => codec.encode(initialModel));
   const [draftText, setDraftText] = useState<string>(initialExport.ok ? initialExport.text : '');
   const [decodeErrors, setDecodeErrors] = useState<readonly ValidationError[]>([]);
+  const [exportStatus, setExportStatus] = useState<string>('');
   const revisionRef = useRef(0);
   const textByRevisionRef = useRef<Map<number, string>>(new Map([[0, draftText]]));
 
@@ -86,6 +108,7 @@ export function App() {
   const { snapshot, isRunning, transportError } = verification;
 
   const verifyDraft = useCallback(() => {
+    setExportStatus('');
     const decoded = codec.decode(draftText);
     if (!decoded.ok) {
       setDecodeErrors(decoded.errors);
@@ -105,6 +128,45 @@ export function App() {
   const stale = snapshot !== null && textByRevisionRef.current.get(snapshot.revision) !== draftText;
   const view = snapshot !== null ? buildVerdictSummaryView(snapshot.result) : null;
   const result = snapshot?.result ?? null;
+  const reportBuild = useMemo(
+    () => (snapshot !== null && !stale ? buildVerificationReportFromSnapshot(snapshot) : null),
+    [snapshot, stale],
+  );
+  const report = reportBuild !== null && reportBuild.ok ? reportBuild.report : null;
+  const exportDisabled = isRunning || stale || report === null;
+
+  const copyMarkdown = useCallback(() => {
+    if (report === null || isRunning || stale) return;
+    const markdown = formatVerificationReportMarkdown(report);
+    if (
+      typeof navigator === 'undefined' ||
+      navigator.clipboard === undefined ||
+      typeof navigator.clipboard.writeText !== 'function'
+    ) {
+      setExportStatus('Clipboard unavailable; use Download Markdown instead.');
+      return;
+    }
+    void navigator.clipboard.writeText(markdown).then(
+      () => setExportStatus('Copied Markdown report.'),
+      () => setExportStatus('Clipboard copy failed; use Download Markdown instead.'),
+    );
+  }, [report, isRunning, stale]);
+
+  const downloadMarkdown = useCallback(() => {
+    if (report === null || isRunning || stale) return;
+    const markdown = formatVerificationReportMarkdown(report);
+    const filename = sanitizeReportFilename(report.model.id, 'md');
+    downloadText(filename, 'text/markdown;charset=utf-8', markdown);
+    setExportStatus(`Downloaded ${filename}.`);
+  }, [report, isRunning, stale]);
+
+  const downloadJson = useCallback(() => {
+    if (report === null || isRunning || stale) return;
+    const json = serializeVerificationReportJson(report);
+    const filename = sanitizeReportFilename(report.model.id, 'json');
+    downloadText(filename, 'application/json;charset=utf-8', json);
+    setExportStatus(`Downloaded ${filename}.`);
+  }, [report, isRunning, stale]);
 
   return (
     <div className="shell">
@@ -144,7 +206,10 @@ export function App() {
             value={draftText}
             aria-invalid={decodeErrors.length > 0}
             aria-describedby={decodeErrors.length > 0 ? 'model-json-errors' : undefined}
-            onChange={(event) => setDraftText(event.target.value)}
+            onChange={(event) => {
+              setExportStatus('');
+              setDraftText(event.target.value);
+            }}
           />
           {decodeErrors.length > 0 && (
             <ul id="model-json-errors" className="errors" role="alert">
@@ -183,6 +248,37 @@ export function App() {
                 Execution: {snapshot.executionMode === 'worker' ? 'Web Worker' : 'main thread'}
                 {stale ? '. The JSON changed since this run; verify again.' : ''}
               </p>
+              <div className="report-actions" role="group" aria-label="Report export">
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={copyMarkdown}
+                  disabled={exportDisabled}
+                >
+                  Copy Markdown
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={downloadMarkdown}
+                  disabled={exportDisabled}
+                >
+                  Download Markdown
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={downloadJson}
+                  disabled={exportDisabled}
+                >
+                  Download JSON
+                </button>
+              </div>
+              {exportStatus !== '' && (
+                <p className="hint" role="status" aria-live="polite">
+                  {exportStatus}
+                </p>
+              )}
               {result !== null && result.status === 'VIOLATED' && (
                 <>
                   <h3>

@@ -2,6 +2,12 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import { replayTrace, validateModel, verifyModel } from '@rulecanvas/core';
+import {
+  formatVerificationReportMarkdown,
+  sanitizeReportFilename,
+  serializeVerificationReportJson,
+  verifyAndBuildReport,
+} from '@rulecanvas/ui';
 import { createModelJsonCodec } from '@rulecanvas/workbench/model-json';
 import {
   PROD_REQUIRES_REVIEW,
@@ -66,5 +72,48 @@ describe('CI/CD production release gate', () => {
     assert.notEqual(duplicated, encoded.text, 'fixture edit must apply');
     const decoded = codec.decode(duplicated);
     assert.equal(decoded.ok, false);
+  });
+
+  test('verifyAndBuildReport emits recomputed-core reports for both variants', () => {
+    const principledBuilt = verifyAndBuildReport(RELEASE_GATE_MODELS.principled, VERIFY_OPTIONS);
+    assert.equal(principledBuilt.ok, true);
+    assert.equal(principledBuilt.report.provenance, 'recomputed-core');
+    assert.equal(principledBuilt.report.verdict, 'VERIFIED');
+    assert.equal(principledBuilt.report.goalStatus, 'REACHED');
+    assert.equal(principledBuilt.report.vacuousGoalWarning, false);
+
+    const principledMd = formatVerificationReportMarkdown(principledBuilt.report);
+    assert.match(principledMd, /# Verification Audit Report/);
+    assert.match(principledMd, /\*\*Provenance:\*\* recomputed-core/);
+    assert.match(principledMd, /\*\*VERIFIED\*\*/);
+    assert.match(principledMd, /REACHED/);
+
+    const principledJson = JSON.parse(serializeVerificationReportJson(principledBuilt.report));
+    assert.equal(principledJson.provenance, 'recomputed-core');
+    assert.equal(principledJson.verdict, 'VERIFIED');
+    assert.equal(principledJson.goalStatus, 'REACHED');
+
+    const brokenBuilt = verifyAndBuildReport(RELEASE_GATE_MODELS.broken, VERIFY_OPTIONS);
+    assert.equal(brokenBuilt.ok, true);
+    assert.equal(brokenBuilt.report.provenance, 'recomputed-core');
+    assert.equal(brokenBuilt.report.verdict, 'VIOLATED');
+    assert.deepEqual(brokenBuilt.report.violatedInvariantIds, [PROD_REQUIRES_REVIEW]);
+    assert.equal(brokenBuilt.report.trace?.length, 5);
+    assert.equal(brokenBuilt.report.trace?.[4]?.ruleId, 'promote-prod');
+
+    const brokenMd = formatVerificationReportMarkdown(brokenBuilt.report);
+    assert.match(brokenMd, /\*\*VIOLATED\*\*/);
+    assert.match(brokenMd, /prod-requires-review/);
+    assert.match(brokenMd, /open-hotfix-bypass/);
+
+    const brokenJson = JSON.parse(serializeVerificationReportJson(brokenBuilt.report));
+    assert.deepEqual(brokenJson.violatedInvariantIds, [PROD_REQUIRES_REVIEW]);
+    assert.equal(brokenJson.trace.length, 5);
+  });
+
+  test('sanitizeReportFilename normalizes model ids and reserved names', () => {
+    assert.equal(sanitizeReportFilename('release-gate-principled', 'md'), 'release-gate-principled.md');
+    assert.equal(sanitizeReportFilename('release-gate-broken', '.json'), 'release-gate-broken.json');
+    assert.equal(sanitizeReportFilename('../CON', 'md'), 'rulecanvas-model.md');
   });
 });

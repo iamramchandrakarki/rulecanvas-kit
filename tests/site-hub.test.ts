@@ -94,10 +94,13 @@ describe('site hub', () => {
     }
   });
 
-  it('does not advertise Spec 2 features before they ship', () => {
+  it('documents check:model CLI without leaking internal filenames or unshipped terms', () => {
+    expect(html).toContain('pnpm check:model');
+    expect(html).toContain('--markdown');
+    expect(html).toContain('--allow-vacuous');
     for (const file of ['index.html', 'styles.css', 'hub.js']) {
       const text = readFileSync(path.join(siteDir, file), 'utf8').toLowerCase();
-      for (const term of ['check:model', 'check-model', 'report export', 'export report', 'delta.ts', 'report.ts']) {
+      for (const term of ['report export', 'export report', 'delta.ts', 'report.ts']) {
         expect(text, `${file} mentions ${term}`).not.toContain(term);
       }
     }

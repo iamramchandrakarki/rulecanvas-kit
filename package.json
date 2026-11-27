@@ -18,6 +18,8 @@
     "verify:hygiene": "node scripts/check-test-hygiene.mjs",
     "verify:release:preflight": "node scripts/release-preflight.mjs",
     "test:release:preflight": "node --test tests/release-preflight.test.mjs",
+    "check:model": "node scripts/check-model.mjs",
+    "test:cli": "node --test tests/check-model.test.mjs",
     "test:browser": "pnpm run build && node tests/browser/workbench-e2e.mjs",
     "test:e2e": "pnpm run test:browser",
     "bench": "pnpm run build:libs && tsx packages/rulecanvas-core/bench/run-bench.ts"

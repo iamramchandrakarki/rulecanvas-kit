@@ -58,6 +58,12 @@ jobs:
       - name: Run deterministic seeded property-based tests
         run: FC_SEED=918273645 pnpm --filter @rulecanvas/core exec vitest run tests/properties.test.ts
 
+      - name: Run deterministic seeded UI report and delta property-based tests
+        run: FC_SEED=918273645 pnpm --filter @rulecanvas/ui exec vitest run tests/report.properties.test.ts tests/delta.test.ts
+
+      - name: Run CLI regression tests
+        run: pnpm test:cli
+
       - name: Verify architecture boundaries
         run: pnpm verify:boundaries
 
