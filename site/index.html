@@ -1,0 +1,375 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>RuleCanvasKit: find where sound rules break when they compose</title>
+    <meta
+      name="description"
+      content="RuleCanvasKit explores every reachable state of a finite rule model and replays the shortest path to a broken invariant. Open AgentGate or InterlockSim at a broken preset."
+    />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect x='1.5' y='1.5' width='13' height='13' rx='1.5' fill='none' stroke='%232f5bd3' stroke-width='1.5'/%3E%3Ccircle cx='5.25' cy='5.25' r='1.4' fill='%232f5bd3'/%3E%3Ccircle cx='10.75' cy='10.75' r='1.4' fill='%232f5bd3'/%3E%3C/svg%3E"
+    />
+    <script>
+      (function () {
+        try {
+          var raw = localStorage.getItem('rulecanvas-theme');
+          var pref = raw === 'light' || raw === 'dark' || raw === 'system' ? raw : 'system';
+          var sysDark =
+            typeof window.matchMedia === 'function' &&
+            window.matchMedia('(prefers-color-scheme: dark)').matches;
+          var resolved = pref === 'dark' || (pref === 'system' && sysDark) ? 'dark' : 'light';
+          document.documentElement.setAttribute('data-theme', resolved);
+          document.documentElement.setAttribute('data-theme-preference', pref);
+          document.documentElement.style.colorScheme = resolved;
+        } catch (_e) {
+          document.documentElement.setAttribute('data-theme', 'light');
+          document.documentElement.style.colorScheme = 'light';
+        }
+      })();
+    </script>
+    <link rel="preload" href="./fonts/ibm-plex-sans-latin-500-normal.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="stylesheet" href="./tokens.css" />
+    <link rel="stylesheet" href="./styles.css" />
+    <script src="./hub.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#workbenches">Skip to the workbenches</a>
+    <header class="topbar">
+      <div class="topbar-inner">
+        <span class="brand">
+          <svg class="brand-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <rect x="1.5" y="1.5" width="13" height="13" rx="1.5" stroke="currentColor" stroke-width="1.5" />
+            <circle cx="5.25" cy="5.25" r="1.4" fill="currentColor" />
+            <circle cx="10.75" cy="5.25" r="1.4" stroke="currentColor" stroke-width="1.2" />
+            <circle cx="10.75" cy="10.75" r="1.4" fill="currentColor" />
+            <path d="M6.65 5.25h2.7M10.75 6.65v2.7M6.25 6.25l3.5 3.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
+          </svg>
+          <span>RuleCanvasKit</span>
+        </span>
+        <nav class="topbar-nav" aria-label="Site">
+          <a class="topbar-link" href="#how-it-fits">Packages</a>
+          <a class="topbar-link" href="#starter">Starter</a>
+          <a class="topbar-link" href="#scope">Scope</a>
+          <a
+            class="topbar-link"
+            href="https://github.com/iamramchandrakarki/rulecanvas-kit"
+            rel="noopener noreferrer"
+          >
+            GitHub
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M6 3.5h6.5V10M12.25 3.75 4 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </a>
+        </nav>
+        <div class="theme-switch" role="group" aria-label="Color theme">
+          <button type="button" class="theme-btn" data-theme-option="system" aria-pressed="false" title="Follow system color scheme (Light fallback)">
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <rect x="2" y="3" width="12" height="8.5" rx="1" stroke="currentColor" stroke-width="1.5" />
+              <path d="M5.5 14h5M8 11.5V14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+            </svg>
+            <span class="theme-label">System</span>
+          </button>
+          <button type="button" class="theme-btn" data-theme-option="light" aria-pressed="false" title="Light theme">
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <circle cx="8" cy="8" r="3.2" stroke="currentColor" stroke-width="1.5" />
+              <path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
+            </svg>
+            <span class="theme-label">Light</span>
+          </button>
+          <button type="button" class="theme-btn" data-theme-option="dark" aria-pressed="false" title="Dark theme">
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M13.2 9.8A5.5 5.5 0 0 1 6.2 2.8a5.5 5.5 0 1 0 7 7Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" />
+            </svg>
+            <span class="theme-label">Dark</span>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <section class="hero" aria-labelledby="problem">
+        <div class="wrap">
+          <h1 id="problem">Rules that look sound individually fail when they compose across transitions.</h1>
+          <p class="lead">
+            RuleCanvasKit explores every reachable state of a finite rule model, within the bounds you set, and
+            replays the shortest path to the first broken invariant. Pick a workbench and watch it happen.
+          </p>
+        </div>
+      </section>
+
+      <section id="workbenches" class="workbenches" aria-label="Workbenches" tabindex="-1">
+        <div class="wrap panels">
+          <article class="panel" data-app="agent-gate" aria-labelledby="agent-gate-title">
+            <div class="panel-head">
+              <h2 id="agent-gate-title">AgentGate</h2>
+              <span class="panel-path">apps/agent-gate</span>
+            </div>
+            <p class="panel-summary">
+              An agent drafts release notes and a human approves the clean draft. The agent then reads a signing
+              secret, appends it, and publishes. Each rule looks reasonable on its own.
+            </p>
+            <figure class="rail" data-violated="inv_no_confidential_publish">
+              <figcaption class="rail-caption">
+                <span>Shortest counterexample, broken preset</span>
+                <span class="rail-count">5 steps</span>
+              </figcaption>
+              <ol class="rail-steps">
+                <li><code class="rail-rule">draft_public_notes</code></li>
+                <li><code class="rail-rule">human_approve_clean_draft</code></li>
+                <li><code class="rail-rule">read_signing_secret</code></li>
+                <li><code class="rail-rule">append_context_to_draft</code></li>
+                <li><code class="rail-rule">publish_release_notes</code></li>
+              </ol>
+              <p class="rail-end">
+                <span class="rail-end-label">breaks</span>
+                <code class="rail-invariant">inv_no_confidential_publish</code>
+              </p>
+            </figure>
+            <div class="panel-actions">
+              <a
+                class="cta"
+                href="./agent-gate/?preset=broken"
+                data-preset="broken"
+                data-expected-status="VIOLATED"
+              >
+                <span>Open Broken Scenario</span><span class="visually-hidden"> in AgentGate</span>
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                  <path d="M3 8h9.5M8.5 4l4 4-4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+              </a>
+              <ul class="quiet-links">
+                <li>
+                  <a
+                    class="quiet"
+                    href="./agent-gate/?preset=vacuous-fix"
+                    data-preset="vacuous-fix"
+                    data-expected-status="VERIFIED"
+                    data-expected-goal="false"
+                    aria-describedby="agent-gate-vacuous-note"
+                  >Vacuous Fix<span class="visually-hidden"> in AgentGate</span></a>
+                  <span class="quiet-note" id="agent-gate-vacuous-note">verifies, goal never reached</span>
+                </li>
+                <li>
+                  <a
+                    class="quiet"
+                    href="./agent-gate/?preset=principled-fix"
+                    data-preset="principled-fix"
+                    data-expected-status="VERIFIED"
+                    data-expected-goal="true"
+                    aria-describedby="agent-gate-principled-note"
+                  >Principled Fix<span class="visually-hidden"> in AgentGate</span></a>
+                  <span class="quiet-note" id="agent-gate-principled-note">verifies, goal reachable</span>
+                </li>
+              </ul>
+            </div>
+          </article>
+
+          <article class="panel" data-app="interlock-sim" aria-labelledby="interlock-sim-title">
+            <div class="panel-head">
+              <h2 id="interlock-sim-title">InterlockSim</h2>
+              <span class="panel-path">apps/interlock-sim</span>
+            </div>
+            <p class="panel-summary">
+              An educational BSL-3 airlock. An operator equalizes pressure, enters, and closes the outer door. A
+              maintenance override then lets the inner door open while the seal still depends on it.
+            </p>
+            <figure class="rail" data-violated="inv_containment_seal">
+              <figcaption class="rail-caption">
+                <span>Shortest counterexample, broken preset</span>
+                <span class="rail-count">6 steps</span>
+              </figcaption>
+              <ol class="rail-steps">
+                <li><code class="rail-rule">equalize_pressure</code></li>
+                <li><code class="rail-rule">open_outer_door</code></li>
+                <li><code class="rail-rule">enter_airlock</code></li>
+                <li><code class="rail-rule">close_outer_door</code></li>
+                <li><code class="rail-rule">engage_maintenance_override</code></li>
+                <li><code class="rail-rule">open_inner_door</code></li>
+              </ol>
+              <p class="rail-end">
+                <span class="rail-end-label">breaks</span>
+                <code class="rail-invariant">inv_containment_seal</code>
+              </p>
+            </figure>
+            <div class="panel-actions">
+              <a
+                class="cta"
+                href="./interlock-sim/?preset=broken"
+                data-preset="broken"
+                data-expected-status="VIOLATED"
+              >
+                <span>Open Broken Scenario</span><span class="visually-hidden"> in InterlockSim</span>
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                  <path d="M3 8h9.5M8.5 4l4 4-4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+              </a>
+              <ul class="quiet-links">
+                <li>
+                  <a
+                    class="quiet"
+                    href="./interlock-sim/?preset=vacuous"
+                    data-preset="vacuous"
+                    data-expected-status="VERIFIED"
+                    data-expected-goal="false"
+                    aria-describedby="interlock-sim-vacuous-note"
+                  >Vacuous Fix<span class="visually-hidden"> in InterlockSim</span></a>
+                  <span class="quiet-note" id="interlock-sim-vacuous-note">verifies, goal never reached</span>
+                </li>
+                <li>
+                  <a
+                    class="quiet"
+                    href="./interlock-sim/?preset=fixed"
+                    data-preset="fixed"
+                    data-expected-status="VERIFIED"
+                    data-expected-goal="true"
+                    aria-describedby="interlock-sim-principled-note"
+                  >Principled Fix<span class="visually-hidden"> in InterlockSim</span></a>
+                  <span class="quiet-note" id="interlock-sim-principled-note">verifies, goal reachable</span>
+                </li>
+              </ul>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section id="how-it-fits" class="section" aria-labelledby="how-it-fits-title">
+        <div class="wrap split">
+          <div class="split-intro">
+            <h2 id="how-it-fits-title">Four packages, one direction</h2>
+            <p>
+              Each layer depends only on the layers above it. The verifier knows nothing about agents, airlocks,
+              or browsers. The two workbenches add the domain on top.
+            </p>
+          </div>
+          <ol class="layers">
+            <li class="layer">
+              <code class="layer-name">@rulecanvas/core</code>
+              <p>
+                Validates a model, runs bounded breadth-first verification, and replays traces. Pure ES2022 with no
+                runtime dependencies.
+              </p>
+            </li>
+            <li class="layer">
+              <code class="layer-name">@rulecanvas/ui</code>
+              <p>Formats verdicts and drives step-by-step trace replay. Depends on core only.</p>
+            </li>
+            <li class="layer">
+              <code class="layer-name">@rulecanvas/workbench</code>
+              <p>Strict model JSON codec and worker or main-thread verification transport. Depends on core only.</p>
+            </li>
+            <li class="layer">
+              <code class="layer-name">@rulecanvas/workbench-react</code>
+              <p>
+                React adapters for verification snapshots, verdict summaries, navigation, and themes. React is a peer
+                dependency.
+              </p>
+            </li>
+            <li class="layer layer-apps">
+              <span class="layer-name">AgentGate and InterlockSim</span>
+              <p>Two static Vite apps under <code>apps/</code> that supply the scenarios and the interface.</p>
+            </li>
+          </ol>
+        </div>
+      </section>
+
+      <section id="starter" class="section" aria-labelledby="starter-title">
+        <div class="wrap split">
+          <div class="split-intro">
+            <h2 id="starter-title">Start from the template</h2>
+            <p>
+              The Skeleton Crew Starter Template is a small React workbench for a CI/CD production release gate. Its
+              broken variant lets a hotfix bypass reach production unreviewed. Its principled fix reaches
+              <code>stage == "prod"</code> only after review. It installs from local package tarballs, outside this
+              repository.
+            </p>
+            <p>
+              <a class="text-link" href="https://github.com/iamramchandrakarki/rulecanvas-kit/tree/main/templates/workbench-starter" rel="noopener noreferrer">Read the template README</a>
+            </p>
+          </div>
+          <div class="code-block">
+            <div class="code-head">
+              <span>Shell</span>
+              <button type="button" class="copy-btn" data-copy-target="starter-commands">Copy</button>
+            </div>
+            <pre id="starter-commands"><code>git clone https://github.com/iamramchandrakarki/rulecanvas-kit.git
+cd rulecanvas-kit
+pnpm install
+pnpm run pack:local          <span class="c"># writes ../rulecanvas-tarballs/*.tgz</span>
+cp -R templates/workbench-starter ../my-workbench
+cd ../my-workbench
+pnpm install
+pnpm test                    <span class="c"># node --test tests/</span>
+pnpm build                   <span class="c"># vite build into dist/</span></code></pre>
+            <p class="code-note" role="status" aria-live="polite"></p>
+          </div>
+        </div>
+      </section>
+
+      <section id="scope" class="section" aria-labelledby="scope-title">
+        <div class="wrap split">
+          <div class="split-intro">
+            <h2 id="scope-title">What a verdict covers</h2>
+            <p>A result describes the model you wrote, not the system it stands for.</p>
+          </div>
+          <dl class="terms">
+            <div class="term">
+              <dt><code>VERIFIED</code></dt>
+              <dd>
+                Every reachable state of the declared finite model, within the state and depth bounds, satisfied every
+                invariant. Anything listed under assumptions as not modeled is outside the result.
+              </dd>
+            </div>
+            <div class="term">
+              <dt><code>VIOLATED</code></dt>
+              <dd>
+                The checker found the shortest sequence of rule firings that reaches a state breaking an invariant. You
+                can replay it step by step.
+              </dd>
+            </div>
+            <div class="term">
+              <dt><code>INCONCLUSIVE</code></dt>
+              <dd>A state or depth bound was reached first. This is not a pass. Raise the bounds or shrink the model.</dd>
+            </div>
+            <div class="term">
+              <dt><code>INVALID</code></dt>
+              <dd>The model failed validation, so nothing was explored.</dd>
+            </div>
+          </dl>
+        </div>
+      </section>
+
+      <section class="section" aria-labelledby="not-title">
+        <div class="wrap split">
+          <div class="split-intro">
+            <h2 id="not-title">What RuleCanvasKit is not</h2>
+          </div>
+          <ul class="not-list">
+            <li>
+              It is not a runtime firewall, policy enforcement point, or agent sandbox. Nothing here intercepts live
+              requests, tool calls, or credentials.
+            </li>
+            <li>
+              InterlockSim is an educational simulation. It has no IEC 61508 or SIL certification and must never
+              control laboratory equipment.
+            </li>
+            <li>The checker runs in your browser or in Node. It sends no model data to a server.</li>
+          </ul>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div class="wrap footer-inner">
+        <span>RuleCanvasKit is MIT licensed.</span>
+        <span>
+          IBM Plex fonts under the <a class="text-link" href="./fonts/OFL.txt">SIL Open Font License 1.1</a>.
+        </span>
+        <a class="text-link" href="https://github.com/iamramchandrakarki/rulecanvas-kit" rel="noopener noreferrer">Source on GitHub</a>
+      </div>
+    </footer>
+  </body>
+</html>
