@@ -32,7 +32,7 @@ Rules:
 
 ## Apps and site
 - `apps/` contains exactly two showcase apps: `apps/agent-gate` and `apps/interlock-sim`. Do not add a third workspace under `apps/`.
-- Everything under `site/` uses relative paths for assets and links. No root-absolute (`/...`) paths and no hard-coded origins, so the site works from any subdirectory.
+- Everything under `site/` uses relative paths for assets and internal links. No root-absolute (`/...`) or protocol-relative paths, so the site works from any subdirectory. The only other origin allowed is a plain link to `https://github.com/iamramchandrakarki/rulecanvas-kit` with `rel="noopener noreferrer"`. Nothing may be loaded from another origin.
 
 ## Claim language
 - No overclaims in code, docs, reports, or UI copy. The boundary test rejects these phrases in claim-bearing files: `100% secure`, `unhackable`, `proven safe`, `formally proven by fast-check`, `certified safety software`, `audits production mcp.json`.

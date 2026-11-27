@@ -89,7 +89,7 @@ function buildModel(variant: ReleaseGateVariant): TransitionSystemModel {
         holds: or({ op: 'neq', left: v('stage'), right: lit('prod') }, v('reviewed')),
       },
     ],
-    goal: { id: 'reach-prod', label: 'Reach production safely', reached: stageIs('prod') },
+    goal: { id: 'reach-prod', label: 'Reach production', reached: stageIs('prod') },
     assumptions: [
       {
         id: 'atomic-transitions',
