@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from 'react';
 import type {
   BoolExpr,
   TransitionRule,
@@ -9,10 +17,7 @@ import type {
 import {
   formatBoolExpr,
   formatRuleSummary,
-  formatStateValue,
-  formatVarDef,
 } from '@rulecanvas/ui';
-import { useIntegerDraftStore } from '@rulecanvas/workbench-react';
 import {
   addAssumption,
   addInvariant,
@@ -46,10 +51,27 @@ import {
   updateSchemaVariable,
   type ModelDiagnosticsIndex,
 } from '../model-editor.js';
-import { BoolExprEditor, ValueExprEditor, type LiftedIntDraftStore } from './ExprEditor.js';
+import { BoolExprEditor, ValueExprEditor, useExpressionDraftStore } from './ExprEditor.js';
 import { StrictIntegerInput } from './StrictIntegerInput.js';
+import { WorkbenchSelect, type WorkbenchSelectOption } from '@rulecanvas/workbench-react';
 
 export type EditorTabId = 'schema' | 'rules' | 'invariants' | 'assumptions' | 'json';
+
+const VAR_KIND_OPTIONS: readonly WorkbenchSelectOption<VarDef['kind']>[] = [
+  { value: 'boolean', label: 'boolean', description: 'true or false' },
+  { value: 'enum', label: 'enum', description: 'one of a fixed list of names' },
+  { value: 'int', label: 'int', description: 'bounded integer range' },
+];
+
+const BOOLEAN_INITIAL_OPTIONS: readonly WorkbenchSelectOption<'true' | 'false'>[] = [
+  { value: 'false', label: 'false' },
+  { value: 'true', label: 'true' },
+];
+
+const QUICK_POLARITY_OPTIONS: readonly WorkbenchSelectOption<'not' | 'var'>[] = [
+  { value: 'not', label: '! (negated)', description: 'clause holds when the variable is false' },
+  { value: 'var', label: 'true (positive)', description: 'clause holds when the variable is true' },
+];
 
 const EDITOR_TABS: readonly { readonly id: EditorTabId; readonly label: string }[] = [
   { id: 'schema', label: 'Schema & State' },
@@ -65,14 +87,45 @@ const RESERVED_SCHEMA_NAMES: ReadonlySet<string> = new Set([
   'prototype',
 ]);
 
+export interface FocusedRuleRequest {
+  readonly ruleId: string;
+  readonly seq: number;
+}
+
 export interface PolicyEditorPaneProps {
   readonly model: TransitionSystemModel;
   readonly diagnostics: ModelDiagnosticsIndex;
   readonly resetKey?: string | number | undefined;
+  readonly activeTraceStepsByRuleId?: ReadonlyMap<string, readonly number[]> | undefined;
+  readonly activeTraceRuleId?: string | null | undefined;
+  readonly isStale?: boolean | undefined;
+  readonly onVerifyNow?: (() => void) | undefined;
+  readonly focusedRuleRequest?: FocusedRuleRequest | null | undefined;
   readonly onChangeModel: (next: TransitionSystemModel) => void;
   readonly onImportModel: (imported: TransitionSystemModel) => void;
   readonly onDraftErrorChange?: ((fieldKey: string, errorMessage: string | null) => void) | undefined;
   readonly onJsonDraftDirtyChange?: ((dirty: boolean) => void) | undefined;
+}
+
+export function resolveQuickBooleanVariable(
+  schemaKeys: readonly string[],
+  schema: TransitionSystemModel['schema'],
+  preferredVar: string,
+): string {
+  const booleanKeys = schemaKeys.filter((k) => schema[k]?.kind === 'boolean');
+  if (booleanKeys.length === 0) return '';
+  return booleanKeys.includes(preferredVar) ? preferredVar : booleanKeys[0]!;
+}
+
+/**
+ * Splits a snake_case / camelCase identifier into segments separated by <wbr>
+ * so long rule IDs wrap at word boundaries instead of being truncated.
+ */
+export function breakIdentifier(id: string): ReactNode[] {
+  const segments = id.split(/(?<=_)|(?<=[a-z0-9])(?=[A-Z])/);
+  return segments.flatMap((segment, idx) =>
+    idx === 0 ? [segment] : [<wbr key={`wbr-${idx}`} />, segment],
+  );
 }
 
 function InlineErrorList({ errors }: { readonly errors: readonly ValidationError[] }) {
@@ -226,6 +279,11 @@ export function PolicyEditorPane({
   model,
   diagnostics,
   resetKey = 0,
+  activeTraceStepsByRuleId,
+  activeTraceRuleId = null,
+  isStale = false,
+  onVerifyNow,
+  focusedRuleRequest = null,
   onChangeModel,
   onImportModel,
   onDraftErrorChange,
@@ -233,9 +291,13 @@ export function PolicyEditorPane({
 }: PolicyEditorPaneProps) {
   const nextRowIdRef = useRef<number>(0);
   const prevResetKeyRef = useRef<string | number>(resetKey);
+  const prevFocusedSeqRef = useRef<number>(0);
   const preserveNextNoticeRef = useRef<boolean>(false);
   const onDraftErrorChangeRef = useRef(onDraftErrorChange);
   onDraftErrorChangeRef.current = onDraftErrorChange;
+  const ruleFocusRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  const ruleNavRef = useRef<HTMLDivElement>(null);
+  const addRuleButtonRef = useRef<HTMLButtonElement>(null);
 
   const allocRowId = (prefix: string): string => {
     nextRowIdRef.current += 1;
@@ -251,6 +313,7 @@ export function PolicyEditorPane({
   });
 
   const [activeTab, setActiveTab] = useState<EditorTabId>('rules');
+  const [pendingRuleFocus, setPendingRuleFocus] = useState<{ readonly rowId: string } | null>(null);
   const [newVarName, setNewVarName] = useState('');
   const [newVarKind, setNewVarKind] = useState<VarDef['kind']>('boolean');
   const [newVarEnumValues, setNewVarEnumValues] = useState('alpha, beta');
@@ -295,22 +358,16 @@ export function PolicyEditorPane({
     buildInitialRowIds('asm-row', model.assumptions.length, nextRowIdRef),
   );
 
-  const [expandedRuleIds, setExpandedRuleIds] = useState<ReadonlySet<string>>(() => {
-    const initial = new Set<string>();
-    model.rules.forEach((rule, idx) => {
-      if (rule.id === 'publish_release_notes') {
-        const rowId = ruleRowIds[idx];
-        if (rowId !== undefined) initial.add(rowId);
-      }
-    });
-    return initial;
+  const [selectedRuleRowId, setSelectedRuleRowId] = useState<string | null>(() => {
+    const pubIdx = model.rules.findIndex((r) => r.id === 'publish_release_notes');
+    return pubIdx >= 0 ? (ruleRowIds[pubIdx] ?? null) : (ruleRowIds[0] ?? null);
   });
 
   const [varNameDrafts, setVarNameDrafts] = useState<Readonly<Record<string, string>>>({});
   const [varNameErrors, setVarNameErrors] = useState<Readonly<Record<string, string>>>({});
 
   // Lifted integer drafts & errors keyed by stable logical fieldKey (shared store)
-  const intDraftStore: LiftedIntDraftStore = useIntegerDraftStore({
+  const intDraftStore = useExpressionDraftStore({
     resetKey,
     onErrorChange: onDraftErrorChange,
   });
@@ -361,14 +418,17 @@ export function PolicyEditorPane({
       setInvRowIds(nextInvIds);
       setAsmRowIds(nextAsmIds);
 
-      const nextExpanded = new Set<string>();
+      let nextSelectedRowId: string | null = nextRuleIds[0] ?? null;
       model.rules.forEach((rule, idx) => {
         if (rule.id === 'publish_release_notes') {
           const rowId = nextRuleIds[idx];
-          if (rowId !== undefined) nextExpanded.add(rowId);
+          if (rowId !== undefined) {
+            nextSelectedRowId = rowId;
+          }
         }
       });
-      setExpandedRuleIds(nextExpanded);
+      setSelectedRuleRowId(nextSelectedRowId);
+      setPendingRuleFocus(null);
       setVarNameDrafts({});
       setVarNameErrors({});
     }
@@ -390,10 +450,79 @@ export function PolicyEditorPane({
   const resolvedInvRowIds = alignRowIds(invRowIds, model.invariants.length, 'inv-row');
   const resolvedAsmRowIds = alignRowIds(asmRowIds, model.assumptions.length, 'asm-row');
 
+  const selectedRuleIndex = (() => {
+    if (model.rules.length === 0) return -1;
+    if (selectedRuleRowId !== null) {
+      const idx = resolvedRuleRowIds.indexOf(selectedRuleRowId);
+      if (idx >= 0) return idx;
+    }
+    return 0;
+  })();
+  const selectedRule = selectedRuleIndex >= 0 ? model.rules[selectedRuleIndex]! : null;
+  const activeSelectedRuleRowId =
+    selectedRuleIndex >= 0 ? resolvedRuleRowIds[selectedRuleIndex]! : null;
+
+  useEffect(() => {
+    const revealSelectedRule = () => {
+      const nav = ruleNavRef.current;
+      const active = nav?.querySelector('[aria-pressed="true"]');
+      if (nav === null || active == null || nav.scrollWidth <= nav.clientWidth) return;
+      const navBounds = nav.getBoundingClientRect();
+      const activeBounds = active.getBoundingClientRect();
+      if (activeBounds.right > navBounds.right) {
+        nav.scrollLeft += activeBounds.right - navBounds.right;
+      } else if (activeBounds.left < navBounds.left) {
+        nav.scrollLeft += activeBounds.left - navBounds.left;
+      }
+    };
+    revealSelectedRule();
+    window.addEventListener('resize', revealSelectedRule);
+    return () => window.removeEventListener('resize', revealSelectedRule);
+  }, [activeSelectedRuleRowId]);
+
+  const selectRuleRow = (rowId: string, focusDetail: boolean) => {
+    setActiveTab('rules');
+    setSelectedRuleRowId(rowId);
+    if (focusDetail) {
+      setPendingRuleFocus({ rowId });
+    }
+  };
+
+  useEffect(() => {
+    if (focusedRuleRequest === null || focusedRuleRequest.seq === prevFocusedSeqRef.current) {
+      return;
+    }
+    prevFocusedSeqRef.current = focusedRuleRequest.seq;
+    const targetIdx = model.rules.findIndex((r) => r.id === focusedRuleRequest.ruleId);
+    if (targetIdx < 0) return;
+    const rowId = resolvedRuleRowIds[targetIdx];
+    if (rowId === undefined) return;
+    selectRuleRow(rowId, true);
+  }, [focusedRuleRequest, model.rules, resolvedRuleRowIds]);
+
+  useEffect(() => {
+    if (
+      pendingRuleFocus === null ||
+      activeTab !== 'rules' ||
+      activeSelectedRuleRowId !== pendingRuleFocus.rowId
+    ) {
+      return;
+    }
+    const target = ruleFocusRefs.current[pendingRuleFocus.rowId];
+    const prefersReducedMotion =
+      typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    target?.focus({ preventScroll: true });
+    target?.scrollIntoView({
+      behavior: prefersReducedMotion ? 'auto' : 'smooth',
+      block: 'center',
+    });
+    setPendingRuleFocus(null);
+  }, [pendingRuleFocus, activeTab, activeSelectedRuleRowId]);
+
   const booleanKeys = schemaKeys.filter((k) => model.schema[k]?.kind === 'boolean');
-  const selectedQuickVar = booleanKeys.includes(quickClauseVar)
-    ? quickClauseVar
-    : (booleanKeys[0] ?? schemaKeys[0] ?? '');
+  const selectedQuickVar = resolveQuickBooleanVariable(schemaKeys, model.schema, quickClauseVar);
 
   const parsedNewVarMin = parseStrictIntegerDraft(newVarMin);
   const parsedNewVarMax = parseStrictIntegerDraft(newVarMax);
@@ -469,18 +598,6 @@ export function PolicyEditorPane({
       case 'json':
         return jsonErrors.length;
     }
-  };
-
-  const toggleRuleExpanded = (rowId: string) => {
-    setExpandedRuleIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(rowId)) {
-        next.delete(rowId);
-      } else {
-        next.add(rowId);
-      }
-      return next;
-    });
   };
 
   const handleAddSchemaVar = () => {
@@ -586,11 +703,9 @@ export function PolicyEditorPane({
     const newRowId = allocRowId('rule-row');
     setRuleRowIds([...resolvedRuleRowIds, newRowId]);
     setUpdateRowIdsByRule((prev) => ({ ...prev, [newRowId]: [] }));
-    setExpandedRuleIds((prev) => {
-      const next = new Set(prev);
-      next.add(newRowId);
-      return next;
-    });
+    setActiveTab('rules');
+    setSelectedRuleRowId(newRowId);
+    setPendingRuleFocus({ rowId: newRowId });
     onChangeModel(addRule(model, createDefaultRule(model)));
   };
 
@@ -606,19 +721,23 @@ export function PolicyEditorPane({
   };
 
   const handleRemoveRule = (idx: number, rowId: string) => {
-    setRuleRowIds(resolvedRuleRowIds.filter((_, i) => i !== idx));
+    const nextRuleIds = resolvedRuleRowIds.filter((_, i) => i !== idx);
+    setRuleRowIds(nextRuleIds);
     setUpdateRowIdsByRule((prev) => {
       if (!Object.hasOwn(prev, rowId)) return prev;
       const next = { ...prev };
       delete next[rowId];
       return next;
     });
-    setExpandedRuleIds((prev) => {
-      if (!prev.has(rowId)) return prev;
-      const next = new Set(prev);
-      next.delete(rowId);
-      return next;
-    });
+    if (selectedRuleRowId === rowId) {
+      const fallbackRowId = nextRuleIds[Math.min(idx, nextRuleIds.length - 1)] ?? null;
+      setSelectedRuleRowId(fallbackRowId);
+      if (fallbackRowId !== null) {
+        setPendingRuleFocus({ rowId: fallbackRowId });
+      } else {
+        addRuleButtonRef.current?.focus();
+      }
+    }
     pruneDraftsByPrefix(`rule:${rowId}`);
     onChangeModel(removeRule(model, idx));
   };
@@ -771,37 +890,32 @@ export function PolicyEditorPane({
     const current = model.initialState[varName];
     if (def.kind === 'boolean') {
       return (
-        <select
+        <WorkbenchSelect<'true' | 'false'>
           id={controlId}
           className="ag-select ag-input-mono"
-          aria-label={`Initial value for ${varName}`}
+          ariaLabel={`Initial value for ${varName}`}
+          mono
           value={current === true ? 'true' : 'false'}
-          onChange={(e) =>
-            onChangeModel(setInitialStateValue(model, varName, e.target.value === 'true'))
-          }
-        >
-          <option value="false">false</option>
-          <option value="true">true</option>
-        </select>
+          options={BOOLEAN_INITIAL_OPTIONS}
+          onChange={(next) => onChangeModel(setInitialStateValue(model, varName, next === 'true'))}
+        />
       );
     }
     if (def.kind === 'enum') {
       const valueStr = typeof current === 'string' ? current : (def.values[0] ?? '');
       return (
-        <select
+        <WorkbenchSelect
           id={controlId}
           className="ag-select ag-input-mono"
-          aria-label={`Initial value for ${varName}`}
+          ariaLabel={`Initial value for ${varName}`}
+          mono
           value={valueStr}
-          onChange={(e) => onChangeModel(setInitialStateValue(model, varName, e.target.value))}
-        >
-          {!def.values.includes(valueStr) && <option value={valueStr}>{valueStr}</option>}
-          {def.values.map((v) => (
-            <option key={v} value={v}>
-              {v}
-            </option>
-          ))}
-        </select>
+          options={[
+            ...(def.values.includes(valueStr) ? [] : [{ value: valueStr, label: valueStr }]),
+            ...def.values.map((v) => ({ value: v, label: v })),
+          ]}
+          onChange={(next) => onChangeModel(setInitialStateValue(model, varName, next))}
+        />
       );
     }
     const numVal = typeof current === 'number' ? current : def.min;
@@ -823,52 +937,127 @@ export function PolicyEditorPane({
   };
 
   return (
-    <section className="ag-pane ag-pane-editor" aria-label="Policy and schema editor">
+    <section
+      id="ag-editor-pane"
+      tabIndex={-1}
+      className="ag-pane ag-pane-editor"
+      aria-label="Policy and schema editor"
+    >
       <div className="ag-pane-header">
-        <div>
-          <h2 className="ag-pane-title">Policy &amp; Schema Editor</h2>
-          <p className="ag-pane-subtitle">
-            Edit finite-state variables, transition guards, atomic updates, invariants, goal, and assumptions.
-          </p>
-        </div>
-        <span className="ag-mono ag-tabular" style={{ fontSize: 12, color: 'var(--color-ink-muted)' }}>
-          {schemaKeys.length} vars, {model.rules.length} rules, {model.invariants.length} invariants
+        <h2 className="ag-pane-title">Policy &amp; Schema Editor</h2>
+        <span className="ag-meta-inline">
+          {schemaKeys.length} vars / {model.rules.length} rules / {model.invariants.length} invariants
         </span>
       </div>
 
-      <div className="ag-tablist" role="tablist" aria-label="Policy editor sections">
-        {EDITOR_TABS.map((tab, idx) => {
-          const errCount = tabErrorCount(tab.id);
-          const isSelected = activeTab === tab.id;
-          return (
-            <button
-              key={tab.id}
-              ref={(el) => {
-                tabRefs.current[tab.id] = el;
-              }}
-              id={`tab-${tab.id}`}
-              type="button"
-              role="tab"
-              className="ag-tab"
-              aria-selected={isSelected}
-              aria-controls={`panel-${tab.id}`}
-              tabIndex={isSelected ? 0 : -1}
-              onClick={() => setActiveTab(tab.id)}
-              onKeyDown={(e) => handleTabKeyDown(e, idx)}
-            >
-              <span>{tab.label}</span>
-              {errCount > 0 && (
-                <span
-                  className="ag-tab-count ag-tab-count-error"
-                  aria-label={`${errCount} validation errors`}
+      <div className="ag-editor-shell">
+        <aside className="ag-rule-sidebar" aria-label="Transition rules navigator">
+          <div className="ag-rule-sidebar-content">
+            <div className="ag-rule-sidebar-head">
+              <h3 className="ag-rule-sidebar-title">Rules ({model.rules.length})</h3>
+              <button
+                ref={addRuleButtonRef}
+                type="button"
+                className="ag-btn ag-btn-secondary ag-btn-sm"
+                onClick={handleAddRule}
+              >
+                + Add Rule
+              </button>
+            </div>
+
+            {model.rules.length > 0 ? (
+              <div ref={ruleNavRef} className="ag-rule-nav" role="group" aria-label="Jump to transition rule">
+                {model.rules.map((rule, idx) => {
+                  const rowId = resolvedRuleRowIds[idx]!;
+                  const traceSteps = activeTraceStepsByRuleId?.get(rule.id) ?? [];
+                  const ruleErrors = getErrorsForPathPrefix(diagnostics, `rules[${idx}]`);
+                  const hasRuleErrors =
+                    ruleErrors.length > 0 || countIntDraftErrorsByPrefix(`rule:${rowId}`) > 0;
+                  const isSelected = activeSelectedRuleRowId === rowId;
+                  const isActiveTraceRule = activeTraceRuleId === rule.id;
+                  return (
+                    <button
+                      key={rowId}
+                      type="button"
+                      className="ag-rule-nav-btn"
+                      data-rule-id={rule.id}
+                      data-selected={isSelected ? 'true' : 'false'}
+                      aria-pressed={isSelected}
+                      data-trace-active={isActiveTraceRule ? 'true' : undefined}
+                      onClick={() => selectRuleRow(rowId, false)}
+                    >
+                      <span className="ag-rule-nav-row">
+                        <span className="ag-rule-nav-id" title={rule.id || '(unnamed rule)'}>
+                          {rule.id ? breakIdentifier(rule.id) : '(unnamed rule)'}
+                        </span>
+                        {(traceSteps.length > 0 || hasRuleErrors) && (
+                          <span className="ag-rule-nav-badges">
+                            {traceSteps.length > 0 && (
+                              <span
+                                className="ag-rule-step-tag"
+                                title={`Executed at counterexample step ${traceSteps.join(', ')}`}
+                              >
+                                <span className="ag-visually-hidden">Trace step </span>
+                                s{traceSteps.join(',')}
+                              </span>
+                            )}
+                            {hasRuleErrors && (
+                              <span
+                                className="ag-rule-err-dot"
+                                title="Rule has validation errors"
+                                aria-label="Rule has validation errors"
+                              >
+                                !
+                              </span>
+                            )}
+                          </span>
+                        )}
+                      </span>
+                      <span className="ag-rule-nav-label">{rule.label || 'Untitled rule'}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="ag-rule-sidebar-empty">No transition rules defined.</p>
+            )}
+          </div>
+        </aside>
+
+        <div className="ag-editor-main">
+          <div className="ag-tablist" role="tablist" aria-label="Policy editor sections">
+            {EDITOR_TABS.map((tab, idx) => {
+              const errCount = tabErrorCount(tab.id);
+              const isSelected = activeTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  ref={(el) => {
+                    tabRefs.current[tab.id] = el;
+                  }}
+                  id={`tab-${tab.id}`}
+                  type="button"
+                  role="tab"
+                  className="ag-tab"
+                  aria-selected={isSelected}
+                  aria-controls={`panel-${tab.id}`}
+                  tabIndex={isSelected ? 0 : -1}
+                  onClick={() => setActiveTab(tab.id)}
+                  onKeyDown={(e) => handleTabKeyDown(e, idx)}
                 >
-                  {errCount}
-                </span>
-              )}
-            </button>
-          );
-        })}
-      </div>
+                  <span>{tab.label}</span>
+                  {errCount > 0 && (
+                    <span
+                      className="ag-tab-count ag-tab-count-error"
+                      aria-label={`${errCount} validation errors`}
+                    >
+                      {errCount}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
 
       <div
         id="panel-schema"
@@ -909,12 +1098,18 @@ export function PolicyEditorPane({
         <div className="ag-section">
           <div className="ag-section-header">
             <h3 className="ag-section-title">State Schema &amp; Initial State</h3>
-            <span className="ag-mono ag-tabular" style={{ fontSize: 12, color: 'var(--color-ink-muted)' }}>
-              {schemaKeys.length} / 64 variables
-            </span>
+            <span className="ag-meta-inline">{schemaKeys.length} / 64 variables</span>
           </div>
 
-          <div className="ag-item-list">
+          <div className="ag-schema-table" role="group" aria-label="State variables">
+            <div className="ag-schema-head" aria-hidden="true">
+              <span>Variable</span>
+              <span>Type</span>
+              <span>Domain</span>
+              <span>Initial</span>
+              <span />
+            </div>
+
             {schemaKeys.map((key) => {
               const rowId = getSchemaRowId(key);
               const def = model.schema[key]!;
@@ -926,80 +1121,94 @@ export function PolicyEditorPane({
               const nameError = Object.hasOwn(varNameErrors, rowId) ? varNameErrors[rowId]! : null;
               const minFieldKey = `schema:${rowId}.min`;
               const maxFieldKey = `schema:${rowId}.max`;
+              const isLastVariable = schemaKeys.length <= 1;
 
               return (
-                <div key={rowId} className="ag-item-row">
-                  <div className="ag-row-grid">
-                    <div className="ag-field">
-                      <label htmlFor={`schema-var-name-${rowId}`}>Variable</label>
-                      <input
-                        id={`schema-var-name-${rowId}`}
-                        type="text"
-                        className="ag-input ag-input-mono"
-                        aria-label={`Variable name ${key}`}
-                        aria-invalid={nameError !== null ? 'true' : undefined}
-                        value={nameDraft}
-                        onChange={(e) => handleRenameSchemaVar(rowId, key, def, e.target.value)}
-                        onBlur={() => {
-                          if (nameError === null && nameDraft !== key) {
-                            setVarNameDrafts((prev) => {
-                              const next = { ...prev };
-                              delete next[rowId];
-                              return next;
-                            });
-                          }
-                        }}
-                      />
-                      {nameError !== null && (
-                        <span className="ag-field-error" role="alert">
-                          {nameError}
+                <div
+                  key={rowId}
+                  className="ag-schema-row"
+                  data-kind={def.kind}
+                  data-invalid={varErrors.length > 0 || nameError !== null ? 'true' : undefined}
+                >
+                  <div className="ag-schema-cell ag-schema-cell-name">
+                    <label htmlFor={`schema-var-name-${rowId}`} className="ag-schema-cell-label">
+                      Variable
+                    </label>
+                    <input
+                      id={`schema-var-name-${rowId}`}
+                      type="text"
+                      className="ag-input ag-input-mono"
+                      aria-label={`Variable name ${key}`}
+                      aria-invalid={nameError !== null ? 'true' : undefined}
+                      spellCheck={false}
+                      title={nameDraft}
+                      value={nameDraft}
+                      onChange={(e) => handleRenameSchemaVar(rowId, key, def, e.target.value)}
+                      onBlur={() => {
+                        if (nameError === null && nameDraft !== key) {
+                          setVarNameDrafts((prev) => {
+                            const next = { ...prev };
+                            delete next[rowId];
+                            return next;
+                          });
+                        }
+                      }}
+                    />
+                    {nameError !== null && (
+                      <span className="ag-field-error" role="alert">
+                        {nameError}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="ag-schema-cell">
+                    <label htmlFor={`schema-var-kind-${rowId}`} className="ag-schema-cell-label">
+                      Type
+                    </label>
+                    <WorkbenchSelect<VarDef['kind']>
+                      id={`schema-var-kind-${rowId}`}
+                      className="ag-select ag-input-mono"
+                      ariaLabel={`Type kind for ${key}`}
+                      mono
+                      value={def.kind}
+                      options={VAR_KIND_OPTIONS}
+                      onChange={(kind) => {
+                        pruneDraftsByPrefix(`schema:${rowId}`);
+                        const nextDef: VarDef =
+                          kind === 'boolean'
+                            ? { kind: 'boolean' }
+                            : kind === 'enum'
+                              ? { kind: 'enum', values: ['idle', 'active'] }
+                              : { kind: 'int', min: 0, max: 3 };
+                        onChangeModel(
+                          updateSchemaVariable(model, key, key, nextDef, defaultValueForVarDef(nextDef)),
+                        );
+                      }}
+                    />
+                  </div>
+
+                  <div className="ag-schema-cell ag-schema-cell-domain">
+                    {def.kind === 'boolean' && (
+                      <>
+                        <span className="ag-schema-cell-label" aria-hidden="true">
+                          Domain
                         </span>
-                      )}
-                    </div>
-
-                    <div className="ag-field">
-                      <label htmlFor={`schema-var-kind-${rowId}`}>Kind</label>
-                      <select
-                        id={`schema-var-kind-${rowId}`}
-                        className="ag-select ag-input-mono"
-                        aria-label={`Type kind for ${key}`}
-                        value={def.kind}
-                        onChange={(e) => {
-                          const kind = e.target.value as VarDef['kind'];
-                          pruneDraftsByPrefix(`schema:${rowId}`);
-                          const nextDef: VarDef =
-                            kind === 'boolean'
-                              ? { kind: 'boolean' }
-                              : kind === 'enum'
-                                ? { kind: 'enum', values: ['idle', 'active'] }
-                                : { kind: 'int', min: 0, max: 3 };
-                          onChangeModel(
-                            updateSchemaVariable(
-                              model,
-                              key,
-                              key,
-                              nextDef,
-                              defaultValueForVarDef(nextDef),
-                            ),
-                          );
-                        }}
-                      >
-                        <option value="boolean">boolean</option>
-                        <option value="enum">enum</option>
-                        <option value="int">int</option>
-                      </select>
-                    </div>
-
+                        <span className="ag-schema-domain-fixed">true | false</span>
+                      </>
+                    )}
                     {def.kind === 'enum' && (
-                      <div className="ag-field">
-                        <label htmlFor={`schema-var-enum-${rowId}`}>
-                          Enum values (comma-separated)
+                      <>
+                        <label htmlFor={`schema-var-enum-${rowId}`} className="ag-schema-cell-label">
+                          Values
                         </label>
                         <input
                           id={`schema-var-enum-${rowId}`}
                           type="text"
                           className="ag-input ag-input-mono"
                           aria-label={`Enum values for ${key}`}
+                          aria-describedby={`schema-var-enum-hint-${rowId}`}
+                          spellCheck={false}
+                          title={def.values.join(', ')}
                           value={def.values.join(', ')}
                           onChange={(e) => {
                             const values = e.target.value
@@ -1014,13 +1223,20 @@ export function PolicyEditorPane({
                             );
                           }}
                         />
-                      </div>
+                        <span id={`schema-var-enum-hint-${rowId}`} className="ag-visually-hidden">
+                          Comma-separated values, {def.values.length} declared
+                        </span>
+                      </>
                     )}
-
                     {def.kind === 'int' && (
                       <>
-                        <div className="ag-field">
-                          <label htmlFor={`schema-var-min-${rowId}`}>Min</label>
+                        <span className="ag-schema-cell-label" aria-hidden="true">
+                          Range
+                        </span>
+                        <span className="ag-schema-range">
+                          <label htmlFor={`schema-var-min-${rowId}`} className="ag-visually-hidden">
+                            Min
+                          </label>
                           <StrictIntegerInput
                             id={`schema-var-min-${rowId}`}
                             value={def.min}
@@ -1041,9 +1257,12 @@ export function PolicyEditorPane({
                               )
                             }
                           />
-                        </div>
-                        <div className="ag-field">
-                          <label htmlFor={`schema-var-max-${rowId}`}>Max</label>
+                          <span className="ag-schema-range-sep" aria-hidden="true">
+                            ..
+                          </span>
+                          <label htmlFor={`schema-var-max-${rowId}`} className="ag-visually-hidden">
+                            Max
+                          </label>
                           <StrictIntegerInput
                             id={`schema-var-max-${rowId}`}
                             value={def.max}
@@ -1064,142 +1283,215 @@ export function PolicyEditorPane({
                               )
                             }
                           />
-                        </div>
+                        </span>
                       </>
                     )}
-
-                    <div className="ag-field">
-                      <label htmlFor={`schema-var-init-${rowId}`}>Initial Value</label>
-                      {renderInitialValueEditor(key, def, rowId)}
-                    </div>
-
-                    <div className="ag-inline-actions">
-                      <button
-                        type="button"
-                        className="ag-btn ag-btn-sm ag-btn-danger"
-                        disabled={schemaKeys.length <= 1}
-                        onClick={() => handleRemoveSchemaVar(key, rowId)}
-                      >
-                        Remove
-                      </button>
-                    </div>
                   </div>
 
-                  <div className="ag-mono" style={{ fontSize: 11.5, color: 'var(--color-ink-muted)' }}>
-                    Domain: {formatVarDef(def)} | Initial:{' '}
-                    {model.initialState[key] !== undefined
-                      ? formatStateValue(model.initialState[key]!)
-                      : '<missing>'}
+                  <div className="ag-schema-cell">
+                    <label htmlFor={`schema-var-init-${rowId}`} className="ag-schema-cell-label">
+                      Initial
+                    </label>
+                    {renderInitialValueEditor(key, def, rowId)}
                   </div>
-                  <InlineErrorList errors={varErrors} />
+
+                  <div className="ag-schema-cell ag-schema-cell-actions">
+                    <button
+                      type="button"
+                      className="ag-icon-btn ag-icon-btn-danger"
+                      aria-label={`Remove variable ${key}`}
+                      aria-describedby={isLastVariable ? 'schema-remove-last-hint' : undefined}
+                      disabled={isLastVariable}
+                      data-rc-tip-host="true"
+                      onClick={() => handleRemoveSchemaVar(key, rowId)}
+                    >
+                      <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true" focusable="false">
+                        <path
+                          d="M2.5 3.5h7M4.75 3.5V2.25h2.5V3.5M3.5 3.5l.5 6.25h4l.5-6.25"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="1.2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                      <span className="rc-tip" data-align="end" aria-hidden="true">
+                        {isLastVariable ? 'A model needs at least one variable' : `Remove ${key}`}
+                      </span>
+                    </button>
+                  </div>
+
+                  {varErrors.length > 0 && (
+                    <div className="ag-schema-row-errors">
+                      <InlineErrorList errors={varErrors} />
+                    </div>
+                  )}
                 </div>
               );
             })}
-          </div>
-        </div>
 
-        <div className="ag-section">
-          <h3 className="ag-section-title">Add State Variable</h3>
-          <div className="ag-row-grid">
-            <div className="ag-field">
-              <label htmlFor="new-var-name">Variable Name</label>
-              <input
-                id="new-var-name"
-                type="text"
-                className="ag-input ag-input-mono"
-                placeholder="e.g. reviewTokenValid"
-                aria-invalid={newVarNameError !== null ? 'true' : undefined}
-                value={newVarName}
-                onChange={(e) => setNewVarName(e.target.value)}
-              />
-              {newVarNameError !== null && (
-                <span className="ag-field-error" role="alert">
-                  {newVarNameError}
-                </span>
-              )}
-            </div>
-            <div className="ag-field">
-              <label htmlFor="new-var-kind">Type</label>
-              <select
-                id="new-var-kind"
-                className="ag-select ag-input-mono"
-                value={newVarKind}
-                onChange={(e) => setNewVarKind(e.target.value as VarDef['kind'])}
-              >
-                <option value="boolean">boolean</option>
-                <option value="enum">enum</option>
-                <option value="int">int</option>
-              </select>
-            </div>
-            {newVarKind === 'enum' && (
-              <div className="ag-field">
-                <label htmlFor="new-var-enum">Enum Values</label>
+            <div
+              className="ag-schema-row ag-schema-row-new"
+              data-kind={newVarKind}
+              role="group"
+              aria-labelledby="new-var-heading"
+            >
+              <h4 id="new-var-heading" className="ag-schema-new-title">
+                Add state variable
+              </h4>
+              <div className="ag-schema-cell ag-schema-cell-name">
+                <label htmlFor="new-var-name" className="ag-schema-cell-label">
+                  Variable Name
+                </label>
                 <input
-                  id="new-var-enum"
+                  id="new-var-name"
                   type="text"
                   className="ag-input ag-input-mono"
-                  value={newVarEnumValues}
-                  onChange={(e) => setNewVarEnumValues(e.target.value)}
+                  placeholder="e.g. reviewTokenValid"
+                  spellCheck={false}
+                  aria-invalid={newVarNameError !== null ? 'true' : undefined}
+                  value={newVarName}
+                  onChange={(e) => setNewVarName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (
+                      e.key === 'Enter' &&
+                      trimmedNewVarName.length > 0 &&
+                      newVarNameError === null &&
+                      !newVarIntInvalid
+                    ) {
+                      e.preventDefault();
+                      handleAddSchemaVar();
+                    }
+                  }}
+                />
+                {newVarNameError !== null && (
+                  <span className="ag-field-error" role="alert">
+                    {newVarNameError}
+                  </span>
+                )}
+              </div>
+              <div className="ag-schema-cell">
+                <label htmlFor="new-var-kind" className="ag-schema-cell-label">
+                  Type
+                </label>
+                <WorkbenchSelect<VarDef['kind']>
+                  id="new-var-kind"
+                  className="ag-select ag-input-mono"
+                  mono
+                  value={newVarKind}
+                  options={VAR_KIND_OPTIONS}
+                  onChange={setNewVarKind}
                 />
               </div>
-            )}
-            {newVarKind === 'int' && (
-              <>
-                <div className="ag-field">
-                  <label htmlFor="new-var-min">Min</label>
-                  <input
-                    id="new-var-min"
-                    type="text"
-                    inputMode="numeric"
-                    className="ag-input ag-input-num"
-                    aria-invalid={!parsedNewVarMin.ok ? 'true' : undefined}
-                    value={newVarMin}
-                    onChange={(e) => setNewVarMin(e.target.value)}
-                  />
-                  {!parsedNewVarMin.ok && (
-                    <span className="ag-field-error" role="alert">
-                      {parsedNewVarMin.message}
+              <div className="ag-schema-cell ag-schema-cell-domain">
+                {newVarKind === 'boolean' && (
+                  <>
+                    <span className="ag-schema-cell-label" aria-hidden="true">
+                      Domain
                     </span>
-                  )}
-                </div>
-                <div className="ag-field">
-                  <label htmlFor="new-var-max">Max</label>
-                  <input
-                    id="new-var-max"
-                    type="text"
-                    inputMode="numeric"
-                    className="ag-input ag-input-num"
-                    aria-invalid={!parsedNewVarMax.ok || newVarRangeError !== null ? 'true' : undefined}
-                    value={newVarMax}
-                    onChange={(e) => setNewVarMax(e.target.value)}
-                  />
-                  {!parsedNewVarMax.ok && (
-                    <span className="ag-field-error" role="alert">
-                      {parsedNewVarMax.message}
+                    <span className="ag-schema-domain-fixed">true | false</span>
+                  </>
+                )}
+                {newVarKind === 'enum' && (
+                  <>
+                    <label htmlFor="new-var-enum" className="ag-schema-cell-label">
+                      Enum Values
+                    </label>
+                    <input
+                      id="new-var-enum"
+                      type="text"
+                      className="ag-input ag-input-mono"
+                      placeholder="idle, active"
+                      spellCheck={false}
+                      value={newVarEnumValues}
+                      onChange={(e) => setNewVarEnumValues(e.target.value)}
+                    />
+                  </>
+                )}
+                {newVarKind === 'int' && (
+                  <>
+                    <span className="ag-schema-cell-label" aria-hidden="true">
+                      Range
                     </span>
-                  )}
-                  {newVarRangeError !== null && (
-                    <span className="ag-field-error" role="alert">
-                      {newVarRangeError}
+                    <span className="ag-schema-range">
+                      <label htmlFor="new-var-min" className="ag-visually-hidden">
+                        Min
+                      </label>
+                      <input
+                        id="new-var-min"
+                        type="text"
+                        inputMode="numeric"
+                        className="ag-input ag-input-num"
+                        aria-invalid={!parsedNewVarMin.ok ? 'true' : undefined}
+                        value={newVarMin}
+                        onChange={(e) => setNewVarMin(e.target.value)}
+                      />
+                      <span className="ag-schema-range-sep" aria-hidden="true">
+                        ..
+                      </span>
+                      <label htmlFor="new-var-max" className="ag-visually-hidden">
+                        Max
+                      </label>
+                      <input
+                        id="new-var-max"
+                        type="text"
+                        inputMode="numeric"
+                        className="ag-input ag-input-num"
+                        aria-invalid={!parsedNewVarMax.ok || newVarRangeError !== null ? 'true' : undefined}
+                        value={newVarMax}
+                        onChange={(e) => setNewVarMax(e.target.value)}
+                      />
                     </span>
-                  )}
-                </div>
-              </>
-            )}
-            <div>
-              <button
-                type="button"
-                className="ag-btn ag-btn-primary ag-btn-sm"
-                disabled={
-                  trimmedNewVarName.length === 0 ||
-                  newVarNameError !== null ||
-                  newVarIntInvalid
-                }
-                onClick={handleAddSchemaVar}
-              >
-                + Add Variable
-              </button>
+                    {!parsedNewVarMin.ok && (
+                      <span className="ag-field-error" role="alert">
+                        Min: {parsedNewVarMin.message}
+                      </span>
+                    )}
+                    {!parsedNewVarMax.ok && (
+                      <span className="ag-field-error" role="alert">
+                        Max: {parsedNewVarMax.message}
+                      </span>
+                    )}
+                    {newVarRangeError !== null && (
+                      <span className="ag-field-error" role="alert">
+                        {newVarRangeError}
+                      </span>
+                    )}
+                  </>
+                )}
+              </div>
+              <div className="ag-schema-cell">
+                <span className="ag-schema-cell-label" aria-hidden="true">
+                  Initial
+                </span>
+                <span className="ag-schema-domain-fixed">
+                  {newVarKind === 'boolean'
+                    ? 'false'
+                    : newVarKind === 'enum'
+                      ? 'first value'
+                      : 'min'}
+                </span>
+              </div>
+              <div className="ag-schema-cell ag-schema-cell-actions">
+                <button
+                  type="button"
+                  className="ag-btn ag-btn-primary ag-btn-sm"
+                  disabled={
+                    trimmedNewVarName.length === 0 ||
+                    newVarNameError !== null ||
+                    newVarIntInvalid
+                  }
+                  onClick={handleAddSchemaVar}
+                >
+                  + Add Variable
+                </button>
+              </div>
             </div>
+            {schemaKeys.length <= 1 && (
+              <p id="schema-remove-last-hint" className="ag-hint">
+                A model needs at least one state variable, so the last one cannot be removed.
+              </p>
+            )}
           </div>
         </div>
       </div>
@@ -1212,63 +1504,12 @@ export function PolicyEditorPane({
         hidden={activeTab !== 'rules'}
       >
         <div className="ag-section">
-          <div className="ag-section-header">
-            <h3 className="ag-section-title">Transition Rules ({model.rules.length})</h3>
-            <button
-              type="button"
-              className="ag-btn ag-btn-primary ag-btn-sm"
-              onClick={handleAddRule}
-            >
-              + Add Rule
-            </button>
-          </div>
-
-          {selectedQuickVar.length > 0 && (
-            <div className="ag-helper-bar">
-              <strong>Quick guard clause:</strong>
-              <span className="ag-inline-field">
-                <label htmlFor="quick-clause-polarity" className="ag-inline-label">
-                  Polarity
-                </label>
-                <select
-                  id="quick-clause-polarity"
-                  className="ag-select ag-input-mono"
-                  aria-label="Quick clause polarity"
-                  value={quickClauseNegated ? 'not' : 'var'}
-                  onChange={(e) => setQuickClauseNegated(e.target.value === 'not')}
-                >
-                  <option value="not">! (negated)</option>
-                  <option value="var">true (positive)</option>
-                </select>
-              </span>
-              <span className="ag-inline-field">
-                <label htmlFor="quick-clause-var" className="ag-inline-label">
-                  Variable
-                </label>
-                <select
-                  id="quick-clause-var"
-                  className="ag-select ag-input-mono"
-                  aria-label="Quick clause boolean variable"
-                  value={selectedQuickVar}
-                  onChange={(e) => setQuickClauseVar(e.target.value)}
-                >
-                  {(booleanKeys.length > 0 ? booleanKeys : schemaKeys).map((k) => (
-                    <option key={k} value={k}>
-                      {k}
-                    </option>
-                  ))}
-                </select>
-              </span>
-              <span style={{ color: 'var(--color-ink-muted)' }}>
-                Use “+ Append Clause” on any rule below.
-              </span>
-            </div>
-          )}
-
-          <div className="ag-item-list">
-            {model.rules.map((rule: TransitionRule, idx: number) => {
-              const rowId = resolvedRuleRowIds[idx]!;
-              const isExpanded = expandedRuleIds.has(rowId);
+          {selectedRule !== null && activeSelectedRuleRowId !== null ? (
+            (() => {
+              const idx = selectedRuleIndex;
+              const rowId = activeSelectedRuleRowId;
+              const rule = selectedRule;
+              const traceSteps = activeTraceStepsByRuleId?.get(rule.id) ?? [];
               const summary = formatRuleSummary(rule);
               const ruleErrors = getErrorsForPathPrefix(diagnostics, `rules[${idx}]`);
               const resolvedUpdRowIds = alignRowIds(
@@ -1279,69 +1520,66 @@ export function PolicyEditorPane({
               const showPrincipledShortcut =
                 rule.id === 'publish_release_notes' &&
                 Object.hasOwn(model.schema, 'modifiedSinceApproval') &&
+                model.schema['modifiedSinceApproval']?.kind === 'boolean' &&
                 !guardContainsNegatedVar(rule.guard, 'modifiedSinceApproval');
+              const showQuickAppend =
+                booleanKeys.length > 0 &&
+                selectedQuickVar.length > 0 &&
+                !(
+                  showPrincipledShortcut &&
+                  quickClauseNegated &&
+                  selectedQuickVar === 'modifiedSinceApproval'
+                );
 
               return (
-                <div key={rowId} className="ag-item-row">
-                  <div className="ag-section-header">
-                    <div>
-                      <span className="ag-mono" style={{ fontWeight: 600 }}>
-                        {summary.id}
-                      </span>{' '}
-                      <span style={{ color: 'var(--color-ink-secondary)', fontSize: 13 }}>
-                        : {summary.label}
-                      </span>
+                <div
+                  key={rowId}
+                  className="ag-item-row ag-rule-detail"
+                  data-rule-id={rule.id}
+                >
+                  <div className="ag-rule-detail-head">
+                    <div className="ag-rule-detail-title-wrap">
+                      <h3 className="ag-section-title ag-rule-detail-title">
+                        <span className="ag-mono ag-rule-detail-id">{breakIdentifier(summary.id)}</span>
+                        <span className="ag-rule-detail-subtitle">{summary.label}</span>
+                      </h3>
+                      {traceSteps.length > 0 && (
+                        <span
+                          className="ag-rule-step-tag"
+                          title="This rule fires in the counterexample trace"
+                        >
+                          Trace step {traceSteps.join(', ')}
+                        </span>
+                      )}
                     </div>
-                    <div className="ag-inline-actions">
-                      {showPrincipledShortcut && (
-                        <button
-                          type="button"
-                          className="ag-btn ag-btn-sm ag-btn-active"
-                          onClick={() =>
-                            handleAppendRuleGuardClause(idx, rule, rowId, {
-                              op: 'not',
-                              arg: { op: 'var', name: 'modifiedSinceApproval' },
-                            })
-                          }
-                        >
-                          + Add !modifiedSinceApproval
-                        </button>
-                      )}
-                      {selectedQuickVar.length > 0 && (
-                        <button
-                          type="button"
-                          className="ag-btn ag-btn-sm"
-                          onClick={() => {
-                            const clause: BoolExpr = quickClauseNegated
-                              ? { op: 'not', arg: { op: 'var', name: selectedQuickVar } }
-                              : { op: 'var', name: selectedQuickVar };
-                            handleAppendRuleGuardClause(idx, rule, rowId, clause);
-                          }}
-                        >
-                          + Append {quickClauseNegated ? `!${selectedQuickVar}` : selectedQuickVar}
-                        </button>
-                      )}
+
+                    <div className="ag-inline-actions ag-rule-detail-actions">
+                      <span className="ag-meta-inline" aria-hidden="true">
+                        #{idx + 1}
+                      </span>
                       <button
                         type="button"
-                        className="ag-btn ag-btn-sm"
+                        className="ag-btn ag-btn-xs"
                         disabled={idx === 0}
                         aria-label={`Move rule ${rule.id} up`}
+                        title="Move up (rule order is evaluation order)"
                         onClick={() => handleMoveRule(idx, idx - 1)}
                       >
-                        Up
+                        <span aria-hidden="true">↑</span> Up
                       </button>
                       <button
                         type="button"
-                        className="ag-btn ag-btn-sm"
+                        className="ag-btn ag-btn-xs"
                         disabled={idx === model.rules.length - 1}
                         aria-label={`Move rule ${rule.id} down`}
+                        title="Move down (rule order is evaluation order)"
                         onClick={() => handleMoveRule(idx, idx + 1)}
                       >
-                        Down
+                        <span aria-hidden="true">↓</span> Down
                       </button>
                       <button
                         type="button"
-                        className="ag-btn ag-btn-sm ag-btn-danger"
+                        className="ag-btn ag-btn-xs ag-btn-danger"
                         aria-label={`Remove rule ${rule.id}`}
                         onClick={() => handleRemoveRule(idx, rowId)}
                       >
@@ -1350,185 +1588,313 @@ export function PolicyEditorPane({
                     </div>
                   </div>
 
-                  <div className="ag-code-strip">
-                    <div>
-                      <span className="ag-code-muted">when </span>
-                      {summary.guardText}
-                    </div>
-                    <div>
-                      <span className="ag-code-muted">then </span>
+                  <div className="ag-code-strip ag-rule-prop-strip">
+                    <span className="ag-code-muted">when</span>
+                    <span className="ag-rule-prop-expr">{summary.guardText}</span>
+                    <span className="ag-code-muted">then</span>
+                    <span className="ag-rule-prop-expr">
                       {summary.updatesText.length > 0 ? summary.updatesText.join('; ') : 'no-op'}
-                    </div>
+                    </span>
                   </div>
+
+                  {showPrincipledShortcut &&
+                    (() => {
+                      const candidateClause: BoolExpr = {
+                        op: 'not',
+                        arg: { op: 'var', name: 'modifiedSinceApproval' },
+                      };
+                      const candidateGuard =
+                        appendRuleGuardClause(model, idx, candidateClause).rules[idx]?.guard ??
+                        rule.guard;
+                      const candidateText = formatBoolExpr(candidateGuard);
+                      const addedSuffix = candidateText.startsWith(summary.guardText)
+                        ? candidateText.slice(summary.guardText.length)
+                        : '';
+                      return (
+                        <div
+                          className="ag-rule-candidate"
+                          role="group"
+                          aria-label="Candidate guard repair (not applied)"
+                        >
+                          <div className="ag-rule-candidate-head">
+                            <span className="ag-rule-candidate-title">Candidate guard repair</span>
+                            <span className="ag-hint">Not applied</span>
+                          </div>
+                          <dl className="ag-guard-diff">
+                            <dt>Current</dt>
+                            <dd className="ag-mono">{summary.guardText}</dd>
+                            <dt>Candidate</dt>
+                            <dd className="ag-mono" data-candidate="true">
+                              {addedSuffix.trim().length > 0 ? (
+                                <>
+                                  {summary.guardText}{' '}
+                                  <mark className="ag-diff-add">{addedSuffix.trim()}</mark>
+                                </>
+                              ) : (
+                                candidateText
+                              )}
+                            </dd>
+                          </dl>
+                          <div className="ag-rule-candidate-foot">
+                            <p className="ag-rule-candidate-note">
+                              Blocks publishing when the draft was edited after approval. Staging
+                              edits this draft only; run Verify Policy to re-verify.
+                            </p>
+                            <button
+                              type="button"
+                              className="ag-btn ag-btn-sm ag-btn-active"
+                              onClick={() =>
+                                handleAppendRuleGuardClause(idx, rule, rowId, candidateClause)
+                              }
+                            >
+                              + Add !modifiedSinceApproval
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })()}
+
+                  {!showPrincipledShortcut &&
+                    isStale &&
+                    rule.id === 'publish_release_notes' &&
+                    guardContainsNegatedVar(rule.guard, 'modifiedSinceApproval') && (
+                      <div className="ag-repair-staged" role="status">
+                        <div className="ag-repair-staged-copy">
+                          <strong>Repair staged in draft (unverified)</strong>
+                          <span>
+                            Added <code className="ag-mono">!modifiedSinceApproval</code>. Run
+                            Verify Policy to confirm whether invariants hold and the goal stays
+                            reachable.
+                          </span>
+                        </div>
+                        {onVerifyNow !== undefined && (
+                          <button
+                            type="button"
+                            className="ag-btn ag-btn-sm ag-btn-active"
+                            onClick={onVerifyNow}
+                          >
+                            Run Verification
+                          </button>
+                        )}
+                      </div>
+                    )}
 
                   <InlineErrorList errors={ruleErrors} />
 
-                  <div>
-                    <button
-                      type="button"
-                      className="ag-disclosure-btn"
-                      aria-expanded={isExpanded}
-                      aria-controls={`rule-details-${rowId}`}
-                      onClick={() => toggleRuleExpanded(rowId)}
-                    >
-                      <span aria-hidden="true">{isExpanded ? 'v' : '>'}</span>
-                      <span>Edit rule definition, guard AST, and atomic updates</span>
-                    </button>
-
-                    <div
-                      id={`rule-details-${rowId}`}
-                      className="ag-disclosure-body"
-                      hidden={!isExpanded}
-                    >
-                      <div className="ag-row-grid">
-                        <div className="ag-field">
-                          <label htmlFor={`rule-id-${rowId}`}>Rule ID</label>
-                          <input
-                            id={`rule-id-${rowId}`}
-                            type="text"
-                            className="ag-input ag-input-mono"
-                            value={rule.id}
-                            onChange={(e) =>
-                              onChangeModel(
-                                updateRule(model, idx, { ...rule, id: e.target.value }),
-                              )
-                            }
-                          />
-                        </div>
-                        <div className="ag-field">
-                          <label htmlFor={`rule-label-${rowId}`}>Label</label>
-                          <input
-                            id={`rule-label-${rowId}`}
-                            type="text"
-                            className="ag-input"
-                            value={rule.label}
-                            onChange={(e) =>
-                              onChangeModel(
-                                updateRule(model, idx, { ...rule, label: e.target.value }),
-                              )
-                            }
-                          />
-                        </div>
-                      </div>
-
+                  <div className="ag-rule-detail-body">
+                    <div className="ag-row-grid">
                       <div className="ag-field">
-                        <span className="ag-field-label">Guard Expression</span>
-                        <BoolExprEditor
-                          value={rule.guard}
-                          schema={model.schema}
-                          schemaKeysOrder={schemaKeys}
-                          ariaLabelPrefix={`Rule ${rule.id} guard`}
-                          resetKey={resetKey}
-                          fieldPath={`rule:${rowId}.guard`}
-                          intDraftStore={intDraftStore}
-                          onChange={(nextGuard) =>
+                        <label htmlFor={`rule-id-${rowId}`}>Rule ID</label>
+                        <input
+                          ref={(el) => {
+                            ruleFocusRefs.current[rowId] = el;
+                          }}
+                          id={`rule-id-${rowId}`}
+                          type="text"
+                          className="ag-input ag-input-mono"
+                          value={rule.id}
+                          onChange={(e) =>
                             onChangeModel(
-                              updateRule(model, idx, { ...rule, guard: nextGuard }),
+                              updateRule(model, idx, { ...rule, id: e.target.value }),
                             )
                           }
                         />
                       </div>
-
                       <div className="ag-field">
-                        <div className="ag-section-header">
-                          <span className="ag-field-label">
-                            Atomic Updates ({rule.updates.length})
-                          </span>
-                          <button
-                            type="button"
-                            className="ag-btn ag-btn-sm"
-                            onClick={() => handleAddRuleUpdate(idx, rule, rowId)}
-                          >
-                            + Add Update
-                          </button>
-                        </div>
+                        <label htmlFor={`rule-label-${rowId}`}>Label</label>
+                        <input
+                          id={`rule-label-${rowId}`}
+                          type="text"
+                          className="ag-input"
+                          value={rule.label}
+                          onChange={(e) =>
+                            onChangeModel(
+                              updateRule(model, idx, { ...rule, label: e.target.value }),
+                            )
+                          }
+                        />
+                      </div>
+                    </div>
 
-                        {rule.updates.map((upd, updIdx) => {
-                          const updRowId = resolvedUpdRowIds[updIdx]!;
-                          const updVarSelectId = `rule-upd-var-${rowId}-${updRowId}`;
-                          return (
-                            <div
-                              key={updRowId}
-                              className="ag-expr-row"
-                              style={{ alignItems: 'flex-start', paddingTop: 4 }}
-                            >
-                              <span className="ag-inline-field">
-                                <label htmlFor={updVarSelectId} className="ag-inline-label">
-                                  Target variable
-                                </label>
-                                <select
-                                  id={updVarSelectId}
-                                  className="ag-select ag-input-mono"
-                                  aria-label={`Update ${updIdx + 1} target variable for ${rule.id}`}
-                                  value={upd.var}
-                                  onChange={(e) =>
-                                    onChangeModel(
-                                      updateRule(
-                                        model,
-                                        idx,
-                                        updateRuleUpdate(rule, updIdx, {
-                                          ...upd,
-                                          var: e.target.value,
-                                        }),
-                                      ),
-                                    )
-                                  }
-                                >
-                                  {!schemaKeys.includes(upd.var) && (
-                                    <option value={upd.var}>{upd.var} (undeclared)</option>
-                                  )}
-                                  {schemaKeys.map((k) => (
-                                    <option key={k} value={k}>
-                                      {k}
-                                    </option>
-                                  ))}
-                                </select>
-                              </span>
-                              <span className="ag-mono" style={{ paddingTop: 5 }}>
-                                :=
-                              </span>
-                              <div style={{ flex: 1, minWidth: 0 }}>
-                                <ValueExprEditor
-                                  value={upd.value}
-                                  schema={model.schema}
-                                  schemaKeysOrder={schemaKeys}
-                                  ariaLabelPrefix={`Update ${updIdx + 1} value for ${rule.id}`}
-                                  resetKey={resetKey}
-                                  fieldPath={`rule:${rowId}.update:${updRowId}.value`}
-                                  intDraftStore={intDraftStore}
-                                  onChange={(nextVal) =>
-                                    onChangeModel(
-                                      updateRule(
-                                        model,
-                                        idx,
-                                        updateRuleUpdate(rule, updIdx, {
-                                          ...upd,
-                                          value: nextVal,
-                                        }),
-                                      ),
-                                    )
-                                  }
-                                />
-                              </div>
+                    <div className="ag-field ag-rule-subsection">
+                      <div className="ag-subsection-head">
+                        <span className="ag-field-label">Guard Expression</span>
+                        <span className="ag-hint">The rule can fire only when this holds.</span>
+                      </div>
+                      {booleanKeys.length > 0 && selectedQuickVar.length > 0 && (
+                        <details className="ag-quick-clause">
+                          <summary>Quick guard clause</summary>
+                          <div className="ag-helper-bar">
+                            <span className="ag-inline-field">
+                              <label htmlFor="quick-clause-polarity" className="ag-inline-label">
+                                Polarity
+                              </label>
+                              <WorkbenchSelect<'not' | 'var'>
+                                id="quick-clause-polarity"
+                                className="ag-select ag-input-mono"
+                                ariaLabel="Quick clause polarity"
+                                mono
+                                value={quickClauseNegated ? 'not' : 'var'}
+                                options={QUICK_POLARITY_OPTIONS}
+                                onChange={(next) => setQuickClauseNegated(next === 'not')}
+                              />
+                            </span>
+                            <span className="ag-inline-field">
+                              <label htmlFor="quick-clause-var" className="ag-inline-label">
+                                Variable
+                              </label>
+                              <WorkbenchSelect
+                                id="quick-clause-var"
+                                className="ag-select ag-input-mono"
+                                ariaLabel="Quick clause boolean variable"
+                                mono
+                                value={selectedQuickVar}
+                                options={booleanKeys.map((k) => ({ value: k, label: k }))}
+                                onChange={setQuickClauseVar}
+                              />
+                            </span>
+                            {showQuickAppend && (
                               <button
                                 type="button"
-                                className="ag-btn ag-btn-sm ag-btn-danger"
-                                onClick={() =>
-                                  handleRemoveRuleUpdate(idx, rule, rowId, updIdx, updRowId)
-                                }
+                                className="ag-btn ag-btn-sm"
+                                onClick={() => {
+                                  const clause: BoolExpr = quickClauseNegated
+                                    ? { op: 'not', arg: { op: 'var', name: selectedQuickVar } }
+                                    : { op: 'var', name: selectedQuickVar };
+                                  handleAppendRuleGuardClause(idx, rule, rowId, clause);
+                                }}
                               >
-                                Remove
+                                + Append {quickClauseNegated ? `!${selectedQuickVar}` : selectedQuickVar}
                               </button>
-                            </div>
-                          );
-                        })}
+                            )}
+                          </div>
+                        </details>
+                      )}
+                      <BoolExprEditor
+                        value={rule.guard}
+                        schema={model.schema}
+                        schemaKeysOrder={schemaKeys}
+                        ariaLabelPrefix={`Rule ${rule.id} guard`}
+                        resetKey={resetKey}
+                        fieldPath={`rule:${rowId}.guard`}
+                        intDraftStore={intDraftStore}
+                        diagnostics={diagnostics.all}
+                        diagnosticPath={`rules[${idx}].guard`}
+                        showPreview={false}
+                        onChange={(nextGuard) =>
+                          onChangeModel(
+                            updateRule(model, idx, { ...rule, guard: nextGuard }),
+                          )
+                        }
+                      />
+                    </div>
+
+                    <div className="ag-field ag-rule-subsection">
+                      <div className="ag-subsection-head">
+                        <span className="ag-field-label">
+                          Atomic Updates ({rule.updates.length}){' '}
+                          <span className="ag-hint">applied together against the pre-state</span>
+                        </span>
+                        <button
+                          type="button"
+                          className="ag-btn ag-btn-xs"
+                          onClick={() => handleAddRuleUpdate(idx, rule, rowId)}
+                        >
+                          + Add Update
+                        </button>
                       </div>
+
+                      {rule.updates.length > 0 ? (
+                        <ol className="ag-update-list">
+                          {rule.updates.map((upd, updIdx) => {
+                            const updRowId = resolvedUpdRowIds[updIdx]!;
+                            const updVarSelectId = `rule-upd-var-${rowId}-${updRowId}`;
+                            return (
+                              <li key={updRowId} className="rc-expr-node ag-update-row">
+                                <div className="rc-expr-row">
+                                  <label htmlFor={updVarSelectId} className="ag-visually-hidden">
+                                    Target variable
+                                  </label>
+                                  <WorkbenchSelect
+                                    id={updVarSelectId}
+                                    className="ag-select ag-input-mono rc-expr-var ag-update-target"
+                                    ariaLabel={`Update ${updIdx + 1} target variable for ${rule.id}`}
+                                    mono
+                                    density="compact"
+                                    value={upd.var}
+                                    options={[
+                                      ...(schemaKeys.includes(upd.var)
+                                        ? []
+                                        : [{ value: upd.var, label: `${upd.var} (undeclared)` }]),
+                                      ...schemaKeys.map((k) => ({ value: k, label: k })),
+                                    ]}
+                                    onChange={(nextVar) =>
+                                      onChangeModel(
+                                        updateRule(
+                                          model,
+                                          idx,
+                                          updateRuleUpdate(rule, updIdx, {
+                                            ...upd,
+                                            var: nextVar,
+                                          }),
+                                        ),
+                                      )
+                                    }
+                                  />
+                                  <span className="rc-expr-punct ag-update-assign" aria-hidden="true">
+                                    :=
+                                  </span>
+                                  <ValueExprEditor
+                                    value={upd.value}
+                                    schema={model.schema}
+                                    schemaKeysOrder={schemaKeys}
+                                    ariaLabelPrefix={`Update ${updIdx + 1} value for ${rule.id}`}
+                                    resetKey={resetKey}
+                                    fieldPath={`rule:${rowId}.update:${updRowId}.value`}
+                                    intDraftStore={intDraftStore}
+                                    onChange={(nextVal) =>
+                                      onChangeModel(
+                                        updateRule(
+                                          model,
+                                          idx,
+                                          updateRuleUpdate(rule, updIdx, {
+                                            ...upd,
+                                            value: nextVal,
+                                          }),
+                                        ),
+                                      )
+                                    }
+                                  />
+                                  <button
+                                    type="button"
+                                    className="ag-btn ag-btn-xs ag-btn-danger ag-update-remove"
+                                    aria-label={`Remove update ${updIdx + 1} (${upd.var}) from ${rule.id}`}
+                                    onClick={() =>
+                                      handleRemoveRuleUpdate(idx, rule, rowId, updIdx, updRowId)
+                                    }
+                                  >
+                                    Remove
+                                  </button>
+                                </div>
+                              </li>
+                            );
+                          })}
+                        </ol>
+                      ) : (
+                        <p className="ag-pane-subtitle">
+                          No updates: when the guard holds, this rule is a no-op transition.
+                        </p>
+                      )}
                     </div>
                   </div>
                 </div>
               );
-            })}
-          </div>
+            })()
+          ) : (
+            <p className="ag-pane-subtitle">
+              Add a rule from the navigator to edit its guard and updates.
+            </p>
+          )}
         </div>
       </div>
 
@@ -1609,6 +1975,9 @@ export function PolicyEditorPane({
                     resetKey={resetKey}
                     fieldPath={`inv:${rowId}.holds`}
                     intDraftStore={intDraftStore}
+                    diagnostics={diagnostics.all}
+                    diagnosticPath={`invariants[${idx}].holds`}
+                    showPreview={false}
                     onChange={(holds) => onChangeModel(updateInvariant(model, idx, { ...inv, holds }))}
                   />
                   <InlineErrorList errors={invErrors} />
@@ -1682,6 +2051,9 @@ export function PolicyEditorPane({
                 resetKey={resetKey}
                 fieldPath="goal.reached"
                 intDraftStore={intDraftStore}
+                diagnostics={diagnostics.all}
+                diagnosticPath="goal.reached"
+                showPreview={false}
                 onChange={(reached) => onChangeModel(updateGoal(model, { ...model.goal!, reached }))}
               />
               <InlineErrorList errors={diagnostics.sections.goal} />
@@ -1846,23 +2218,25 @@ export function PolicyEditorPane({
             </div>
           )}
 
-          <div className="ag-field">
-            <label htmlFor="model-json-textarea">TransitionSystemModel JSON</label>
-            <textarea
-              id="model-json-textarea"
-              rows={20}
-              className="ag-textarea ag-textarea-mono"
-              spellCheck={false}
-              value={jsonDraft}
-              onChange={(e) => {
-                const nextVal = e.target.value;
-                setJsonDraft(nextVal);
-                onJsonDraftDirtyChangeRef.current?.(nextVal !== committedJsonRef.current);
-              }}
-            />
+            <div className="ag-field">
+              <label htmlFor="model-json-textarea">TransitionSystemModel JSON</label>
+              <textarea
+                id="model-json-textarea"
+                rows={20}
+                className="ag-textarea ag-textarea-mono"
+                spellCheck={false}
+                value={jsonDraft}
+                onChange={(e) => {
+                  const nextVal = e.target.value;
+                  setJsonDraft(nextVal);
+                  onJsonDraftDirtyChangeRef.current?.(nextVal !== committedJsonRef.current);
+                }}
+              />
+            </div>
           </div>
         </div>
       </div>
+    </div>
     </section>
   );
 }

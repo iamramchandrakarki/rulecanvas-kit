@@ -7,13 +7,20 @@ import {
   AssumptionsList,
   StrictIntegerInput,
   VerdictSummary,
+  WORKBENCH_THEME_STORAGE_KEY,
+  WorkbenchBrandMark,
+  WorkbenchDiscardDialog,
   WorkbenchNavigation,
+  WorkbenchThemeSwitch,
   buildCanonicalPresetUrl,
   createWorkbenchHistoryController,
   isSafeSameOriginNavigationHref,
   matchesDraftPrefix,
   readPresetFromSearch,
+  readStoredThemePreference,
+  resolveWorkbenchTheme,
   useWorkbenchRoute,
+  writeStoredThemePreference,
   type HistoryHostLike,
   type PendingDiscardPrompt,
 } from '../src/index.js';
@@ -1052,5 +1059,67 @@ describe('@rulecanvas/workbench-react components, navigation, and race-safe hist
       if (prevActEnv === undefined) delete g['IS_REACT_ACT_ENVIRONMENT'];
       else g['IS_REACT_ACT_ENVIRONMENT'] = prevActEnv;
     }
+  });
+
+  it('resolves System/Light/Dark themes with Light fallback, persists safely, and SSR-renders shared shell primitives', () => {
+    expect(resolveWorkbenchTheme('system', false)).toBe('light');
+    expect(resolveWorkbenchTheme('system', true)).toBe('dark');
+    expect(resolveWorkbenchTheme('light', true)).toBe('light');
+    expect(resolveWorkbenchTheme('dark', false)).toBe('dark');
+
+    const map = new Map<string, string>();
+    const storage = {
+      getItem: (k: string) => map.get(k) ?? null,
+      setItem: (k: string, v: string) => {
+        map.set(k, v);
+      },
+    };
+    expect(readStoredThemePreference(storage)).toBe('system');
+    writeStoredThemePreference('dark', storage);
+    expect(map.get(WORKBENCH_THEME_STORAGE_KEY)).toBe('dark');
+    expect(readStoredThemePreference(storage)).toBe('dark');
+    map.set(WORKBENCH_THEME_STORAGE_KEY, 'invalid-mode');
+    expect(readStoredThemePreference(storage)).toBe('system');
+
+    const throwingStorage = {
+      getItem: () => {
+        throw new Error('sandboxed');
+      },
+      setItem: () => {
+        throw new Error('quota');
+      },
+    };
+    expect(readStoredThemePreference(throwingStorage)).toBe('system');
+    expect(() => writeStoredThemePreference('light', throwingStorage)).not.toThrow();
+
+    const switchHtml = renderToStaticMarkup(
+      createElement(WorkbenchThemeSwitch, {
+        value: 'system',
+        onChange: () => {},
+      }),
+    );
+    expect(switchHtml).toContain('aria-label="Color theme"');
+    expect(switchHtml).toContain('data-theme-option="system"');
+    expect(switchHtml).toContain('aria-pressed="true"');
+    expect(switchHtml).toContain('Light');
+    expect(switchHtml).toContain('Dark');
+
+    const markHtml = renderToStaticMarkup(createElement(WorkbenchBrandMark));
+    expect(markHtml).toContain('<svg');
+    expect(markHtml).toContain('aria-hidden="true"');
+
+    const dialogHtml = renderToStaticMarkup(
+      createElement(WorkbenchDiscardDialog, {
+        idPrefix: 'wb',
+        actionLabel: 'Load Principled Fix',
+        onDecline: () => {},
+        onAccept: () => {},
+      }),
+    );
+    expect(dialogHtml).toContain('role="alertdialog"');
+    expect(dialogHtml).toContain('aria-modal="true"');
+    expect(dialogHtml).toContain('Loading &quot;Principled Fix&quot; will discard your uncommitted model edits.');
+    expect(dialogHtml).toContain('Stay Here');
+    expect(dialogHtml).toContain('Discard &amp; Continue');
   });
 });

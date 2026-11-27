@@ -18,18 +18,24 @@ import {
   type ReplaySession,
 } from '@rulecanvas/ui';
 import {
+  WorkbenchBrandMark,
+  WorkbenchDiscardDialog,
+  WorkbenchGuideControl,
   WorkbenchNavigation,
+  WorkbenchSelect,
+  WorkbenchThemeSwitch,
+  VerificationBoundsControl,
   readPresetFromSearch,
   useVerificationSnapshot,
   useWorkbenchRoute,
+  useWorkbenchTheme,
+  useWorkbenchTooltips,
   type WorkbenchNavLink,
 } from '@rulecanvas/workbench-react';
 import { DEFAULT_VERIFY_OPTIONS, runPresetComparison } from './comparison.js';
 import { ComparisonPanel } from './components/ComparisonPanel.js';
-import { PolicyEditorPane } from './components/PolicyEditorPane.js';
-import {
-  VerificationWorkbenchPane,
-} from './components/VerificationWorkbenchPane.js';
+import { PolicyEditorPane, type FocusedRuleRequest } from './components/PolicyEditorPane.js';
+import { VerificationWorkbenchPane } from './components/VerificationWorkbenchPane.js';
 import { indexModelDiagnostics, parseStrictIntegerDraft } from './model-editor.js';
 import { AGENT_GATE_PRESETS, getPresetDescriptor, loadPresetModel } from './presets.js';
 import type { ApprovalLaunderingVariant } from './scenarios/approval-laundering.js';
@@ -122,6 +128,9 @@ export function App({
   initialShowComparison = false,
   workerFactory,
 }: AppProps) {
+  const theme = useWorkbenchTheme();
+  useWorkbenchTooltips();
+
   const resolvedInitialVariant: ApprovalLaunderingVariant =
     initialVariant ??
     (typeof window !== 'undefined'
@@ -145,6 +154,8 @@ export function App({
   const [editorDraftErrorMap, setEditorDraftErrorMap] = useState<Readonly<Record<string, string>>>(
     {},
   );
+  const [focusedRuleRequest, setFocusedRuleRequest] = useState<FocusedRuleRequest | null>(null);
+  const focusSeqRef = useRef<number>(0);
 
   const modelRevisionRef = useRef(0);
   const createClient = useCallback(() => createAppVerifyClient(workerFactory), [workerFactory]);
@@ -270,6 +281,25 @@ export function App({
     [verifiedSnapshot],
   );
 
+  const activeTraceStepsByRuleId = useMemo((): ReadonlyMap<string, readonly number[]> => {
+    const map = new Map<string, number[]>();
+    if (isStale || replaySession === null || replaySession.steps.length === 0) return map;
+    replaySession.steps.forEach((step, idx) => {
+      const existing = map.get(step.ruleId);
+      if (existing !== undefined) {
+        existing.push(idx + 1);
+      } else {
+        map.set(step.ruleId, [idx + 1]);
+      }
+    });
+    return map;
+  }, [isStale, replaySession]);
+
+  const activeTraceRuleId =
+    !isStale && replaySession?.activeStep !== null && replaySession?.activeStep !== undefined
+      ? replaySession.activeStep.ruleId
+      : null;
+
   const runVerification = (
     targetModel: TransitionSystemModel,
     targetLabel: string,
@@ -280,10 +310,12 @@ export function App({
     setCancelledNotice(null);
     setReplayError(null);
 
-    if (targetOptions === null ||
+    if (
+      targetOptions === null ||
       targetOptionErrors.length > 0 ||
       targetDraftErrors.length > 0 ||
-      validateModel(targetModel).length > 0) {
+      validateModel(targetModel).length > 0
+    ) {
       clearVerification();
       return;
     }
@@ -305,6 +337,7 @@ export function App({
     latestEditorDraftErrorMapRef.current = {};
     setEditorDraftErrorMap({});
     setJsonDraftDirty(false);
+    setFocusedRuleRequest(null);
     setEditorResetKey((prev) => prev + 1);
 
     latestActivePresetRef.current = variant;
@@ -335,6 +368,7 @@ export function App({
     latestEditorDraftErrorMapRef.current = {};
     setEditorDraftErrorMap({});
     setJsonDraftDirty(false);
+    setFocusedRuleRequest(null);
     setEditorResetKey((prev) => prev + 1);
 
     latestActivePresetRef.current = null;
@@ -390,7 +424,8 @@ export function App({
     setShowComparison((prev) => !prev);
   };
 
-  const handleVerifyCurrent = () => {
+  const handleVerifyCurrent = useCallback(() => {
+    if (isPending()) return;
     const syncModel = latestModelRef.current;
     const syncPreset = latestActivePresetRef.current;
     const syncDraftErrors: ValidationError[] = Object.entries(
@@ -407,7 +442,12 @@ export function App({
       optionErrors,
       syncDraftErrors,
     );
-  };
+  }, [isPending, optionErrors, parsedOptions]);
+
+  const handleInspectRule = useCallback((ruleId: string) => {
+    focusSeqRef.current += 1;
+    setFocusedRuleRequest({ ruleId, seq: focusSeqRef.current });
+  }, []);
 
   const handleResetReplay = () => {
     if (replaySession === null) return;
@@ -504,17 +544,41 @@ export function App({
     }
   }, [pendingPrompt !== null]);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handleGlobalShortcut = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && pendingPrompt === null) {
+        event.preventDefault();
+        handleVerifyCurrent();
+      } else if (event.key === 'Escape' && showComparison && pendingPrompt === null) {
+        setShowComparison(false);
+      }
+    };
+    window.addEventListener('keydown', handleGlobalShortcut);
+    return () => window.removeEventListener('keydown', handleGlobalShortcut);
+  }, [handleVerifyCurrent, pendingPrompt, showComparison]);
+
+  const scrollToSection = (elementId: string) => {
+    if (typeof document === 'undefined') return;
+    const target = document.getElementById(elementId);
+    if (!(target instanceof HTMLElement)) return;
+    const prefersReducedMotion =
+      typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    target.focus({ preventScroll: true });
+    target.scrollIntoView({ behavior: prefersReducedMotion ? 'auto' : 'smooth', block: 'start' });
+  };
+
   return (
     <div className="ag-shell">
       <header className="ag-topbar">
         <div className="ag-brand">
-          <h1 className="ag-brand-mark">
-            <span className="ag-brand-glyph" aria-hidden="true" />
-            AgentGate
+          <h1 className="ag-brand-suite">
+            <WorkbenchBrandMark className="ag-brand-icon" />
+            <span>RuleCanvasKit</span>
+            <span className="ag-visually-hidden"> AgentGate</span>
           </h1>
-          <span className="ag-brand-subtitle">
-            Discrete finite-state policy verification workbench
-          </span>
           <WorkbenchNavigation
             current="agent-gate"
             links={WORKBENCH_NAV_LINKS}
@@ -536,51 +600,45 @@ export function App({
         <div className="ag-topbar-controls">
           <div className="ag-control-field">
             <label htmlFor="preset-select">Preset</label>
-            <select
+            <WorkbenchSelect<ApprovalLaunderingVariant | 'custom'>
               id="preset-select"
               className="ag-select"
+              menuClassName="rc-select-menu-presets"
               value={activePreset ?? 'custom'}
-              onChange={(e) => {
-                const value = e.target.value;
+              options={[
+                ...(activePreset === null
+                  ? [{ value: 'custom' as const, label: 'Custom / Edited Model' }]
+                  : []),
+                ...AGENT_GATE_PRESETS.map((preset) => ({
+                  value: preset.variant,
+                  label: preset.shortLabel,
+                  description: preset.summary,
+                })),
+              ]}
+              onChange={(value) => {
                 if (value !== 'custom') {
-                  selectPreset(value as ApprovalLaunderingVariant);
+                  selectPreset(value);
                 }
               }}
-            >
-              {activePreset === null && <option value="custom">Custom / Edited Model</option>}
-              {AGENT_GATE_PRESETS.map((preset) => (
-                <option key={preset.variant} value={preset.variant}>
-                  {preset.shortLabel}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="ag-control-field">
-            <label htmlFor="max-states-input">maxStates</label>
-            <input
-              id="max-states-input"
-              type="text"
-              inputMode="numeric"
-              className="ag-input ag-input-num"
-              aria-invalid={maxStatesInvalid ? 'true' : undefined}
-              value={maxStatesText}
-              onChange={(e) => handleBoundsEdit('maxStates', e.target.value)}
             />
           </div>
 
-          <div className="ag-control-field">
-            <label htmlFor="max-depth-input">maxDepth</label>
-            <input
-              id="max-depth-input"
-              type="text"
-              inputMode="numeric"
-              className="ag-input ag-input-num"
-              aria-invalid={maxDepthInvalid ? 'true' : undefined}
-              value={maxDepthText}
-              onChange={(e) => handleBoundsEdit('maxDepth', e.target.value)}
-            />
-          </div>
+          <VerificationBoundsControl
+            maxStatesText={maxStatesText}
+            maxDepthText={maxDepthText}
+            maxStatesInvalid={maxStatesInvalid}
+            maxDepthInvalid={maxDepthInvalid}
+            onEdit={handleBoundsEdit}
+            className="ag-bounds"
+            triggerClassName="ag-btn ag-bounds-trigger"
+            panelClassName="ag-bounds-panel"
+            fieldClassName="ag-control-field"
+            inputClassName="ag-input ag-input-num"
+            hintClassName="ag-bounds-hint"
+            visuallyHiddenClassName="ag-visually-hidden"
+          />
+
+          <span className="ag-toolbar-divider" aria-hidden="true" />
 
           {isRunning ? (
             <span className="ag-badge" data-tone="running" role="status">
@@ -625,10 +683,19 @@ export function App({
           <button
             type="button"
             className="ag-btn ag-btn-primary"
+            disabled={isRunning}
+            aria-busy={isRunning ? 'true' : undefined}
+            aria-keyshortcuts="Control+Enter Meta+Enter"
+            data-rc-tip-host="true"
             onClick={handleVerifyCurrent}
           >
             Verify Policy
+            <span className="rc-tip" aria-hidden="true">
+              Run bounded verification (Ctrl/Cmd + Enter)
+            </span>
           </button>
+
+          <span className="ag-toolbar-divider" aria-hidden="true" />
 
           <button
             type="button"
@@ -638,42 +705,43 @@ export function App({
           >
             Compare All 5 Presets
           </button>
+
+          <WorkbenchGuideControl
+            appTitle="AgentGate"
+            appSummary="Explore how flawed AI-agent approval policies allow unauthorized publishing, inspect the exact counterexample trace, and verify principled guard repairs."
+            className="ag-guide"
+            triggerClassName="ag-btn ag-guide-trigger"
+            panelClassName="ag-guide-panel"
+            visuallyHiddenClassName="ag-visually-hidden"
+            tooltipClassName="rc-tip"
+          />
+
+          <WorkbenchThemeSwitch
+            value={theme.preference}
+            onChange={theme.setPreference}
+            className="ag-theme-switch"
+            buttonClassName="ag-theme-btn"
+            activeButtonClassName="ag-theme-btn-active"
+            tooltipClassName="rc-tip"
+          />
         </div>
       </header>
 
       {pendingPrompt !== null && (
-        <div
-          className="ag-discard-banner"
-          role="alertdialog"
-          aria-labelledby="ag-discard-title"
-          aria-describedby="ag-discard-desc"
-          onKeyDown={(e) => {
-            if (e.key === 'Escape') {
-              e.preventDefault();
-              declinePrompt();
-            }
-          }}
-        >
-          <div>
-            <strong id="ag-discard-title">Unsaved Custom Edits</strong>
-            <p id="ag-discard-desc">
-              {pendingPrompt.label} will discard your current unsaved custom edits.
-            </p>
-          </div>
-          <div className="ag-inline-actions">
-            <button
-              ref={stayHereButtonRef}
-              type="button"
-              className="ag-btn ag-btn-sm ag-btn-secondary"
-              onClick={declinePrompt}
-            >
-              Stay Here
-            </button>
-            <button type="button" className="ag-btn ag-btn-sm ag-btn-primary" onClick={acceptPrompt}>
-              Discard &amp; Continue
-            </button>
-          </div>
-        </div>
+        <WorkbenchDiscardDialog
+          ref={stayHereButtonRef}
+          idPrefix="ag"
+          actionLabel={pendingPrompt.label}
+          onDecline={declinePrompt}
+          onAccept={acceptPrompt}
+          backdropClassName="ag-dialog-backdrop"
+          dialogClassName="ag-discard-dialog"
+          titleClassName="ag-discard-title"
+          descriptionClassName="ag-discard-desc"
+          actionsClassName="ag-discard-actions"
+          stayButtonClassName="ag-btn ag-btn-sm ag-btn-secondary"
+          acceptButtonClassName="ag-btn ag-btn-sm ag-btn-primary"
+        />
       )}
 
       <div className="ag-context-strip">
@@ -683,9 +751,28 @@ export function App({
             ? `: ${activePresetInfo.summary}`
             : ': Edited custom policy model'}
         </span>
-        {activePresetInfo !== null && (
-          <span className="ag-context-note">{activePresetInfo.policyNote}</span>
-        )}
+
+        <div className="ag-inline-actions">
+          {activePresetInfo !== null && (
+            <span className="ag-context-note">{activePresetInfo.policyNote}</span>
+          )}
+          <div className="ag-mobile-jump" role="navigation" aria-label="Workspace pane jump">
+            <button
+              type="button"
+              className="ag-btn ag-btn-sm"
+              onClick={() => scrollToSection('ag-verdict-pane')}
+            >
+              Jump to Verdict &amp; Trace
+            </button>
+            <button
+              type="button"
+              className="ag-btn ag-btn-sm"
+              onClick={() => scrollToSection('ag-editor-pane')}
+            >
+              Jump to Editor
+            </button>
+          </div>
+        </div>
       </div>
 
       {showComparison && (
@@ -704,6 +791,11 @@ export function App({
           model={model}
           diagnostics={diagnostics}
           resetKey={editorResetKey}
+          activeTraceStepsByRuleId={activeTraceStepsByRuleId}
+          activeTraceRuleId={activeTraceRuleId}
+          isStale={isStale}
+          onVerifyNow={handleVerifyCurrent}
+          focusedRuleRequest={focusedRuleRequest}
           onChangeModel={handleChangeModel}
           onImportModel={handleImportModel}
           onDraftErrorChange={handleEditorDraftErrorChange}
@@ -731,6 +823,12 @@ export function App({
           onJumpToStep={handleJumpToStep}
           onApplyManualStep={handleApplyManualStep}
           onRestoreVerdictTrace={handleRestoreVerdictTrace}
+          onInspectRule={handleInspectRule}
+          candidateRepairRuleId={
+            activePreset === 'broken' && verifiedSnapshot?.result.status === 'VIOLATED'
+              ? 'publish_release_notes'
+              : undefined
+          }
         />
       </main>
     </div>

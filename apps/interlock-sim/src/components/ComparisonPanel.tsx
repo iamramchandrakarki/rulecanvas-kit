@@ -79,7 +79,7 @@ export function ComparisonPanel({
                 <tr key={row.preset.variant} data-changed={isSelected ? 'true' : 'false'}>
                   <td>
                     <strong>{row.preset.shortLabel}</strong>
-                    <div style={{ color: 'var(--color-muted)', marginTop: 2 }}>
+                    <div style={{ color: 'var(--color-ink-muted)', marginTop: 2 }}>
                       {row.preset.summary}
                     </div>
                   </td>

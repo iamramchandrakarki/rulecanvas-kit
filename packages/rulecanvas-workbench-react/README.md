@@ -1,6 +1,6 @@
 # @rulecanvas/workbench-react
 
-Reusable React 19 workbench controls, lifted integer draft store, snapshot-bound verification hook, verdict/assumption presentation components, accessible cross-workbench navigation, and race-safe preset URL routing for RuleCanvasKit (`v0.5.0`, `"private": true`).
+Reusable React 19 workbench controls, lifted integer draft store, snapshot-bound verification hook, verdict/assumption presentation components, accessible cross-workbench navigation, and race-safe preset URL routing for RuleCanvasKit (`v0.7.0`, `"private": true`).
 
 ## Dependency & Peer Contract
 
@@ -34,6 +34,19 @@ Built entry point: `./dist/index.js` (`./dist/index.d.ts`).
 
 - `useWorkbenchRoute`, `createWorkbenchHistoryController`, `readPresetFromSearch`, `buildCanonicalPresetUrl`
 - Types: `HistoryHostLike`, `HistoryStamp`, `NavigationApiLike`, `NavigationEntryLike`, `PendingDiscardPrompt`, `UseWorkbenchRouteOptions`, `WorkbenchHistoryController`, `WorkbenchHistoryControllerOptions`
+
+### SSR-Safe Theme & Shell Primitives
+
+- Theme hooks & helpers: `useWorkbenchTheme`, `resolveWorkbenchTheme`, `applyDocumentTheme`, `readStoredThemePreference`, `writeStoredThemePreference`, `isThemePreference`, `WORKBENCH_THEME_STORAGE_KEY`
+- Theme types: `ResolvedTheme`, `ThemePreference`, `ThemeStorageLike`, `UseWorkbenchThemeOptions`, `WorkbenchThemeController`
+- Shell components: `WorkbenchThemeSwitch`, `WorkbenchBrandMark`, `WorkbenchDiscardDialog`, `VerificationBoundsControl`, `WorkbenchGuideControl`
+- Shell types: `WorkbenchThemeSwitchProps`, `WorkbenchBrandMarkProps`, `WorkbenchDiscardDialogProps`, `VerificationBoundsControlProps`, `WorkbenchGuideControlProps`, `WorkbenchGuideGlossaryItem`
+
+### Selection & Tooltips
+- `WorkbenchSelect` (props `WorkbenchSelectProps`, items `WorkbenchSelectOption` / `WorkbenchSelectOptionGroup`): WAI-ARIA select-only combobox. Pair the trigger `id` with a `<label for>` as you would a native select. The listbox renders with `popover="manual"` in the top layer, so scrolling panes never clip it. Keyboard: arrows, `Home` / `End`, `PageUp` / `PageDown`, `Enter` / `Space`, `Tab`, `Escape`, and native-style type-ahead.
+- Pure keyboard helpers: `stepEnabledIndex`, `edgeEnabledIndex`, `resolveTypeahead`, `isTypeaheadKey`, `isTypeaheadActive`, `EMPTY_TYPEAHEAD`, `SELECT_PAGE_SIZE`, `SELECT_TYPEAHEAD_TIMEOUT_MS`.
+- `useWorkbenchTooltips`, `placeWorkbenchTooltip`, `WORKBENCH_TOOLTIP_HOST_ATTRIBUTE` and `WORKBENCH_TOOLTIP_DISMISSED_ATTRIBUTE`: keep `aria-hidden` hover/focus tooltips inside the viewport (horizontal clamp, flip above when needed) and make them dismissible with `Escape`. `WorkbenchThemeSwitch` and `WorkbenchGuideControl` accept `tooltipClassName` to use them instead of `title`.
+- The package ships no CSS. The components emit stable `rc-select-*` and `rc-tip` class names; both workbench apps style them in `src/styles/controls.css`.
 
 ## Quick Start
 

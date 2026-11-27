@@ -1,0 +1,143 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-26T12:45:00Z",
+  "title": "Design System: RuleCanvasKit",
+  "extensions": {
+    "colorMeta": {
+      "accent-cobalt": {
+        "role": "primary",
+        "displayName": "Precision Cobalt",
+        "canonical": "oklch(48% 0.175 256)",
+        "tonalRamp": [
+          "oklch(22% 0.08 256)",
+          "oklch(32% 0.13 256)",
+          "oklch(42% 0.165 256)",
+          "oklch(48% 0.175 256)",
+          "oklch(60% 0.16 254)",
+          "oklch(71% 0.145 252)",
+          "oklch(85% 0.075 252)",
+          "oklch(94.5% 0.028 254)"
+        ]
+      },
+      "verdict-verified": {
+        "role": "secondary",
+        "displayName": "Verified Emerald",
+        "canonical": "oklch(44% 0.135 152)",
+        "tonalRamp": [
+          "oklch(20% 0.05 152)",
+          "oklch(32% 0.10 152)",
+          "oklch(44% 0.135 152)",
+          "oklch(56% 0.14 152)",
+          "oklch(68% 0.14 152)",
+          "oklch(75% 0.135 152)",
+          "oklch(87% 0.07 152)",
+          "oklch(95.2% 0.03 152)"
+        ]
+      },
+      "verdict-violated": {
+        "role": "secondary",
+        "displayName": "Violation Crimson",
+        "canonical": "oklch(49% 0.185 25)",
+        "tonalRamp": [
+          "oklch(20% 0.065 25)",
+          "oklch(34% 0.13 25)",
+          "oklch(49% 0.185 25)",
+          "oklch(60% 0.18 25)",
+          "oklch(71% 0.165 25)",
+          "oklch(82% 0.10 25)",
+          "oklch(90% 0.055 25)",
+          "oklch(95.8% 0.028 25)"
+        ]
+      },
+      "paper-light": {
+        "role": "neutral",
+        "displayName": "Bench Paper",
+        "canonical": "oklch(98.4% 0.004 250)",
+        "tonalRamp": [
+          "oklch(15.5% 0.010 255)",
+          "oklch(21.5% 0.013 255)",
+          "oklch(34% 0.016 254)",
+          "oklch(50% 0.016 252)",
+          "oklch(67% 0.012 252)",
+          "oklch(88.5% 0.010 250)",
+          "oklch(96.4% 0.006 250)",
+          "oklch(99.4% 0.002 250)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Workbench Identity", "purpose": "Suite and application header wordmark." },
+      "headline": { "displayName": "Pane Heading", "purpose": "Primary workspace pane titles." },
+      "title": { "displayName": "Section Title", "purpose": "Hairline-separated section headers." },
+      "body": { "displayName": "Interface Body", "purpose": "Descriptions, scope disclosures, and guidance." },
+      "label": { "displayName": "Technical Proposition & Data", "purpose": "Formal identifiers, AST expressions, state values, and step counters." }
+    },
+    "shadows": [
+      { "name": "dialog-light", "value": "0 12px 32px -4px oklch(12% 0.02 255 / 0.24)", "purpose": "Interrupting modal confirmation dialogs in Light theme." },
+      { "name": "dialog-dark", "value": "0 16px 40px -4px oklch(0% 0 0 / 0.55)", "purpose": "Interrupting modal confirmation dialogs in Dark theme." }
+    ],
+    "motion": [
+      { "name": "ease-out", "value": "cubic-bezier(0.22, 1, 0.36, 1)", "purpose": "Responsive exponential ease-out for interactive feedback." },
+      { "name": "dur-fast", "value": "120ms", "purpose": "Hover, focus, and button press transitions." },
+      { "name": "dur-base", "value": "160ms", "purpose": "Pane and disclosure transitions." }
+    ],
+    "breakpoints": [
+      { "name": "xs", "value": "360px" },
+      { "name": "sm", "value": "640px" },
+      { "name": "md", "value": "768px" },
+      { "name": "lg", "value": "1024px" },
+      { "name": "xl", "value": "1440px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Verify Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Primary verification trigger across both workbenches.",
+      "html": "<button class=\"ds-btn-primary\" type=\"button\">Verify Policy</button>",
+      "css": ".ds-btn-primary { display: inline-flex; align-items: center; justify-content: center; height: 32px; padding: 6px 12px; font-family: 'IBM Plex Sans', sans-serif; font-size: 13px; font-weight: 500; color: oklch(99.4% 0.002 250); background: oklch(48% 0.175 256); border: 1px solid oklch(48% 0.175 256); border-radius: 3px; cursor: pointer; transition: background-color 120ms cubic-bezier(0.22, 1, 0.36, 1), transform 120ms cubic-bezier(0.22, 1, 0.36, 1); } .ds-btn-primary:hover { background: oklch(42% 0.175 256); } .ds-btn-primary:active { transform: scale(0.985); } .ds-btn-primary:focus-visible { outline: 2px solid oklch(48% 0.175 256); outline-offset: 2px; }"
+    },
+    {
+      "name": "Verdict Status Badge",
+      "kind": "chip",
+      "refersTo": "verdict-badge",
+      "description": "Engine-derived status indicator pairing symbol, hue, and explicit label.",
+      "html": "<span class=\"ds-badge-violated\"><span aria-hidden=\"true\">✗</span> VIOLATED</span>",
+      "css": ".ds-badge-violated { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; font-weight: 600; color: oklch(49% 0.185 25); background: oklch(95.8% 0.028 25); border: 1px solid oklch(80% 0.085 25); border-radius: 2px; }"
+    },
+    {
+      "name": "Numeric Bound Input",
+      "kind": "input",
+      "refersTo": "input-field",
+      "description": "Strict base-10 integer bound input with high-contrast 3:1 control border.",
+      "html": "<input class=\"ds-input-num\" type=\"text\" inputmode=\"numeric\" value=\"10000\" aria-label=\"maxStates\" />",
+      "css": ".ds-input-num { height: 32px; width: 84px; padding: 4px 8px; font-family: 'IBM Plex Mono', monospace; font-size: 12.5px; font-variant-numeric: tabular-nums; color: oklch(19.5% 0.018 255); background: oklch(99.4% 0.002 250); border: 1px solid oklch(59% 0.025 252); border-radius: 3px; } .ds-input-num:focus-visible { outline: 2px solid oklch(48% 0.175 256); outline-offset: 2px; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Formal Specification Bench",
+    "overview": "RuleCanvasKit is an engineering verification suite for discrete finite-state transition systems. Its visual language combines a high-density functional workbench architecture with restrained editorial typography, thin 1px structural rules, mathematical proposition clarity, and domain-honest state visualization.",
+    "keyCharacteristics": [
+      "Hairline-delimited panes (1px solid) instead of floating card stacks.",
+      "Self-hosted IBM Plex Sans for interface prose and IBM Plex Mono (tabular-nums) strictly for identifiers, expressions, state values, step counters, and bounds.",
+      "Semantic color reserved for primary verification actions and formal engine verdicts.",
+      "Persistent System default theme (with Light fallback) plus explicit Light and Dark overrides synchronized across workbenches."
+    ],
+    "rules": [
+      { "name": "The One-Signal Verdict Rule", "body": "Semantic green, amber, and crimson appear only when tied to an engine-derived verification verdict, invariant evaluation, transition guard state, or validation error.", "section": "colors" },
+      { "name": "The Monospace Discipline Rule", "body": "Use IBM Plex Mono exclusively for formal identifiers, expressions, state values, numeric bounds, and step indices.", "section": "typography" },
+      { "name": "The Zero-Card-Nesting Rule", "body": "Never place a bordered, shadowed card inside another bordered card. Separate peer sections inside a pane with 1px solid hairlines and whitespace.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do self-host only the required Latin WOFF2 subsets (400, 500, 600) of IBM Plex Sans and IBM Plex Mono alongside OFL.txt with zero external CDN requests.",
+      "Do pair every status color with an explicit symbol and text label and maintain >= 4.5:1 text contrast and >= 3:1 control border contrast in both Light and Dark themes.",
+      "Do bind every displayed verdict, trace step, schematic readout, and assumption list strictly to its verified snapshot."
+    ],
+    "donts": [
+      "Don't nest bordered cards inside cards, add decorative left-border accent stripes on rounded boxes, or use glowing shadows.",
+      "Don't place tracked-out uppercase eyebrows above headings or wrap static subtitles in pill badges.",
+      "Don't label an outdated replay snapshot as Live or conflate step-local invariant satisfaction with model-wide VERIFIED status."
+    ]
+  }
+}

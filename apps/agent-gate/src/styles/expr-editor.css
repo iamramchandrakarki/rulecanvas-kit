@@ -1,0 +1,473 @@
+/*
+ * Compact AST editor (shared by both workbench apps; byte-identical copies).
+ *
+ * Structure rendered by ExprEditor.tsx:
+ *   .rc-expr-node            one BoolExpr node (row + optional clause list)
+ *   .rc-expr-row             single editing row; comparisons render infix
+ *   .rc-expr-group-head      and/or header: toggle, operator, clause count, add
+ *   .rc-expr-clauses         indented clause list with tree connectors
+ *   .rc-expr-operand         inline ValueExpr editor (var / lit / add / sub)
+ */
+
+@keyframes rc-clause-in {
+  from {
+    transform: translateY(-3px);
+  }
+  to {
+    transform: none;
+  }
+}
+
+@keyframes rc-clauses-expand {
+  from {
+    clip-path: inset(0 0 100% 0);
+  }
+  to {
+    clip-path: inset(0 0 0 0);
+  }
+}
+
+.rc-expr-node {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.rc-expr-node-inline,
+.rc-expr-operand {
+  display: inline-flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.rc-expr-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px 6px;
+  min-width: 0;
+  min-height: var(--control-h-xs);
+}
+
+/* Dense controls inside the editor only */
+.rc-expr-node :is(.rc-select-trigger, input) {
+  min-height: var(--control-h-xs);
+  height: var(--control-h-xs);
+  padding: 1px 6px;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  border-radius: var(--radius-xs);
+}
+
+/* Compact select triggers size to their value; the chevron stays small and quiet */
+.rc-expr-node .rc-select-trigger {
+  gap: 4px;
+  padding: 1px 5px 1px 7px;
+  line-height: 1.2;
+}
+
+.rc-expr-node .rc-select-chevron {
+  width: 8px;
+  height: 8px;
+}
+
+@supports (field-sizing: content) {
+  .rc-expr-node input.rc-expr-str {
+    field-sizing: content;
+  }
+}
+
+.rc-expr-node input.rc-expr-str {
+  min-width: 9ch;
+  max-width: 28ch;
+}
+
+.rc-expr-node input.rc-expr-int {
+  width: 7ch;
+  min-width: 7ch;
+}
+
+.rc-expr-node .rc-select-trigger.rc-expr-var {
+  min-width: 10ch;
+}
+
+/* Operator selects carry the expression's structure: distinct AND vs OR vs NOT cues */
+.rc-expr-node .rc-select-trigger.rc-expr-op {
+  font-weight: 600;
+  color: var(--color-ink);
+  background-color: var(--color-surface-subtle);
+  min-width: 5ch;
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.rc-expr-node .rc-select-trigger.rc-expr-op[data-op='and'] {
+  color: var(--color-accent);
+  background-color: var(--color-accent-soft);
+  border-color: var(--color-accent-border);
+}
+
+.rc-expr-node .rc-select-trigger.rc-expr-op[data-op='or'] {
+  color: var(--color-warning);
+  background-color: var(--color-warning-soft);
+  border-color: var(--color-warning-border);
+}
+
+.rc-expr-node .rc-select-trigger.rc-expr-op[data-op='not'] {
+  color: var(--color-danger);
+  background-color: var(--color-danger-soft);
+  border-color: var(--color-danger-border);
+}
+
+/*
+ * Operands render as one bordered unit: [kind | value]. The kind picker is
+ * secondary metadata; the value carries the reading weight.
+ */
+.rc-expr-operand {
+  gap: 0;
+  border: 1px solid var(--color-control-border);
+  border-radius: var(--radius-sm);
+  background-color: var(--color-surface);
+  overflow: hidden;
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
+}
+
+/* The unit's focus ring lives in controls.css; the focused half gets an inset cue */
+
+.rc-expr-operand > :is(.rc-select-trigger, input),
+.rc-expr-operand > span > input {
+  border-color: transparent;
+  border-radius: 0;
+  background-color: transparent;
+}
+
+.rc-expr-node .rc-expr-operand > .rc-select-trigger.rc-expr-kind {
+  color: var(--color-ink-muted);
+  background-color: var(--color-surface-subtle);
+  border-right-color: var(--color-rule);
+  font-size: var(--text-2xs);
+}
+
+.rc-expr-operand > :is(.rc-select-trigger, input):focus-visible,
+.rc-expr-operand > span > input:focus-visible {
+  box-shadow: inset 0 -2px 0 var(--color-focus);
+  background-color: var(--color-accent-soft);
+}
+
+.rc-expr-operand > .rc-select-trigger[aria-expanded='true'] {
+  background-color: var(--color-accent-soft);
+}
+
+/* Nested arithmetic operands keep their own outline but sit flush inside the parent */
+.rc-expr-operand > .rc-expr-operand {
+  margin: 2px;
+}
+
+/* in-set literal type picker */
+.rc-expr-set-item > .rc-select-trigger.rc-expr-kind {
+  color: var(--color-ink-muted);
+  background-color: var(--color-surface-subtle);
+  font-size: var(--text-2xs);
+}
+
+.rc-expr-punct {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-ink-muted);
+  padding: 0 1px;
+  user-select: none;
+}
+
+.rc-expr-preview,
+.rc-expr-collapsed-preview {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  color: var(--color-code-ink);
+  overflow-wrap: anywhere;
+}
+
+.rc-expr-preview {
+  display: block;
+  padding: 6px 10px;
+  margin-bottom: 2px;
+  background-color: var(--color-code-bg);
+  border: 1px solid var(--color-code-border);
+  border-radius: var(--radius-sm);
+}
+
+.rc-expr-collapsed-preview {
+  flex: 1 1 16ch;
+  min-width: 0;
+  color: var(--color-ink-secondary);
+}
+
+/* and / or groups */
+.rc-expr-group-hint {
+  font-size: var(--text-2xs);
+  color: var(--color-ink-muted);
+  white-space: nowrap;
+}
+
+.rc-expr-group[data-op='or'] > .rc-expr-group-head > .rc-expr-group-hint {
+  color: var(--color-warning);
+  font-weight: 500;
+}
+
+.rc-expr-add.rc-expr-add {
+  min-height: var(--control-h-xs);
+  padding: 1px 8px;
+  font-size: var(--text-xs);
+  border-style: solid;
+  border-color: var(--color-rule-strong);
+  color: var(--color-ink-secondary);
+  background-color: var(--color-surface);
+}
+
+.rc-expr-clauses {
+  list-style: none;
+  margin: 0 0 0 11px;
+  padding: 3px 0 3px 14px;
+  border-left: 1.5px solid var(--color-rule);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  transition: border-color var(--dur-fast) var(--ease-out);
+}
+
+.rc-expr-clauses:not([hidden]) {
+  animation: rc-clauses-expand var(--dur-base) var(--ease-out) backwards;
+}
+
+.rc-expr-group[data-op='and'] > .rc-expr-clauses {
+  border-left-color: var(--color-accent-border);
+}
+
+.rc-expr-group[data-op='or'] > .rc-expr-clauses {
+  border-left-color: var(--color-warning-border);
+}
+
+.rc-expr-clauses:focus-within {
+  border-left-color: var(--color-accent);
+}
+
+.rc-expr-group[data-op='or'] > .rc-expr-clauses:focus-within {
+  border-left-color: var(--color-warning);
+}
+
+.rc-expr-clauses[hidden] {
+  display: none;
+}
+
+.rc-expr-group[data-depth-capped='true'] > .rc-expr-clauses {
+  margin-left: 2px;
+  padding-left: 6px;
+}
+
+.rc-expr-clause {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 6px;
+  padding: 3px 4px 3px 4px;
+  border-radius: var(--radius-sm);
+  animation: rc-clause-in var(--dur-base) var(--ease-out) backwards;
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+
+/* Tree connector from the group's guide line into each clause row */
+.rc-expr-clause::before {
+  content: '';
+  position: absolute;
+  left: -14px;
+  top: calc(var(--control-h-xs) / 2 + 3px);
+  width: 11px;
+  border-top: 1px solid var(--color-rule);
+  transition: border-color var(--dur-fast) var(--ease-out);
+}
+
+.rc-expr-group[data-op='or'] > .rc-expr-clauses > .rc-expr-clause::before {
+  border-top-color: var(--color-warning-border);
+}
+
+.rc-expr-clause:focus-within {
+  background-color: var(--color-surface-subtle);
+}
+
+.rc-expr-clause > .rc-expr-remove {
+  opacity: 0.65;
+}
+
+.rc-expr-clause:focus-within > .rc-expr-remove {
+  opacity: 1;
+}
+
+.rc-expr-children:not(.rc-expr-clauses) {
+  margin-left: 11px;
+  padding-left: 14px;
+  border-left: 1.5px solid var(--color-danger-border);
+}
+
+/* Icon buttons: remove clause / set value, collapse toggle */
+.rc-expr-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  margin-top: 2px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--color-ink-muted);
+  cursor: pointer;
+  transition:
+    background-color var(--dur-instant) var(--ease-out),
+    color var(--dur-instant) var(--ease-out),
+    border-color var(--dur-instant) var(--ease-out),
+    opacity var(--dur-fast) var(--ease-out),
+    transform var(--dur-instant) var(--ease-out);
+}
+
+.rc-expr-icon-btn:active {
+  transform: scale(0.94);
+}
+
+.rc-expr-icon-btn:focus-visible {
+  outline-offset: 0;
+}
+
+.rc-expr-toggle svg {
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.rc-expr-toggle[aria-expanded='true'] svg {
+  transform: rotate(90deg);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .rc-expr-icon-btn:hover {
+    color: var(--color-ink);
+    background-color: var(--color-surface-tint);
+  }
+
+  .rc-expr-remove:hover {
+    color: var(--color-danger);
+    background-color: var(--color-danger-soft);
+    border-color: var(--color-danger-border);
+  }
+
+  .rc-expr-add.rc-expr-add:hover {
+    border-color: var(--color-control-border);
+    color: var(--color-ink);
+  }
+
+  .rc-expr-clause:hover {
+    background-color: var(--color-surface-subtle);
+  }
+
+  .rc-expr-clause:hover > .rc-expr-remove {
+    opacity: 1;
+  }
+
+  .rc-expr-operand:hover {
+    border-color: var(--color-ink-secondary);
+  }
+}
+
+/* in-set values */
+.rc-expr-set {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.rc-expr-set-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 1px;
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-sm);
+  background-color: var(--color-surface);
+  animation: rc-clause-in var(--dur-base) var(--ease-out) backwards;
+}
+
+.rc-expr-set-item .rc-expr-icon-btn {
+  margin-top: 0;
+}
+
+/* Contextual validation */
+.rc-expr-node[data-invalid='true'] > .rc-expr-row :is(.rc-select-trigger, input, .rc-expr-operand),
+.rc-expr-node[data-invalid='true'] > .rc-expr-row .rc-expr-node-inline :is(.rc-select-trigger, .rc-expr-operand) {
+  border-color: var(--color-error);
+}
+
+.rc-expr-diagnostics {
+  list-style: none;
+  margin: 0;
+  padding: 3px 0 3px 8px;
+  border-left: 2px solid var(--color-error);
+  color: var(--color-error);
+  font-size: var(--text-2xs);
+  line-height: 1.4;
+}
+
+.rc-expr-diagnostics code {
+  font-family: var(--font-mono);
+  color: var(--color-ink-muted);
+  overflow-wrap: anywhere;
+}
+
+@media (pointer: coarse), (max-width: 768px) {
+  .rc-expr-node :is(.rc-select-trigger, input) {
+    min-height: 36px;
+    height: 36px;
+  }
+
+  .rc-expr-icon-btn {
+    width: 36px;
+    height: 36px;
+    margin-top: 0;
+  }
+
+  .rc-expr-add.rc-expr-add {
+    min-height: 36px;
+  }
+
+  .rc-expr-clause::before {
+    top: 19px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rc-expr-clause,
+  .rc-expr-set-item,
+  .rc-expr-clauses:not([hidden]) {
+    animation: none;
+  }
+
+  .rc-expr-toggle svg,
+  .rc-expr-icon-btn {
+    transition: none;
+  }
+
+  .rc-expr-icon-btn:active {
+    transform: none;
+  }
+}

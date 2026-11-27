@@ -109,7 +109,10 @@ function assertClauseTreeConsistency(clause: GuardClauseExplanation): void {
 function assertBidirectionalLabels(html: string): void {
   const labelForMatches = [...html.matchAll(/<label\b[^>]*\bfor="([^"]+)"/g)].map((m) => m[1]!);
   const forSet = new Set<string>(labelForMatches);
-  const controlMatches = [...html.matchAll(/<(input|select|textarea)\b[^>]*>/g)];
+  // Form controls plus select-only combobox triggers (WorkbenchSelect renders a button)
+  const controlMatches = [
+    ...html.matchAll(/<(input|select|textarea)\b[^>]*>|<button\b[^>]*\brole="combobox"[^>]*>/g),
+  ];
   const idsSeen = new Set<string>();
 
   for (const match of controlMatches) {
@@ -892,7 +895,7 @@ describe('InterlockSim workbench architecture, semantics, security, and UI', () 
     ).toBe(true);
   });
 
-  it('renders accessible schematic, operator console, disclaimers, 3 tabs, and bidirectional form labels', () => {
+  it('renders accessible schematic, operator console, disclaimers, 4 unified tabs, and bidirectional form labels', () => {
     const brokenHtml = renderToStaticMarkup(createElement(App, { initialVariant: 'broken' }));
     expect(brokenHtml).toContain('InterlockSim');
     expect(brokenHtml).toContain('Not IEC 61508 / SIL Certified');
@@ -910,9 +913,13 @@ describe('InterlockSim workbench architecture, semantics, security, and UI', () 
     expect(brokenHtml).toContain('purgeCycles');
     expect(brokenHtml).toContain('maintenanceOverride');
 
-    // All 3 role="tabpanel" sections remain mounted with tabIndex="0"
-    expect((brokenHtml.match(/role="tabpanel"/g) ?? []).length).toBe(3);
-    expect((brokenHtml.match(/role="tabpanel"[^>]*tabindex="0"/g) ?? []).length).toBe(3);
+    // All 4 unified role="tabpanel" sections remain mounted with tabIndex="0"
+    expect((brokenHtml.match(/role="tabpanel"/g) ?? []).length).toBe(4);
+    expect((brokenHtml.match(/role="tabpanel"[^>]*tabindex="0"/g) ?? []).length).toBe(4);
+    expect(brokenHtml).toContain('id="is-tab-trace-guard"');
+    expect(brokenHtml).toContain('id="is-tab-state-invariants"');
+    expect(brokenHtml).toContain('id="is-tab-assumptions"');
+    expect(brokenHtml).toContain('id="is-tab-json"');
 
     // Incompatible Boolean-only model shows UNAVAILABLE schematic, UNEVALUATED PREVIEW, and no bogus Guided Repair
     const booleanOnlyModel: TransitionSystemModel = {
@@ -968,7 +975,7 @@ describe('InterlockSim workbench architecture, semantics, security, and UI', () 
         modeLabel: 'Manual Simulation',
       }),
     );
-    expect(safeNonAirlockSchematic).toContain('INVARIANTS SAFE (1)');
+    expect(safeNonAirlockSchematic).toContain('INVARIANTS HOLD AT STEP 0 (1)');
     expect(safeNonAirlockSchematic).not.toContain('SEAL &amp; UV SAFE');
 
     const incompatEditorHtml = renderToStaticMarkup(
@@ -1079,6 +1086,7 @@ describe('InterlockSim workbench architecture, semantics, security, and UI', () 
         onImportModel: () => {},
       }),
     );
+    expect((editorHtml.match(/role="tabpanel"/g) ?? []).length).toBe(3);
     assertBidirectionalLabels(editorHtml);
 
     const draftStore: LiftedIntDraftStore = {
@@ -1160,9 +1168,9 @@ describe('InterlockSim workbench architecture, semantics, security, and UI', () 
         modeLabel: 'Trace Replay',
       }),
     );
-    expect(spoofedSchematicHtml).toContain('INVARIANTS SAFE (2)');
+    expect(spoofedSchematicHtml).toContain('INVARIANTS HOLD AT STEP 0 (2)');
     expect(spoofedSchematicHtml).not.toContain('SEAL &amp; UV SAFE');
-    expect(spoofedSchematicHtml).toContain('GOAL REACHED (goal_safe_lab_entry)');
+    expect(spoofedSchematicHtml).toContain('GOAL AT STEP 0: REACHED (goal_safe_lab_entry)');
     expect(spoofedSchematicHtml).not.toContain('GOAL REACHED: LAB ENTRY');
     expect(spoofedSchematicHtml).toContain('UNAVAILABLE');
 
@@ -1480,5 +1488,78 @@ describe('InterlockSim workbench architecture, semantics, security, and UI', () 
       const content = readFileSync(path.join(appDir, rel), 'utf8');
       expect(content).not.toMatch(/@rulecanvas\/agent-gate|apps\/agent-gate/);
     }
+  });
+
+  it('surfaces snapshot freshness on AirlockSchematic, removes ASCII/boolean leaks, and ships Light/Dark WOFF2 tokens', () => {
+    const staleSchematicHtml = renderToStaticMarkup(
+      createElement(AirlockSchematic, {
+        schema: bsl3AirlockFixedModel.schema,
+        state: bsl3AirlockFixedModel.initialState,
+        changedVars: [],
+        violatedInvariantIds: [],
+        evaluatedInvariantIds: bsl3AirlockFixedModel.invariants.map((i) => i.id),
+        invariants: bsl3AirlockFixedModel.invariants,
+        goal: bsl3AirlockFixedModel.goal,
+        isEvaluated: true,
+        isStale: true,
+        snapshotLabel: 'Principled Fix',
+        goalReached: false,
+        stepNumber: 0,
+        modeLabel: 'Trace Replay',
+      }),
+    );
+    expect(staleSchematicHtml).toContain('OUTDATED SNAPSHOT');
+    expect(staleSchematicHtml).toContain('Outdated snapshot &quot;Principled Fix&quot; at Step 0');
+    expect(staleSchematicHtml).not.toContain('Live vessel state');
+    expect(staleSchematicHtml).toContain('INVARIANTS HOLD AT STEP 0');
+    expect(staleSchematicHtml).toContain('GOAL AT STEP 0: NOT REACHED');
+    expect(staleSchematicHtml).not.toContain('OCCUPIED (true)');
+    expect(staleSchematicHtml).not.toContain('EMPTY (false)');
+    expect(staleSchematicHtml).not.toContain('[||]');
+    expect(staleSchematicHtml).toContain('is-schematic-compact');
+
+    const appHtml = renderToStaticMarkup(createElement(App, { initialVariant: 'broken' }));
+    expect(appHtml).toContain('Inspect guard clauses for');
+    expect(appHtml).toContain('Candidate Guard Repair Available for open_inner_door');
+    expect(appHtml).toContain('aria-label="Color theme"');
+
+    const appDir = path.resolve(import.meta.dirname, '..');
+    const tokensCss = readFileSync(path.join(appDir, 'src/styles/tokens.css'), 'utf8');
+    expect(tokensCss).toContain("font-family: 'IBM Plex Sans'");
+    expect(tokensCss).toContain("font-family: 'IBM Plex Mono'");
+    expect(tokensCss).toContain('.woff2');
+    expect(tokensCss).not.toMatch(/https?:\/\//i);
+    expect(tokensCss).toContain('color-scheme: light;');
+    expect(tokensCss).toContain('color-scheme: dark;');
+
+    // Custom schematic badges preserve explicit step qualifier on non-canonical models
+    const customSchematicHtml = renderToStaticMarkup(
+      createElement(AirlockSchematic, {
+        schema: { flag: { kind: 'boolean' } },
+        state: { flag: false },
+        changedVars: [],
+        violatedInvariantIds: [],
+        evaluatedInvariantIds: ['inv_custom'],
+        invariants: [
+          {
+            id: 'inv_custom',
+            label: 'Custom invariant',
+            holds: { op: 'not', arg: { op: 'var', name: 'flag' } },
+          },
+        ],
+        goal: {
+          id: 'custom_goal',
+          label: 'Custom goal',
+          reached: { op: 'lit', value: true },
+        },
+        isEvaluated: true,
+        isStale: false,
+        goalReached: true,
+        stepNumber: 2,
+        modeLabel: 'Manual Simulation',
+      }),
+    );
+    expect(customSchematicHtml).toContain('INVARIANTS HOLD AT STEP 2 (1)');
+    expect(customSchematicHtml).toContain('GOAL AT STEP 2: REACHED (custom_goal)');
   });
 });
