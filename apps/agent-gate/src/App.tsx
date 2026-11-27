@@ -18,6 +18,7 @@ import {
   type ReplaySession,
 } from '@rulecanvas/ui';
 import {
+  WorkbenchBrandLink,
   WorkbenchBrandMark,
   WorkbenchDiscardDialog,
   WorkbenchGuideControl,
@@ -101,6 +102,14 @@ const ALLOWED_AGENT_GATE_PRESETS: readonly ApprovalLaunderingVariant[] = [
   'vacuous-fix',
   'principled-fix',
 ];
+
+/** Landing page for the static site; `../` from this app by default, overridable at build time. */
+const HUB_HREF: string =
+  typeof import.meta !== 'undefined' &&
+  typeof (import.meta as { env?: Record<string, string | undefined> }).env?.['VITE_HUB_URL'] === 'string'
+    ? (import.meta as { env: Record<string, string> }).env['VITE_HUB_URL']!
+    : '../';
+const HUB_LABEL = 'RuleCanvasKit hub';
 
 const WORKBENCH_NAV_LINKS: readonly WorkbenchNavLink[] = [
   {
@@ -575,8 +584,21 @@ export function App({
       <header className="ag-topbar">
         <div className="ag-brand">
           <h1 className="ag-brand-suite">
-            <WorkbenchBrandMark className="ag-brand-icon" />
-            <span>RuleCanvasKit</span>
+            <WorkbenchBrandLink
+              href={HUB_HREF}
+              allowedPrefix={ALLOWED_NAV_PREFIX}
+              className="ag-brand-link"
+              title="Back to the RuleCanvasKit hub"
+              onNavigate={(href, event) => {
+                if (isDirtyEditor) {
+                  event.preventDefault();
+                  requestLinkNavigation(href, HUB_LABEL);
+                }
+              }}
+            >
+              <WorkbenchBrandMark className="ag-brand-icon" />
+              <span>RuleCanvasKit</span>
+            </WorkbenchBrandLink>
             <span className="ag-visually-hidden"> AgentGate</span>
           </h1>
           <WorkbenchNavigation
