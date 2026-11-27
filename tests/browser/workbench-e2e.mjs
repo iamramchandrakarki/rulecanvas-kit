@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { runHubChecks } from './hub-checks.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const AGENT_GATE_DIST = path.join(REPO_ROOT, 'apps/agent-gate/dist');
@@ -445,11 +446,6 @@ function startStaticSubpathServer() {
     { prefix: '/suite/agent-gate/', dir: AGENT_GATE_DIST },
     { prefix: '/suite/interlock-sim/', dir: INTERLOCK_SIM_DIST },
   ];
-  if (process.env.BOOKING_FIXTURE_DIST) {
-    const dir = path.resolve(process.env.BOOKING_FIXTURE_DIST);
-    assert(existsSync(path.join(dir, 'index.html')), 'Packed booking production fixture is missing');
-    mounts.push({ prefix: '/booking-demo/', dir });
-  }
 
   const server = createServer((req, res) => {
     const reqUrl = new URL(req.url ?? '/', 'http://127.0.0.1');
@@ -533,9 +529,16 @@ try {
     checkCompactAstEditor(context, baseUrl),
     checkDesktopWorkspace(browser, baseUrl),
     checkSharedSelect(browser, baseUrl, AxeBuilder),
+    runHubChecks({
+      browser,
+      AxeBuilder,
+      screenshotDir: SCREENSHOT_DIR,
+      starterDist: process.env.STARTER_FIXTURE_DIST || process.env.BOOKING_FIXTURE_DIST || null,
+    }),
   ]);
   const guardDraftFailures = guardDraftChecks.filter((check) => check.status === 'rejected');
   assert(guardDraftFailures.length === 0, guardDraftFailures.map((check) => check.reason.message).join('\n'));
+  const hubReport = guardDraftChecks.at(-1).value;
 
   const page = await context.newPage();
 
@@ -1850,19 +1853,6 @@ try {
   assert((await reloadedJson.inputValue()) === dirtyJson, 'Pre-reload preset Back lost the draft');
   await reloadPage.close();
 
-  // Exercise the module worker built from the isolated tarball installation.
-  if (process.env.BOOKING_FIXTURE_DIST) {
-    await page.goto(`${baseUrl}/booking-demo/`, { waitUntil: 'networkidle' });
-    await page.getByRole('heading', { name: 'Room Booking Fixture' }).waitFor();
-    assert(
-      (await page.locator('main').getAttribute('data-export-ok')) === 'true',
-      'Packed booking fixture could not export its model',
-    );
-    await page.getByRole('button', { name: 'Verify Booking Model' }).click();
-    await page.locator('main[data-verification-revision="1"][data-execution-mode="worker"]').waitFor();
-    await page.locator('main [data-status="VERIFIED"]').first().waitFor();
-  }
-
   assert(consoleErrors.length === 0, `Console errors: ${consoleErrors.join('; ')}`);
   assert(pageErrors.length === 0, `Page errors: ${pageErrors.join('; ')}`);
   assert(httpErrors.length === 0, `HTTP errors: ${httpErrors.join('; ')}`);
@@ -1879,7 +1869,9 @@ try {
         pageErrors: 0,
         httpErrors: 0,
         axeCriticalSeriousViolations: 0,
-        axeAudits,
+        axeAudits: [...axeAudits, ...hubReport.audits],
+        hubBasePaths: ['/', '/rulecanvas-kit/'],
+        starterChecked: hubReport.starterChecked,
         screenshotDir: SCREENSHOT_DIR,
         screenshots: [
           'agent-gate-desktop-1280.png',
@@ -1894,6 +1886,7 @@ try {
           'interlock-sim-tablet-768.png',
           'interlock-sim-mobile-390.png',
           'interlock-sim-mobile-375.png',
+          ...hubReport.screenshots,
         ],
       },
       null,
