@@ -314,7 +314,8 @@ function statsRespectBounds(stats: VerifyStats, options: VerifyOptions): boolean
     stats.maxDepthReached >= 0 &&
     stats.maxDepthReached <= options.maxDepth &&
     stats.transitionsEvaluated >= 0 &&
-    stats.deadlockStatesFound >= 0
+    stats.deadlockStatesFound >= 0 &&
+    stats.deadlockStatesFound <= stats.statesExplored
   );
 }
 
@@ -717,6 +718,17 @@ export function inspectVerificationSnapshot(snapshot: unknown): InspectedVerific
       if (steps === null) {
         return failure('INVALID_RESULT', 'result.trace', 'VIOLATED trace is malformed.');
       }
+      if (
+        steps.length > statsResult.stats.maxDepthReached ||
+        steps.length !== statsResult.stats.maxDepthReached ||
+        statsResult.stats.maxDepthReached > options.maxDepth
+      ) {
+        return failure(
+          'TRACE_BOUNDS_MISMATCH',
+          'result.trace',
+          'VIOLATED trace length must equal stats.maxDepthReached within options.maxDepth.',
+        );
+      }
       const replay = replayCanonicalTrace(model, steps);
       if ('ok' in replay && replay.ok === false) {
         return replay;
@@ -843,7 +855,7 @@ export function inspectVerificationSnapshot(snapshot: unknown): InspectedVerific
         frontierProp.kind !== 'value' ||
         typeof frontierProp.value !== 'number' ||
         !Number.isSafeInteger(frontierProp.value) ||
-        frontierProp.value < 0 ||
+        frontierProp.value < 1 ||
         frontierProp.value > statsResult.stats.statesExplored
       ) {
         return failure('INVALID_RESULT', 'result', 'INCONCLUSIVE limit metadata is malformed.');
@@ -851,6 +863,16 @@ export function inspectVerificationSnapshot(snapshot: unknown): InspectedVerific
 
       const completedDepth = depthProp.value;
       const frontierRemaining = frontierProp.value;
+      const depthRelationOk =
+        completedDepth < statsResult.stats.maxDepthReached ||
+        (statsResult.stats.maxDepthReached === 0 && completedDepth === -1);
+      if (!depthRelationOk) {
+        return failure(
+          'INCONCLUSIVE_BOUNDS_MISMATCH',
+          'result.completedDepth',
+          'INCONCLUSIVE completedDepth is inconsistent with stats.maxDepthReached.',
+        );
+      }
       if (reasonProp.value === 'MAX_DEPTH') {
         if (
           completedDepth !== options.maxDepth - 1 ||
@@ -993,6 +1015,16 @@ export function inspectVerificationSnapshot(snapshot: unknown): InspectedVerific
       const steps = readTraceSteps(traceProp.value);
       if (steps === null) {
         return failure('INVALID_RESULT', 'result.trace', 'Runtime prefix trace is malformed.');
+      }
+      if (
+        steps.length > statsResult.stats.maxDepthReached ||
+        statsResult.stats.maxDepthReached > options.maxDepth
+      ) {
+        return failure(
+          'TRACE_BOUNDS_MISMATCH',
+          'result.trace',
+          'Runtime prefix trace length exceeds stats.maxDepthReached or options.maxDepth.',
+        );
       }
       const replay = replayCanonicalTrace(model, steps);
       if ('ok' in replay && replay.ok === false) {

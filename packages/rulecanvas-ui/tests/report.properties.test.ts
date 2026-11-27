@@ -681,4 +681,72 @@ describe('@rulecanvas/ui verification report', () => {
       );
     }, 30_000);
   });
+
+  describe('Snapshot bounds alignment with worker transport validation', () => {
+    it('rejects VIOLATED trace length mismatches, runtime prefix overflows, excess deadlocks, and zero-frontier INCONCLUSIVE', () => {
+      const violatedModel = longTraceModel();
+      const violatedOpts = { maxStates: 500, maxDepth: 20 };
+      const violatedRes = verifyModel(violatedModel, violatedOpts);
+      expect(violatedRes.status).toBe('VIOLATED');
+      if (violatedRes.status !== 'VIOLATED') return;
+
+      const mismatchDepth = buildVerificationReportFromSnapshot({
+        model: violatedModel,
+        options: violatedOpts,
+        result: {
+          ...violatedRes,
+          stats: { ...violatedRes.stats, maxDepthReached: violatedRes.trace.length + 1 },
+        },
+      });
+      expect(mismatchDepth.ok).toBe(false);
+
+      const excessDeadlocks = buildVerificationReportFromSnapshot({
+        model: violatedModel,
+        options: violatedOpts,
+        result: {
+          ...violatedRes,
+          stats: {
+            ...violatedRes.stats,
+            deadlockStatesFound: violatedRes.stats.statesExplored + 1,
+          },
+        },
+      });
+      expect(excessDeadlocks.ok).toBe(false);
+
+      const oodModel = runtimeModel();
+      const oodOpts = { maxStates: 100, maxDepth: 20 };
+      const oodRes = verifyModel(oodModel, oodOpts);
+      expect(oodRes.status).toBe('INVALID');
+      if (oodRes.status !== 'INVALID' || oodRes.stats === undefined || oodRes.trace === undefined) return;
+      expect(oodRes.trace.length).toBeGreaterThan(0);
+      const oodOverflow = buildVerificationReportFromSnapshot({
+        model: oodModel,
+        options: oodOpts,
+        result: {
+          ...oodRes,
+          stats: { ...oodRes.stats, maxDepthReached: oodRes.trace.length - 1 },
+        },
+      });
+      expect(oodOverflow.ok).toBe(false);
+
+      const incOpts = { maxStates: 3, maxDepth: 20 };
+      const incRes = verifyModel(violatedModel, incOpts);
+      expect(incRes.status).toBe('INCONCLUSIVE');
+      if (incRes.status !== 'INCONCLUSIVE') return;
+
+      const zeroFrontier = buildVerificationReportFromSnapshot({
+        model: violatedModel,
+        options: incOpts,
+        result: { ...incRes, frontierRemaining: 0 },
+      });
+      expect(zeroFrontier.ok).toBe(false);
+
+      const badCompletedDepth = buildVerificationReportFromSnapshot({
+        model: violatedModel,
+        options: incOpts,
+        result: { ...incRes, completedDepth: incRes.stats.maxDepthReached },
+      });
+      expect(badCompletedDepth.ok).toBe(false);
+    });
+  });
 });
