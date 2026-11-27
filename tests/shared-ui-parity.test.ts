@@ -23,3 +23,24 @@ describe('shared design tokens', () => {
     expect(colorNames(systemDark)).toEqual(colorNames(light));
   });
 });
+
+describe('shared compact AST editor', () => {
+  const read = (app: string, rel: string) =>
+    readFileSync(path.join(repoRoot, 'apps', app, rel), 'utf8');
+
+  it('ships one stylesheet for both workbench apps', () => {
+    const rel = 'src/styles/expr-editor.css';
+    expect(read('interlock-sim', rel)).toBe(read('agent-gate', rel));
+  });
+
+  it('keeps both ExprEditor copies identical apart from app class names and helper import', () => {
+    const rel = 'src/components/ExprEditor.tsx';
+    const normalize = (src: string) =>
+      src
+        .replace(/'\.\.\/(model-editor|model-inspector)\.js'/g, "'../model-helpers.js'")
+        .replace(/'(ag|is)-([a-z-]+)/g, "'app-$2")
+        .replace(/ (ag|is)-([a-z-]+)/g, ' app-$2')
+        .replace(/app-input-mono/g, 'app-mono');
+    expect(normalize(read('interlock-sim', rel))).toBe(normalize(read('agent-gate', rel)));
+  });
+});

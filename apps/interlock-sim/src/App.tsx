@@ -22,6 +22,7 @@ import {
   WorkbenchDiscardDialog,
   WorkbenchNavigation,
   WorkbenchThemeSwitch,
+  VerificationBoundsControl,
   readPresetFromSearch,
   useVerificationSnapshot,
   useWorkbenchRoute,
@@ -596,31 +597,20 @@ export function App({
             </select>
           </div>
 
-          <div className="is-control-field">
-            <label htmlFor="max-states-input">maxStates</label>
-            <input
-              id="max-states-input"
-              type="text"
-              inputMode="numeric"
-              className="is-input is-input-num"
-              aria-invalid={maxStatesInvalid ? 'true' : undefined}
-              value={maxStatesText}
-              onChange={(e) => handleBoundsEdit('maxStates', e.target.value)}
-            />
-          </div>
-
-          <div className="is-control-field">
-            <label htmlFor="max-depth-input">maxDepth</label>
-            <input
-              id="max-depth-input"
-              type="text"
-              inputMode="numeric"
-              className="is-input is-input-num"
-              aria-invalid={maxDepthInvalid ? 'true' : undefined}
-              value={maxDepthText}
-              onChange={(e) => handleBoundsEdit('maxDepth', e.target.value)}
-            />
-          </div>
+          <VerificationBoundsControl
+            maxStatesText={maxStatesText}
+            maxDepthText={maxDepthText}
+            maxStatesInvalid={maxStatesInvalid}
+            maxDepthInvalid={maxDepthInvalid}
+            onEdit={handleBoundsEdit}
+            className="is-bounds"
+            triggerClassName="is-btn is-bounds-trigger"
+            panelClassName="is-bounds-panel"
+            fieldClassName="is-control-field"
+            inputClassName="is-input is-input-num"
+            hintClassName="is-bounds-hint"
+            visuallyHiddenClassName="is-visually-hidden"
+          />
 
           {isRunning ? (
             <span className="is-badge" data-tone="running" role="status">
@@ -806,7 +796,7 @@ export function App({
             <section className="is-pane" aria-label="Operator simulation console">
               <div className="is-pane-header">
                 <div>
-                  <h2 className="is-pane-title">Operator Simulation Console</h2>
+                  <h2 className="is-pane-title">Operator Console</h2>
                   <p className="is-pane-subtitle">
                     {isRunning
                       ? 'Verification in progress. Transition actuators unlock once the snapshot settles.'

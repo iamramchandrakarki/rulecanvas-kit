@@ -1,6 +1,6 @@
 import type { TransitionSystemModel } from '@rulecanvas/core';
 import { formatUpdateAssignment, type ReplaySession } from '@rulecanvas/ui';
-import { explainRuleGuards } from '../guard-explainer.js';
+import { explainRuleGuards, type GuardClauseExplanation } from '../guard-explainer.js';
 
 export interface OperatorConsoleProps {
   readonly replaySession: ReplaySession;
@@ -18,40 +18,32 @@ export interface OperatorConsoleProps {
   readonly onInspectRule?: ((ruleId: string) => void) | undefined;
 }
 
-function renderClauseNodes(
-  clause: {
-    readonly op: string;
-    readonly expressionText: string;
-    readonly actualValue: boolean;
-    readonly expectedValue: boolean;
-    readonly satisfied: boolean;
-    readonly summary: string;
-    readonly children: readonly {
-      readonly op: string;
-      readonly expressionText: string;
-      readonly actualValue: boolean;
-      readonly expectedValue: boolean;
-      readonly satisfied: boolean;
-      readonly summary: string;
-      readonly children: readonly unknown[];
-    }[];
-  },
-  keyPrefix: string,
-) {
+function ClauseNode({ clause }: { readonly clause: GuardClauseExplanation }) {
   return (
-    <li key={keyPrefix}>
-      <span>
-        [{clause.satisfied ? 'PASS' : 'BLOCK'}] <code>{clause.expressionText}</code>:{' '}
-        {clause.summary}
-      </span>
+    <li data-satisfied={clause.satisfied ? 'true' : 'false'}>
+      <span className="is-clause-status">
+        <span aria-hidden="true">{clause.satisfied ? '✓' : '✗'}</span>{' '}
+        {clause.satisfied ? 'pass' : 'blocks'}
+      </span>{' '}
+      <code>{clause.expressionText}</code>
+      <span className="is-clause-summary">{clause.summary}</span>
       {clause.children.length > 0 && (
         <ul className="is-clause-tree">
-          {clause.children.map((child, idx) =>
-            renderClauseNodes(child as typeof clause, `${keyPrefix}-${idx}`),
-          )}
+          {clause.children.map((child, idx) => (
+            <ClauseNode key={`${child.expressionText}-${idx}`} clause={child} />
+          ))}
         </ul>
       )}
     </li>
+  );
+}
+
+function LockGlyph() {
+  return (
+    <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true" focusable="false">
+      <rect x="2.5" y="5.25" width="7" height="5.25" rx="0.75" stroke="currentColor" strokeWidth="1.3" />
+      <path d="M4 5.25V3.75a2 2 0 0 1 4 0v1.5" stroke="currentColor" strokeWidth="1.3" />
+    </svg>
   );
 }
 
@@ -78,9 +70,9 @@ export function OperatorConsole({
   const blockedExplanations = explanations.filter((item) => !item.enabled);
 
   return (
-    <section className="is-pane" aria-label="Operator simulation console">
+    <section className="is-pane is-console" aria-label="Operator simulation console">
       <div className="is-pane-header">
-        <h2 className="is-pane-title">Operator Simulation Console</h2>
+        <h2 className="is-pane-title">Operator Console</h2>
         <span className="is-meta-inline">
           {replaySession.mode === 'trace' ? 'Mode: Trace Replay' : 'Mode: Manual Simulation'}
         </span>
@@ -155,10 +147,11 @@ export function OperatorConsole({
       )}
 
       <div className="is-operator-actions">
-        <div className="is-section">
+        <div className="is-section is-actions-enabled">
           <div className="is-section-header">
             <h3 className="is-section-title">
-              Enabled Actions ({enabledExplanations.length} of {explanations.length})
+              Enabled actions ({enabledExplanations.length} of {explanations.length}){' '}
+              <span className="is-hint">executing one advances the simulation by one step</span>
             </h3>
           </div>
 
@@ -168,7 +161,7 @@ export function OperatorConsole({
               <p>Zero interlock transitions are enabled in the current airlock state.</p>
             </div>
           ) : (
-            <div className="is-transition-grid">
+            <ul className="is-transition-grid">
               {enabledExplanations.map((item) => {
                 const rule = rulesById.get(item.ruleId);
                 const updatesText =
@@ -176,68 +169,75 @@ export function OperatorConsole({
                     ? rule.updates.map((upd) => formatUpdateAssignment(upd)).join('; ')
                     : '';
                 return (
-                  <button
-                    key={item.ruleId}
-                    type="button"
-                    className="is-actuator-btn"
-                    data-rule-id={item.ruleId}
-                    onClick={() => onApplyManualStep(item.ruleId)}
-                  >
-                    <div className="is-actuator-head">
-                      <span className="is-actuator-id">{item.ruleId}</span>
-                      <span className="is-badge" data-tone="success">
-                        <span aria-hidden="true">✓</span> READY
+                  <li key={item.ruleId}>
+                    <button
+                      type="button"
+                      className="is-actuator-btn"
+                      data-rule-id={item.ruleId}
+                      onClick={() => onApplyManualStep(item.ruleId)}
+                    >
+                      <span className="is-actuator-head">
+                        <span className="is-actuator-id">
+                          <span className="is-visually-hidden">Execute </span>
+                          {item.ruleId}
+                        </span>
+                        <span className="is-badge" data-tone="success">
+                          <span aria-hidden="true">✓</span> READY
+                        </span>
                       </span>
-                    </div>
-                    <span className="is-actuator-label">{item.label}</span>
-                    {updatesText.length > 0 && (
-                      <span className="is-actuator-effect">{updatesText}</span>
-                    )}
-                  </button>
+                      <span className="is-actuator-label">{item.label}</span>
+                      {updatesText.length > 0 && (
+                        <span className="is-actuator-effect">
+                          <span className="is-hint" aria-hidden="true">
+                            sets{' '}
+                          </span>
+                          {updatesText}
+                        </span>
+                      )}
+                    </button>
+                  </li>
                 );
               })}
-            </div>
+            </ul>
           )}
         </div>
 
-        <div className="is-section">
-          <div className="is-section-header">
+        <details className="is-section is-actions-locked" open>
+          <summary className="is-section-header">
             <h3 className="is-section-title">
-              Locked / Interlocked Actions ({blockedExplanations.length})
+              Locked actions ({blockedExplanations.length}){' '}
+              <span className="is-hint">guard not satisfied in this state</span>
             </h3>
-          </div>
+          </summary>
 
-          <div className="is-blocked-list">
+          <ul className="is-blocked-list">
             {blockedExplanations.map((item) => (
-              <div key={item.ruleId} className="is-blocked-row" data-blocked-rule-id={item.ruleId}>
-                <div className="is-actuator-head">
-                  <span className="is-mono" style={{ fontSize: 12, fontWeight: 600 }}>
-                    {item.ruleId}
+              <li key={item.ruleId} className="is-blocked-row" data-blocked-rule-id={item.ruleId}>
+                <div className="is-blocked-head">
+                  <span className="is-blocked-status" title="Locked: guard not satisfied">
+                    <LockGlyph />
+                    <span className="is-visually-hidden">Locked: </span>
                   </span>
-                  <div className="is-inline-actions">
-                    {onInspectRule !== undefined &&
-                      (draftRuleIds === undefined || draftRuleIds.has(item.ruleId)) && (
-                        <button
-                          type="button"
-                          className="is-btn is-btn-sm is-guard-jump"
-                          aria-label={
-                            isStale
-                              ? `Edit draft guard for ${item.ruleId} in Guard Inspector`
-                              : `Edit guard for ${item.ruleId} in Guard Inspector`
-                          }
-                          onClick={() => onInspectRule(item.ruleId)}
-                        >
-                          {isStale ? 'Edit draft guard' : 'Edit guard'}
-                        </button>
-                      )}
-                    <span className="is-badge" data-tone="warning">
-                      <span aria-hidden="true">×</span> LOCKED
-                    </span>
-                  </div>
+                  <span className="is-blocked-id">{item.ruleId}</span>
+                  <span className="is-blocked-label">{item.label}</span>
+                  {onInspectRule !== undefined &&
+                    (draftRuleIds === undefined || draftRuleIds.has(item.ruleId)) && (
+                      <button
+                        type="button"
+                        className="is-btn is-btn-xs is-guard-jump"
+                        aria-label={
+                          isStale
+                            ? `Edit draft guard for ${item.ruleId} in Guard Inspector`
+                            : `Edit guard for ${item.ruleId} in Guard Inspector`
+                        }
+                        onClick={() => onInspectRule(item.ruleId)}
+                      >
+                        {isStale ? 'Edit draft guard' : 'Edit guard'}
+                      </button>
+                    )}
                 </div>
-                <span className="is-actuator-label">{item.label}</span>
                 {item.blockingReasons.length > 0 && (
-                  <ul className="is-blocked-reasons">
+                  <ul className="is-blocked-reasons" aria-label={`Why ${item.ruleId} is locked`}>
                     {item.blockingReasons.map((reason, idx) => (
                       <li key={`${item.ruleId}-reason-${idx}`}>{reason}</li>
                     ))}
@@ -247,14 +247,14 @@ export function OperatorConsole({
                   <details className="is-clause-details">
                     <summary>Inspect guard clauses for {item.ruleId}</summary>
                     <ul className="is-clause-tree">
-                      {renderClauseNodes(item.rootClause, item.ruleId)}
+                      <ClauseNode clause={item.rootClause} />
                     </ul>
                   </details>
                 )}
-              </div>
+              </li>
             ))}
-          </div>
-        </div>
+          </ul>
+        </details>
       </div>
     </section>
   );

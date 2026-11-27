@@ -198,6 +198,12 @@ export function VerificationWorkbenchPane({
       </div>
 
       <div className="ag-workbench-body">
+        <div
+          className="ag-inspector-status"
+          role="region"
+          aria-label="Verification status"
+          tabIndex={0}
+        >
         {/* 1. Running state */}
         {isRunning && (
           <div className="ag-verdict" role="status" aria-live="polite" data-tone="running">
@@ -423,6 +429,9 @@ export function VerificationWorkbenchPane({
           </section>
         )}
 
+        </div>
+
+        <div className="ag-inspector-scroll">
         <div
           className="ag-tablist ag-inspector-tabs"
           role="tablist"
@@ -918,6 +927,7 @@ export function VerificationWorkbenchPane({
               </>
             )}
           </div>
+        </div>
         </div>
       </div>
     </section>

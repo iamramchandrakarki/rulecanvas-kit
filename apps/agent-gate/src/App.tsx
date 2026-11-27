@@ -22,6 +22,7 @@ import {
   WorkbenchDiscardDialog,
   WorkbenchNavigation,
   WorkbenchThemeSwitch,
+  VerificationBoundsControl,
   readPresetFromSearch,
   useVerificationSnapshot,
   useWorkbenchRoute,
@@ -608,31 +609,20 @@ export function App({
             </select>
           </div>
 
-          <div className="ag-control-field">
-            <label htmlFor="max-states-input">maxStates</label>
-            <input
-              id="max-states-input"
-              type="text"
-              inputMode="numeric"
-              className="ag-input ag-input-num"
-              aria-invalid={maxStatesInvalid ? 'true' : undefined}
-              value={maxStatesText}
-              onChange={(e) => handleBoundsEdit('maxStates', e.target.value)}
-            />
-          </div>
-
-          <div className="ag-control-field">
-            <label htmlFor="max-depth-input">maxDepth</label>
-            <input
-              id="max-depth-input"
-              type="text"
-              inputMode="numeric"
-              className="ag-input ag-input-num"
-              aria-invalid={maxDepthInvalid ? 'true' : undefined}
-              value={maxDepthText}
-              onChange={(e) => handleBoundsEdit('maxDepth', e.target.value)}
-            />
-          </div>
+          <VerificationBoundsControl
+            maxStatesText={maxStatesText}
+            maxDepthText={maxDepthText}
+            maxStatesInvalid={maxStatesInvalid}
+            maxDepthInvalid={maxDepthInvalid}
+            onEdit={handleBoundsEdit}
+            className="ag-bounds"
+            triggerClassName="ag-btn ag-bounds-trigger"
+            panelClassName="ag-bounds-panel"
+            fieldClassName="ag-control-field"
+            inputClassName="ag-input ag-input-num"
+            hintClassName="ag-bounds-hint"
+            visuallyHiddenClassName="ag-visually-hidden"
+          />
 
           {isRunning ? (
             <span className="ag-badge" data-tone="running" role="status">

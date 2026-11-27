@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from 'react';
 import type {
   BoolExpr,
   TransitionRule,
@@ -89,6 +97,17 @@ export function resolveQuickBooleanVariable(
   const booleanKeys = schemaKeys.filter((k) => schema[k]?.kind === 'boolean');
   if (booleanKeys.length === 0) return '';
   return booleanKeys.includes(preferredVar) ? preferredVar : booleanKeys[0]!;
+}
+
+/**
+ * Splits a snake_case / camelCase identifier into segments separated by <wbr>
+ * so long rule IDs wrap at word boundaries instead of being truncated.
+ */
+export function breakIdentifier(id: string): ReactNode[] {
+  const segments = id.split(/(?<=_)|(?<=[a-z0-9])(?=[A-Z])/);
+  return segments.flatMap((segment, idx) =>
+    idx === 0 ? [segment] : [<wbr key={`wbr-${idx}`} />, segment],
+  );
 }
 
 function InlineErrorList({ errors }: { readonly errors: readonly ValidationError[] }) {
@@ -951,15 +970,16 @@ export function PolicyEditorPane({
                     >
                       <span className="ag-rule-nav-row">
                         <span className="ag-rule-nav-id" title={rule.id || '(unnamed rule)'}>
-                          {rule.id || '(unnamed rule)'}
+                          {rule.id ? breakIdentifier(rule.id) : '(unnamed rule)'}
                         </span>
                         {(traceSteps.length > 0 || hasRuleErrors) && (
                           <span className="ag-rule-nav-badges">
                             {traceSteps.length > 0 && (
                               <span
                                 className="ag-rule-step-tag"
-                                title={`Executed at step ${traceSteps.join(', ')}`}
+                                title={`Executed at counterexample step ${traceSteps.join(', ')}`}
                               >
+                                <span className="ag-visually-hidden">Trace step </span>
                                 s{traceSteps.join(',')}
                               </span>
                             )}
@@ -1399,38 +1419,46 @@ export function PolicyEditorPane({
                   <div className="ag-rule-detail-head">
                     <div className="ag-rule-detail-title-wrap">
                       <h3 className="ag-section-title ag-rule-detail-title">
-                        <span className="ag-mono">{summary.id}</span>
-                        <span className="ag-rule-detail-subtitle">: {summary.label}</span>
+                        <span className="ag-mono ag-rule-detail-id">{breakIdentifier(summary.id)}</span>
+                        <span className="ag-rule-detail-subtitle">{summary.label}</span>
                       </h3>
                       {traceSteps.length > 0 && (
-                        <span className="ag-rule-step-tag">
-                          Trace Step {traceSteps.join(', ')}
+                        <span
+                          className="ag-rule-step-tag"
+                          title="This rule fires in the counterexample trace"
+                        >
+                          Trace step {traceSteps.join(', ')}
                         </span>
                       )}
                     </div>
 
-                    <div className="ag-inline-actions">
+                    <div className="ag-inline-actions ag-rule-detail-actions">
+                      <span className="ag-meta-inline" aria-hidden="true">
+                        #{idx + 1}
+                      </span>
                       <button
                         type="button"
-                        className="ag-btn ag-btn-sm"
+                        className="ag-btn ag-btn-xs"
                         disabled={idx === 0}
                         aria-label={`Move rule ${rule.id} up`}
+                        title="Move up (rule order is evaluation order)"
                         onClick={() => handleMoveRule(idx, idx - 1)}
                       >
-                        Up
+                        <span aria-hidden="true">↑</span> Up
                       </button>
                       <button
                         type="button"
-                        className="ag-btn ag-btn-sm"
+                        className="ag-btn ag-btn-xs"
                         disabled={idx === model.rules.length - 1}
                         aria-label={`Move rule ${rule.id} down`}
+                        title="Move down (rule order is evaluation order)"
                         onClick={() => handleMoveRule(idx, idx + 1)}
                       >
-                        Down
+                        <span aria-hidden="true">↓</span> Down
                       </button>
                       <button
                         type="button"
-                        className="ag-btn ag-btn-sm ag-btn-danger"
+                        className="ag-btn ag-btn-xs ag-btn-danger"
                         aria-label={`Remove rule ${rule.id}`}
                         onClick={() => handleRemoveRule(idx, rowId)}
                       >
@@ -1448,23 +1476,51 @@ export function PolicyEditorPane({
                     </span>
                   </div>
 
-                  {showPrincipledShortcut && (
-                    <div className="ag-rule-candidate">
-                      <span>Candidate guard</span>
-                      <button
-                        type="button"
-                        className="ag-btn ag-btn-sm ag-btn-active"
-                        onClick={() =>
-                          handleAppendRuleGuardClause(idx, rule, rowId, {
-                            op: 'not',
-                            arg: { op: 'var', name: 'modifiedSinceApproval' },
-                          })
-                        }
-                      >
-                        + Add !modifiedSinceApproval
-                      </button>
-                    </div>
-                  )}
+                  {showPrincipledShortcut &&
+                    (() => {
+                      const candidateClause: BoolExpr = {
+                        op: 'not',
+                        arg: { op: 'var', name: 'modifiedSinceApproval' },
+                      };
+                      const candidateGuard =
+                        appendRuleGuardClause(model, idx, candidateClause).rules[idx]?.guard ??
+                        rule.guard;
+                      return (
+                        <div
+                          className="ag-rule-candidate"
+                          role="group"
+                          aria-label="Candidate guard repair (not applied)"
+                        >
+                          <div className="ag-rule-candidate-head">
+                            <span className="ag-rule-candidate-title">Candidate guard repair</span>
+                            <span className="ag-hint">Not applied</span>
+                          </div>
+                          <dl className="ag-guard-diff">
+                            <dt>Current</dt>
+                            <dd className="ag-mono">{summary.guardText}</dd>
+                            <dt>Candidate</dt>
+                            <dd className="ag-mono" data-candidate="true">
+                              {formatBoolExpr(candidateGuard)}
+                            </dd>
+                          </dl>
+                          <div className="ag-rule-candidate-foot">
+                            <p className="ag-rule-candidate-note">
+                              Staging edits this draft rule only. The verdict stays outdated until
+                              you run Verify Policy.
+                            </p>
+                            <button
+                              type="button"
+                              className="ag-btn ag-btn-sm ag-btn-active"
+                              onClick={() =>
+                                handleAppendRuleGuardClause(idx, rule, rowId, candidateClause)
+                              }
+                            >
+                              + Add !modifiedSinceApproval
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })()}
 
                   <InlineErrorList errors={ruleErrors} />
 
@@ -1504,7 +1560,10 @@ export function PolicyEditorPane({
                     </div>
 
                     <div className="ag-field ag-rule-subsection">
-                      <span className="ag-field-label">Guard Expression</span>
+                      <div className="ag-subsection-head">
+                        <span className="ag-field-label">Guard Expression</span>
+                        <span className="ag-hint">The rule can fire only when this holds.</span>
+                      </div>
                       {booleanKeys.length > 0 && selectedQuickVar.length > 0 && (
                         <details className="ag-quick-clause">
                           <summary>Quick guard clause</summary>
@@ -1567,6 +1626,9 @@ export function PolicyEditorPane({
                         resetKey={resetKey}
                         fieldPath={`rule:${rowId}.guard`}
                         intDraftStore={intDraftStore}
+                        diagnostics={diagnostics.all}
+                        diagnosticPath={`rules[${idx}].guard`}
+                        showPreview={false}
                         onChange={(nextGuard) =>
                           onChangeModel(
                             updateRule(model, idx, { ...rule, guard: nextGuard }),
@@ -1576,13 +1638,14 @@ export function PolicyEditorPane({
                     </div>
 
                     <div className="ag-field ag-rule-subsection">
-                      <div className="ag-section-header">
+                      <div className="ag-subsection-head">
                         <span className="ag-field-label">
-                          Atomic Updates ({rule.updates.length})
+                          Atomic Updates ({rule.updates.length}){' '}
+                          <span className="ag-hint">applied together against the pre-state</span>
                         </span>
                         <button
                           type="button"
-                          className="ag-btn ag-btn-sm"
+                          className="ag-btn ag-btn-xs"
                           onClick={() => handleAddRuleUpdate(idx, rule, rowId)}
                         >
                           + Add Update
@@ -1590,19 +1653,19 @@ export function PolicyEditorPane({
                       </div>
 
                       {rule.updates.length > 0 ? (
-                        <div className="ag-update-list">
+                        <ol className="ag-update-list">
                           {rule.updates.map((upd, updIdx) => {
                             const updRowId = resolvedUpdRowIds[updIdx]!;
                             const updVarSelectId = `rule-upd-var-${rowId}-${updRowId}`;
                             return (
-                              <div key={updRowId} className="ag-expr-row ag-update-row">
-                                <span className="ag-inline-field">
-                                  <label htmlFor={updVarSelectId} className="ag-inline-label">
+                              <li key={updRowId} className="rc-expr-node ag-update-row">
+                                <div className="rc-expr-row">
+                                  <label htmlFor={updVarSelectId} className="ag-visually-hidden">
                                     Target variable
                                   </label>
                                   <select
                                     id={updVarSelectId}
-                                    className="ag-select ag-input-mono"
+                                    className="ag-select ag-input-mono rc-expr-var ag-update-target"
                                     aria-label={`Update ${updIdx + 1} target variable for ${rule.id}`}
                                     value={upd.var}
                                     onChange={(e) =>
@@ -1627,20 +1690,9 @@ export function PolicyEditorPane({
                                       </option>
                                     ))}
                                   </select>
-                                </span>
-                                <span className="ag-mono ag-update-assign" aria-hidden="true">
-                                  :=
-                                </span>
-                                <button
-                                  type="button"
-                                  className="ag-btn ag-btn-sm ag-btn-danger"
-                                  onClick={() =>
-                                    handleRemoveRuleUpdate(idx, rule, rowId, updIdx, updRowId)
-                                  }
-                                >
-                                  Remove
-                                </button>
-                                <div className="ag-update-value">
+                                  <span className="rc-expr-punct ag-update-assign" aria-hidden="true">
+                                    :=
+                                  </span>
                                   <ValueExprEditor
                                     value={upd.value}
                                     schema={model.schema}
@@ -1662,14 +1714,24 @@ export function PolicyEditorPane({
                                       )
                                     }
                                   />
+                                  <button
+                                    type="button"
+                                    className="ag-btn ag-btn-xs ag-btn-danger ag-update-remove"
+                                    aria-label={`Remove update ${updIdx + 1} (${upd.var}) from ${rule.id}`}
+                                    onClick={() =>
+                                      handleRemoveRuleUpdate(idx, rule, rowId, updIdx, updRowId)
+                                    }
+                                  >
+                                    Remove
+                                  </button>
                                 </div>
-                              </div>
+                              </li>
                             );
                           })}
-                        </div>
+                        </ol>
                       ) : (
                         <p className="ag-pane-subtitle">
-                          No atomic state updates (rule acts as a no-op transition when guard holds).
+                          No updates: when the guard holds, this rule is a no-op transition.
                         </p>
                       )}
                     </div>
@@ -1762,6 +1824,9 @@ export function PolicyEditorPane({
                     resetKey={resetKey}
                     fieldPath={`inv:${rowId}.holds`}
                     intDraftStore={intDraftStore}
+                    diagnostics={diagnostics.all}
+                    diagnosticPath={`invariants[${idx}].holds`}
+                    showPreview={false}
                     onChange={(holds) => onChangeModel(updateInvariant(model, idx, { ...inv, holds }))}
                   />
                   <InlineErrorList errors={invErrors} />
@@ -1835,6 +1900,9 @@ export function PolicyEditorPane({
                 resetKey={resetKey}
                 fieldPath="goal.reached"
                 intDraftStore={intDraftStore}
+                diagnostics={diagnostics.all}
+                diagnosticPath="goal.reached"
+                showPreview={false}
                 onChange={(reached) => onChangeModel(updateGoal(model, { ...model.goal!, reached }))}
               />
               <InlineErrorList errors={diagnostics.sections.goal} />

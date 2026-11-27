@@ -405,10 +405,42 @@ export function GuidedRepairCallout({ editor }: { readonly editor: InterlockEdit
   if (!editor.repairableOpenInnerDoor || editor.openInnerDoorRepaired) {
     return null;
   }
+  const currentGuard = editor.model.rules.find((r) => r.id === 'open_inner_door')?.guard;
+  const candidateGuard = applyPrincipledInterlockRepair(editor.model).rules.find(
+    (r) => r.id === 'open_inner_door',
+  )?.guard;
   return (
-    <div className="is-repair-callout">
-      <div className="is-section-header">
+    <div
+      className="is-repair-callout"
+      role="group"
+      aria-label="Candidate guard repair for open_inner_door (not applied)"
+    >
+      <div className="is-repair-head">
         <strong>Candidate Guard Repair Available for open_inner_door</strong>
+        <span className="is-hint">Not applied</span>
+      </div>
+      {currentGuard !== undefined && candidateGuard !== undefined && (
+        <dl className="is-guard-diff">
+          <dt>Current</dt>
+          <dd className="is-mono">{formatBoolExpr(currentGuard)}</dd>
+          <dt>Candidate</dt>
+          <dd className="is-mono" data-candidate="true">
+            {formatBoolExpr(candidateGuard)}
+          </dd>
+        </dl>
+      )}
+      <p className="is-repair-note">
+        Enforces <code className="is-mono">pressure == negative</code> unconditionally, so{' '}
+        <code className="is-mono">maintenanceOverride</code> bypasses only the HEPA purge count.
+        Applying stages the edit in the draft; run <strong>Verify Interlock Model</strong> afterward
+        to confirm the verdict.
+      </p>
+      {editor.hasJsonDraft && (
+        <p className="is-repair-note">
+          Import the JSON or restore its original text before applying the candidate repair.
+        </p>
+      )}
+      <div className="is-repair-actions">
         <button
           type="button"
           className="is-btn is-btn-sm is-btn-primary"
@@ -418,15 +450,6 @@ export function GuidedRepairCallout({ editor }: { readonly editor: InterlockEdit
           Apply Principled Repair
         </button>
       </div>
-      <p style={{ fontSize: 12, color: 'var(--color-ink-secondary)' }}>
-        Stages a candidate guard edit enforcing <code className="is-mono">pressure == negative</code>{' '}
-        unconditionally alongside closed outer door, UV-off, and occupancy so{' '}
-        <code className="is-mono">maintenanceOverride</code> bypasses only the HEPA purge count.
-        Run <strong>Verify Interlock Model</strong> afterward to confirm the verdict.
-      </p>
-      {editor.hasJsonDraft && (
-        <p>Import the JSON or restore its original text before applying the candidate repair.</p>
-      )}
     </div>
   );
 }
@@ -436,7 +459,7 @@ export function GuardInspectorContent({ editor }: { readonly editor: InterlockEd
   return (
     <>
       <div className="is-field">
-        <label htmlFor="inspector-rule-select">Inspect / Edit Transition Rule</label>
+        <label htmlFor="inspector-rule-select">Transition rule</label>
         <select
           ref={editor.ruleSelectRef}
           id="inspector-rule-select"
@@ -444,31 +467,36 @@ export function GuardInspectorContent({ editor }: { readonly editor: InterlockEd
           value={selectedRule?.id ?? ''}
           onChange={(e) => editor.handleSelectRule(e.target.value)}
         >
-          {model.rules.map((rule) => (
+          {model.rules.map((rule, idx) => (
             <option key={rule.id} value={rule.id}>
-              {rule.id}: {rule.label}
+              {idx + 1}. {rule.id}
             </option>
           ))}
         </select>
+        {selectedRule !== null && <span className="is-hint">{selectedRule.label}</span>}
       </div>
 
       {selectedRule !== null && (
         <>
-          <div className="is-code-strip">
-            <div>
-              <strong>guard:</strong> {formatBoolExpr(selectedRule.guard)}
-            </div>
-            <div style={{ marginTop: 4, color: 'var(--color-ink-muted)' }}>
-              <strong>updates:</strong>{' '}
-              {selectedRule.updates.map((u) => formatUpdateAssignment(u)).join('; ')}
-            </div>
+          <div className="is-code-strip is-rule-prop-strip">
+            <span className="is-code-muted">when</span>
+            <span>{formatBoolExpr(selectedRule.guard)}</span>
+            <span className="is-code-muted">then</span>
+            <span>
+              {selectedRule.updates.length > 0
+                ? selectedRule.updates.map((u) => formatUpdateAssignment(u)).join('; ')
+                : 'no-op'}
+            </span>
           </div>
 
           <div className="is-section-header">
-            <span className="is-section-title">Guard Expression AST</span>
+            <span className="is-section-title">
+              Guard <span className="is-hint">the action is enabled only when this holds</span>
+            </span>
             <button
               type="button"
-              className="is-btn is-btn-sm"
+              className="is-btn is-btn-xs"
+              title="Append a pressure == negative clause to this guard"
               onClick={editor.handleAppendPressureGuardClause}
             >
               + Add Conjunction Clause
@@ -490,6 +518,9 @@ export function GuardInspectorContent({ editor }: { readonly editor: InterlockEd
               resetKey={`${resetKey}:${selectedRule.id}:${editor.repairGen}`}
               fieldPath={`rule:${selectedRule.id}.guard`}
               intDraftStore={editor.intDraftStore}
+              diagnostics={diagnostics.all}
+              diagnosticPath={`rules[${effectiveRuleIndex}].guard`}
+              showPreview={false}
               onChange={(nextGuard) => editor.handleGuardChange(selectedRule.id, nextGuard)}
             />
           </div>

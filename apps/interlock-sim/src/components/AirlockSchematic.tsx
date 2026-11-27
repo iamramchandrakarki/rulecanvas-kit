@@ -375,9 +375,9 @@ export function AirlockSchematic({
         : 'var(--schematic-chamber-eq)';
 
   return (
-    <section className="is-pane" aria-label="Discrete BSL-3 airlock schematic">
+    <section className="is-pane is-schematic-pane" aria-label="Discrete BSL-3 airlock schematic">
       <div className="is-pane-header">
-        <div>
+        <div className="is-schematic-heading">
           <h2 className="is-pane-title">Discrete BSL-3 Airlock Schematic</h2>
           <p className="is-pane-subtitle">{subtitleText}</p>
         </div>
@@ -1024,14 +1024,13 @@ export function AirlockSchematic({
               data-available={item.available ? 'true' : 'false'}
             >
               <dt>
-                <span>
-                  {item.label} <code className="is-telemetry-var">({item.varName})</code>
-                </span>
-                {changed && <span className="is-telemetry-change">* MODIFIED</span>}
+                <span className="is-telemetry-label">{item.label}</span>{' '}
+                <code className="is-telemetry-var">{item.varName}</code>
               </dt>
               <dd>
                 <TelemetryGlyph kind={item.iconKind} />
                 <span>{item.displayValue}</span>
+                {changed && <span className="is-telemetry-change">MODIFIED</span>}
               </dd>
             </div>
           );

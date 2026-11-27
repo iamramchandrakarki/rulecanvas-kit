@@ -109,6 +109,81 @@ async function checkGuardDraftRoundTrip(context, baseUrl, app, operator) {
   }
 }
 
+// Compact AST editor: collapsing a group hides clause rows without changing the AST,
+// the merged operand-kind picker rewrites only the targeted operand, and removing a
+// clause keeps the remaining clauses intact.
+async function checkCompactAstEditor(context, baseUrl) {
+  const page = await context.newPage();
+  const combobox = (label) => page.getByRole('combobox', { name: label, exact: true });
+  const strip = page.locator('.ag-rule-detail .ag-rule-prop-strip .ag-rule-prop-expr').first();
+  try {
+    await page.goto(`${baseUrl}/suite/agent-gate/?preset=broken`);
+    await page.locator('section.ag-verdict[data-status="VIOLATED"]').waitFor();
+    const before = (await strip.innerText()).trim();
+    assert(before === 'stage == "drafting" && approvalValid', `unexpected baseline guard: ${before}`);
+
+    const toggle = page.getByRole('button', { name: 'Collapse and group of 2', exact: true });
+    await toggle.click();
+    const expand = page.getByRole('button', { name: 'Expand and group of 2', exact: true });
+    assert((await expand.getAttribute('aria-expanded')) === 'false', 'group toggle did not report collapsed state');
+    assert(!(await combobox('Rule publish_release_notes guard clause 1 operator').isVisible()), 'collapsed group still shows clause rows');
+    assert((await strip.innerText()).trim() === before, 'collapsing a group changed the guard');
+    await expand.click();
+    assert(await combobox('Rule publish_release_notes guard clause 1 operator').isVisible(), 'expanded group hides clause rows');
+
+    await combobox('Rule publish_release_notes guard clause 1 right kind').selectOption('var');
+    await combobox('Rule publish_release_notes guard clause 1 right variable').selectOption('stage');
+    assert(
+      (await strip.innerText()).trim() === 'stage == stage && approvalValid',
+      `operand kind switch produced ${await strip.innerText()}`,
+    );
+    await page.getByRole('button', { name: 'Remove clause 1', exact: true }).click();
+    assert((await strip.innerText()).trim() === 'approvalValid', `clause removal produced ${await strip.innerText()}`);
+    assert(
+      (await page.locator('header .ag-badge').innerText()).includes('OUTDATED'),
+      'editing the guard did not mark the verdict outdated',
+    );
+  } finally {
+    await page.close();
+  }
+}
+
+// Desktop workspace: at a laptop viewport the document never scrolls; panes scroll
+// independently and the InterlockSim schematic stays in view while the console scrolls.
+async function checkDesktopWorkspace(browser, baseUrl) {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await context.newPage();
+  try {
+    await page.goto(`${baseUrl}/suite/agent-gate/?preset=broken`);
+    await page.locator('section.ag-verdict[data-status="VIOLATED"]').waitFor();
+    const agDoc = await page.evaluate(() => [document.documentElement.scrollHeight, innerHeight]);
+    assert(agDoc[0] <= agDoc[1], `AgentGate document scrolls at 1440x900 (${agDoc[0]} > ${agDoc[1]})`);
+    const agPanes = await page.evaluate(() =>
+      ['.ag-rule-sidebar', '.ag-editor-main', '.ag-inspector-scroll'].map(
+        (sel) => getComputedStyle(document.querySelector(sel)).overflowY,
+      ),
+    );
+    assert(agPanes.every((v) => v === 'auto'), `AgentGate panes are not independent scroll regions: ${agPanes}`);
+
+    await page.goto(`${baseUrl}/suite/interlock-sim/?preset=broken`);
+    await page.locator('section.is-verdict[data-status="VIOLATED"]').waitFor();
+    const isDoc = await page.evaluate(() => [document.documentElement.scrollHeight, innerHeight]);
+    assert(isDoc[0] <= isDoc[1], `InterlockSim document scrolls at 1440x900 (${isDoc[0]} > ${isDoc[1]})`);
+    await page.locator('[data-blocked-rule-id="stop_uv_sterilization"]').scrollIntoViewIfNeeded();
+    const schematicTop = await page.locator('.is-schematic-well').evaluate((el) => {
+      const r = el.getBoundingClientRect();
+      return { top: r.top, bottom: r.bottom };
+    });
+    const headerBottom = await page.locator('.is-safety-strip').evaluate((el) => el.getBoundingClientRect().bottom);
+    assert(
+      schematicTop.top >= headerBottom - 1 && schematicTop.bottom <= 900,
+      `InterlockSim schematic scrolled out of view with the console: ${JSON.stringify(schematicTop)}`,
+    );
+  } finally {
+    await context.close();
+  }
+}
+
 async function loadBrowserTools() {
   const pwCandidates = [
     process.env.PLAYWRIGHT_MODULE,
@@ -262,6 +337,8 @@ try {
     checkGuardDraftRoundTrip(context, baseUrl, 'interlock-sim', 'or'),
     checkGuardDraftRoundTrip(context, baseUrl, 'interlock-sim', 'in'),
     checkGuardDraftRoundTrip(context, baseUrl, 'interlock-sim', 'gte'),
+    checkCompactAstEditor(context, baseUrl),
+    checkDesktopWorkspace(browser, baseUrl),
   ]);
   const guardDraftFailures = guardDraftChecks.filter((check) => check.status === 'rejected');
   assert(guardDraftFailures.length === 0, guardDraftFailures.map((check) => check.reason.message).join('\n'));
@@ -420,6 +497,37 @@ try {
   };
 
   const readScrollSpy = async () => page.evaluate(() => window.__rcScrollCalls ?? []);
+
+  // Bounds live in a disclosure popover; open it before editing a bound.
+  const fillBound = async (prefix, selector, value) => {
+    const trigger = page.locator(`header .${prefix}-bounds-trigger`);
+    if ((await trigger.getAttribute('aria-expanded')) !== 'true') await trigger.click();
+    await page.fill(selector, value);
+  };
+
+  const assertBoundsPopover = async (prefix, label) => {
+    const trigger = page.locator(`header .${prefix}-bounds-trigger`);
+    const panel = page.getByRole('group', { name: 'Verification bounds', exact: true });
+    assert((await trigger.getAttribute('aria-expanded')) === 'false', `${label}: bounds popover should start closed`);
+    assert(!(await panel.isVisible()), `${label}: bounds panel visible while closed`);
+    assert((await trigger.innerText()).includes('10000 /'), `${label}: bounds trigger must show current maxStates`);
+    await trigger.click();
+    assert((await trigger.getAttribute('aria-expanded')) === 'true' && (await panel.isVisible()), `${label}: bounds popover did not open`);
+    await page.locator('#max-depth-input').focus();
+    await page.keyboard.press('Escape');
+    assert((await trigger.getAttribute('aria-expanded')) === 'false', `${label}: Escape did not close bounds popover`);
+    assert(await trigger.evaluate((el) => el === document.activeElement), `${label}: Escape did not return focus to bounds trigger`);
+    await fillBound(prefix, '#max-states-input', 'abc');
+    await page.locator('main').click({ position: { x: 4, y: 4 } });
+    await page.keyboard.press('Escape');
+    assert(
+      (await trigger.getAttribute('aria-expanded')) === 'true' && (await panel.isVisible()),
+      `${label}: invalid bound draft must keep the bounds panel open`,
+    );
+    await page.fill('#max-states-input', '10000');
+    await page.locator('main').click({ position: { x: 4, y: 4 } });
+    assert((await trigger.getAttribute('aria-expanded')) === 'false', `${label}: outside click did not close bounds popover`);
+  };
 
   const waitForVisibleFocus = async (selector) => {
     await page.waitForFunction((targetSelector) => {
@@ -879,7 +987,8 @@ try {
   await page.getByRole('button', { name: 'Compare All 5 Presets' }).click();
 
   // INCONCLUSIVE & INVALID states + axe + icon+text checks in AgentGate
-  await page.fill('#max-states-input', '2');
+  await assertBoundsPopover('ag', 'AgentGate');
+  await fillBound('ag', '#max-states-input', '2');
   await agVerifyBtn.click();
   const agInconclusive = page.locator('section.ag-verdict[data-status="INCONCLUSIVE"]');
   await agInconclusive.waitFor({ state: 'visible' });
@@ -890,7 +999,7 @@ try {
   );
   await checkAxeWcagAA('AgentGate INCONCLUSIVE');
 
-  await page.fill('#max-states-input', '0');
+  await fillBound('ag', '#max-states-input', '0');
   await agVerifyBtn.click();
   const agTopInvalidBadge = page.locator('header .ag-badge[data-status="INVALID"]');
   await assertBadgeHasIconAndText(agTopInvalidBadge, 'INVALID', 'AgentGate topbar INVALID badge');
@@ -899,7 +1008,7 @@ try {
     'AgentGate maxStates range error missing aria-invalid',
   );
   await checkAxeWcagAA('AgentGate INVALID');
-  await page.fill('#max-states-input', '10000');
+  await fillBound('ag', '#max-states-input', '10000');
 
   // Malformed JSON import validation on AgentGate
   await page.selectOption('#preset-select', 'broken');
@@ -1194,7 +1303,8 @@ try {
 
   // InterlockSim INCONCLUSIVE & INVALID + malformed JSON import validation
   const isVerifyHeaderBtn = page.locator('header').getByRole('button', { name: 'Verify Interlock Model' });
-  await page.fill('#max-states-input', '2');
+  await assertBoundsPopover('is', 'InterlockSim');
+  await fillBound('is', '#max-states-input', '2');
   await isVerifyHeaderBtn.click();
   const isInconclusive = page.locator('section.is-verdict[data-status="INCONCLUSIVE"]');
   await isInconclusive.waitFor({ state: 'visible' });
@@ -1205,7 +1315,7 @@ try {
   );
   await checkAxeWcagAA('InterlockSim INCONCLUSIVE');
 
-  await page.fill('#max-states-input', '0');
+  await fillBound('is', '#max-states-input', '0');
   await isVerifyHeaderBtn.click();
   await assertBadgeHasIconAndText(
     page.locator('header .is-badge[data-status="INVALID"]'),
@@ -1217,7 +1327,7 @@ try {
     (await page.locator('#max-states-input').getAttribute('aria-invalid')) === 'true',
     'InterlockSim maxStates range error missing aria-invalid',
   );
-  await page.fill('#max-states-input', '10000');
+  await fillBound('is', '#max-states-input', '10000');
   await isVerifyHeaderBtn.click();
   await page.getByText('Goal reachable: Yes').first().waitFor({ state: 'visible' });
 
