@@ -67,9 +67,11 @@ export {
 } from './BoundsControl.js';
 
 export {
+  WorkbenchBrandLink,
   WorkbenchBrandMark,
   WorkbenchDiscardDialog,
   WorkbenchThemeSwitch,
+  type WorkbenchBrandLinkProps,
   type WorkbenchBrandMarkProps,
   type WorkbenchDiscardDialogProps,
   type WorkbenchThemeSwitchProps,

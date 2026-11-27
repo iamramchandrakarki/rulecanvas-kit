@@ -1,5 +1,6 @@
-import { forwardRef, useRef, type ReactNode } from 'react';
+import { forwardRef, useRef, type MouseEvent, type ReactNode } from 'react';
 import type { ThemePreference } from './theme.js';
+import { isSafeSameOriginNavigationHref } from './WorkbenchNavigation.js';
 
 export interface WorkbenchThemeSwitchProps {
   readonly value: ThemePreference;
@@ -123,6 +124,49 @@ export function WorkbenchBrandMark({ className }: WorkbenchBrandMarkProps) {
         strokeLinecap="round"
       />
     </svg>
+  );
+}
+
+export interface WorkbenchBrandLinkProps {
+  readonly href: string;
+  /** Optional deployment path prefix the resolved href must stay under. */
+  readonly allowedPrefix?: string | undefined;
+  readonly className?: string | undefined;
+  readonly title?: string | undefined;
+  /**
+   * Called before the browser follows the link. Call `event.preventDefault()`
+   * to route the navigation through a discard prompt instead.
+   */
+  readonly onNavigate?: ((href: string, event: MouseEvent<HTMLAnchorElement>) => void) | undefined;
+  readonly children: ReactNode;
+}
+
+/**
+ * Brand mark link back to a same-origin landing page. Renders plain text instead
+ * of a link when the href fails `isSafeSameOriginNavigationHref`.
+ */
+export function WorkbenchBrandLink({
+  href,
+  allowedPrefix,
+  className,
+  title,
+  onNavigate,
+  children,
+}: WorkbenchBrandLinkProps) {
+  const trimmed = href.trim();
+  if (!isSafeSameOriginNavigationHref(trimmed, allowedPrefix)) {
+    return <span className={className}>{children}</span>;
+  }
+  return (
+    <a
+      href={trimmed}
+      className={className}
+      title={title}
+      data-rc-brand-link="true"
+      onClick={(event) => onNavigate?.(trimmed, event)}
+    >
+      {children}
+    </a>
   );
 }
 
