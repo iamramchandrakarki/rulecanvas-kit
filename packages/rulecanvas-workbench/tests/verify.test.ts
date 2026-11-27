@@ -840,13 +840,150 @@ describe('@rulecanvas/workbench verification transport and ownership contracts',
         options,
       ).ok,
     ).toBe(false);
-    // INVALID without a trace remains admissible when diagnostics are well formed.
+    // Runtime out-of-domain diagnostics without paired stats and trace are rejected.
     expect(
       sanitizeAndFreezeVerifyResult(
         { status: 'INVALID', errors: genuine.errors },
         invalidModel,
         options,
       ).ok,
+    ).toBe(false);
+    // A validation INVALID result needs no exploration stats or trace.
+    expect(
+      sanitizeAndFreezeVerifyResult(
+        {
+          status: 'INVALID',
+          errors: [{ code: 'INVALID_MODEL', path: 'model', message: 'Model is malformed.' }],
+        },
+        invalidModel,
+        options,
+      ).ok,
+    ).toBe(true);
+  });
+
+  it('rejects verdict-specific fields that are incompatible with each status', () => {
+    const options: VerifyOptions = { maxStates: 50, maxDepth: 10 };
+    const verified = verifyModel(counterModel, options);
+    if (verified.status !== 'VERIFIED') throw new Error('Expected a verified fixture');
+    const violating = verifyModel(
+      {
+        ...counterModel,
+        invariants: [
+          {
+            id: 'inv_x',
+            label: 'x stays below one',
+            holds: { op: 'lt', left: { op: 'var', name: 'x' }, right: { op: 'lit', value: 1 } },
+          },
+        ],
+      },
+      options,
+    );
+    if (violating.status !== 'VIOLATED') throw new Error('Expected a violated fixture');
+    const inconclusive = verifyModel(counterModel, { maxStates: 2, maxDepth: 10 });
+    if (inconclusive.status !== 'INCONCLUSIVE') throw new Error('Expected an inconclusive fixture');
+
+    const rejected = (result: unknown): boolean =>
+      sanitizeAndFreezeVerifyResult(result, counterModel, options).ok === false;
+
+    expect(rejected({ ...verified, trace: violating.trace })).toBe(true);
+    expect(rejected({ ...verified, terminalState: violating.terminalState })).toBe(true);
+    expect(rejected({ ...verified, violatedInvariantIds: ['inv_ok'] })).toBe(true);
+    expect(rejected({ ...verified, reason: 'MAX_STATES' })).toBe(true);
+    expect(rejected({ ...verified, completedDepth: 0 })).toBe(true);
+    expect(rejected({ ...verified, frontierRemaining: 1 })).toBe(true);
+    expect(rejected({ ...verified, errors: [{ code: 'X', path: 'p', message: 'm' }] })).toBe(true);
+
+    expect(rejected({ ...violating, reason: 'MAX_STATES' })).toBe(true);
+    expect(rejected({ ...violating, completedDepth: 0 })).toBe(true);
+    expect(rejected({ ...violating, frontierRemaining: 1 })).toBe(true);
+    expect(rejected({ ...violating, errors: [{ code: 'X', path: 'p', message: 'm' }] })).toBe(true);
+
+    expect(rejected({ ...inconclusive, trace: violating.trace })).toBe(true);
+    expect(rejected({ ...inconclusive, terminalState: violating.terminalState })).toBe(true);
+    expect(rejected({ ...inconclusive, violatedInvariantIds: ['inv_ok'] })).toBe(true);
+    expect(rejected({ ...inconclusive, errors: [{ code: 'X', path: 'p', message: 'm' }] })).toBe(
+      true,
+    );
+
+    const validationInvalid = {
+      status: 'INVALID' as const,
+      errors: [{ code: 'INVALID_MODEL', path: 'model', message: 'Model is malformed.' }],
+    };
+    expect(rejected({ ...validationInvalid, assumptions: counterModel.assumptions })).toBe(true);
+    expect(rejected({ ...validationInvalid, goalReachable: true })).toBe(true);
+    expect(rejected({ ...validationInvalid, terminalState: violating.terminalState })).toBe(true);
+    expect(rejected({ ...validationInvalid, violatedInvariantIds: ['inv_ok'] })).toBe(true);
+    expect(rejected({ ...validationInvalid, reason: 'MAX_STATES' })).toBe(true);
+    expect(rejected({ ...validationInvalid, completedDepth: 0 })).toBe(true);
+    expect(rejected({ ...validationInvalid, frontierRemaining: 1 })).toBe(true);
+    expect(rejected({ ...validationInvalid, stats: verified.stats })).toBe(true);
+    expect(rejected({ ...validationInvalid, trace: violating.trace })).toBe(true);
+  });
+
+  it('rejects runtime INVALID results missing stats, trace, or a matching diagnostic', () => {
+    const options: VerifyOptions = { maxStates: 50, maxDepth: 10 };
+    const invalidModel: TransitionSystemModel = {
+      id: 'invalid-step',
+      name: 'Invalid step',
+      schema: { x: { kind: 'int', min: 0, max: 1 } },
+      initialState: { x: 0 },
+      rules: [
+        {
+          id: 'to_one',
+          label: 'Move to one',
+          guard: { op: 'eq', left: { op: 'var', name: 'x' }, right: { op: 'lit', value: 0 } },
+          updates: [{ var: 'x', value: { op: 'lit', value: 1 } }],
+        },
+        {
+          id: 'overflow',
+          label: 'Overflow',
+          guard: { op: 'eq', left: { op: 'var', name: 'x' }, right: { op: 'lit', value: 1 } },
+          updates: [
+            {
+              var: 'x',
+              value: { op: 'add', left: { op: 'var', name: 'x' }, right: { op: 'lit', value: 1 } },
+            },
+          ],
+        },
+      ],
+      invariants: [{ id: 'inv_x', label: 'Always holds', holds: { op: 'lit', value: true } }],
+      assumptions: [
+        { id: 'asm_1', category: 'scope', statement: 'Discrete.', notModeled: 'Timing.' },
+      ],
+    };
+    const genuine = verifyModel(invalidModel, options);
+    if (genuine.status !== 'INVALID') throw new Error('Expected an invalid fixture');
+
+    const rejected = (result: unknown): boolean =>
+      sanitizeAndFreezeVerifyResult(result, invalidModel, options).ok === false;
+
+    expect(rejected({ status: 'INVALID', errors: genuine.errors })).toBe(true);
+    expect(rejected({ status: 'INVALID', errors: genuine.errors, stats: genuine.stats })).toBe(true);
+    expect(rejected({ status: 'INVALID', errors: genuine.errors, trace: genuine.trace })).toBe(true);
+    expect(
+      rejected({
+        status: 'INVALID',
+        errors: [
+          ...genuine.errors,
+          { code: 'INVALID_MODEL', path: 'model', message: 'Mixed validation error.' },
+        ],
+        stats: genuine.stats,
+        trace: genuine.trace,
+      }),
+    ).toBe(true);
+    expect(
+      rejected({
+        ...genuine,
+        errors: genuine.errors.map((err) => ({ ...err, message: 'forged diagnostic' })),
+      }),
+    ).toBe(true);
+    expect(
+      rejected({
+        ...genuine,
+        assumptions: invalidModel.assumptions,
+        goalReachable: true,
+        terminalState: { x: 0 },
+      }),
     ).toBe(true);
   });
 

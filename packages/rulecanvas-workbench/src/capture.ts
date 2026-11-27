@@ -292,6 +292,26 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+const MAX_CAPTURE_TRACE_STEPS = 10_000;
+const MAX_CAPTURE_ERRORS = 100_000;
+const MAX_CAPTURE_VIOLATED_IDS = 256;
+
+function hasDefinedProp(obj: Record<string, unknown>, key: string): boolean {
+  return Object.hasOwn(obj, key) && obj[key] !== undefined;
+}
+
+function findForbiddenProp(
+  obj: Record<string, unknown>,
+  keys: readonly string[],
+): string | null {
+  for (const key of keys) {
+    if (hasDefinedProp(obj, key)) {
+      return key;
+    }
+  }
+  return null;
+}
+
 function isSafeIntInRange(value: unknown, min: number, max: number): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= min && value <= max;
 }
@@ -376,7 +396,7 @@ function rebuildTraceSteps(
   rawTrace: unknown,
   model: TransitionSystemModel,
 ): TraceStep[] | null {
-  if (!Array.isArray(rawTrace)) return null;
+  if (!Array.isArray(rawTrace) || rawTrace.length > MAX_CAPTURE_TRACE_STEPS) return null;
   const out: TraceStep[] = [];
   for (let i = 0; i < rawTrace.length; i += 1) {
     const step: unknown = rawTrace[i];
@@ -517,7 +537,13 @@ function validateOwnedStats(
 }
 
 function validateOwnedErrors(rawErrors: unknown): rawErrors is ValidationError[] {
-  if (!Array.isArray(rawErrors) || rawErrors.length === 0) return false;
+  if (
+    !Array.isArray(rawErrors) ||
+    rawErrors.length === 0 ||
+    rawErrors.length > MAX_CAPTURE_ERRORS
+  ) {
+    return false;
+  }
   for (const err of rawErrors) {
     if (!isPlainRecord(err)) return false;
     if (
@@ -553,52 +579,82 @@ export function sanitizeAndFreezeVerifyResult(
     }
 
     if (status === 'INVALID') {
+      const forbidden = findForbiddenProp(owned, [
+        'assumptions',
+        'goalReachable',
+        'terminalState',
+        'violatedInvariantIds',
+        'reason',
+        'completedDepth',
+        'frontierRemaining',
+      ]);
+      if (forbidden !== null) {
+        return { ok: false, message: `INVALID result must not include ${forbidden}.` };
+      }
       const errors = rebuildErrors(owned['errors']);
       if (errors === null) {
         return { ok: false, message: 'INVALID verification result has malformed diagnostics.' };
       }
-      const hasStats = owned['stats'] !== undefined;
-      const stats = hasStats ? rebuildStats(owned['stats'], capturedModel, capturedOptions) : undefined;
-      if (stats === null) {
-        return { ok: false, message: 'INVALID verification result has out-of-bounds or mismatched stats.' };
+
+      const runtimeErrors = errors.filter((err) => err.code === 'OUT_OF_DOMAIN_TRANSITION');
+      if (runtimeErrors.length > 0 && runtimeErrors.length !== errors.length) {
+        return {
+          ok: false,
+          message:
+            'INVALID verification result must not mix validation errors with runtime out-of-domain diagnostics.',
+        };
       }
 
-      let trace: TraceStep[] | undefined;
-      if (owned['trace'] !== undefined) {
-        if (stats === undefined) {
-          return { ok: false, message: 'INVALID verification result with a trace requires paired stats.' };
-        }
-        const rebuiltTrace = rebuildTraceSteps(owned['trace'], capturedModel);
-        if (rebuiltTrace === null) {
-          return { ok: false, message: 'INVALID verification result has a malformed trace.' };
-        }
-        // Bounds are checked before any deterministic replay work.
-        if (
-          rebuiltTrace.length > stats.maxDepthReached ||
-          stats.maxDepthReached > capturedOptions.maxDepth
-        ) {
+      if (runtimeErrors.length === 0) {
+        if (hasDefinedProp(owned, 'stats') || hasDefinedProp(owned, 'trace')) {
           return {
             ok: false,
-            message: 'INVALID verification result trace exceeds the captured depth bound.',
+            message: 'Validation INVALID result must not include exploration statistics or traces.',
           };
         }
-        const replay = replayTrace(
-          capturedModel,
-          rebuiltTrace.map((step) => step.ruleId),
-        );
-        if (!replay.ok || !traceStepsEqual(rebuiltTrace, replay.steps, capturedModel)) {
-          return {
-            ok: false,
-            message: 'INVALID verification result trace does not replay deterministically.',
-          };
-        }
-        const diagnostic = errors.find((err) => err.code === 'OUT_OF_DOMAIN_TRANSITION');
-        if (diagnostic === undefined) {
-          return {
-            ok: false,
-            message: 'INVALID verification result trace lacks an out-of-domain diagnostic.',
-          };
-        }
+        const validationResult: VerifyResult = { status: 'INVALID', errors };
+        return { ok: true, result: deepFreeze(validationResult) };
+      }
+
+      if (!hasDefinedProp(owned, 'stats') || !hasDefinedProp(owned, 'trace')) {
+        return {
+          ok: false,
+          message: 'Runtime out-of-domain INVALID result must include stats and a prefix trace.',
+        };
+      }
+      const stats = rebuildStats(owned['stats'], capturedModel, capturedOptions);
+      if (stats === null) {
+        return {
+          ok: false,
+          message: 'INVALID verification result has out-of-bounds or mismatched stats.',
+        };
+      }
+
+      const rebuiltTrace = rebuildTraceSteps(owned['trace'], capturedModel);
+      if (rebuiltTrace === null) {
+        return { ok: false, message: 'INVALID verification result has a malformed trace.' };
+      }
+      // Bounds are checked before any deterministic replay work.
+      if (
+        rebuiltTrace.length > stats.maxDepthReached ||
+        stats.maxDepthReached > capturedOptions.maxDepth
+      ) {
+        return {
+          ok: false,
+          message: 'INVALID verification result trace exceeds the captured depth bound.',
+        };
+      }
+      const replay = replayTrace(
+        capturedModel,
+        rebuiltTrace.map((step) => step.ruleId),
+      );
+      if (!replay.ok || !traceStepsEqual(rebuiltTrace, replay.steps, capturedModel)) {
+        return {
+          ok: false,
+          message: 'INVALID verification result trace does not replay deterministically.',
+        };
+      }
+      for (const diagnostic of runtimeErrors) {
         let reproduced = false;
         for (const rule of capturedModel.rules) {
           const stepped = stepModel(capturedModel, replay.finalState, rule.id);
@@ -619,19 +675,19 @@ export function sanitizeAndFreezeVerifyResult(
               'INVALID verification result trace does not reproduce its out-of-domain diagnostic.',
           };
         }
-        trace = replay.steps.map((step) => ({
-          ruleId: step.ruleId,
-          stateBefore: { ...step.stateBefore },
-          stateAfter: { ...step.stateAfter },
-          changedVars: [...step.changedVars],
-        }));
       }
 
+      const trace = replay.steps.map((step) => ({
+        ruleId: step.ruleId,
+        stateBefore: { ...step.stateBefore },
+        stateAfter: { ...step.stateAfter },
+        changedVars: [...step.changedVars],
+      }));
       const result: VerifyResult = {
         status: 'INVALID',
         errors,
-        ...(stats !== undefined ? { stats } : {}),
-        ...(trace !== undefined ? { trace } : {}),
+        stats,
+        trace,
       };
       return { ok: true, result: deepFreeze(result) };
     }
@@ -653,8 +709,17 @@ export function sanitizeAndFreezeVerifyResult(
     }
 
     if (status === 'VERIFIED') {
-      if (owned['trace'] !== undefined) {
-        return { ok: false, message: 'VERIFIED result must not include a counterexample trace.' };
+      const forbidden = findForbiddenProp(owned, [
+        'trace',
+        'terminalState',
+        'violatedInvariantIds',
+        'reason',
+        'completedDepth',
+        'frontierRemaining',
+        'errors',
+      ]);
+      if (forbidden !== null) {
+        return { ok: false, message: `VERIFIED result must not include ${forbidden}.` };
       }
       const goalReachable = owned['goalReachable'];
       if (goalReachable !== undefined && typeof goalReachable !== 'boolean') {
@@ -676,6 +741,15 @@ export function sanitizeAndFreezeVerifyResult(
     }
 
     if (status === 'VIOLATED') {
+      const forbidden = findForbiddenProp(owned, [
+        'reason',
+        'completedDepth',
+        'frontierRemaining',
+        'errors',
+      ]);
+      if (forbidden !== null) {
+        return { ok: false, message: `VIOLATED result must not include ${forbidden}.` };
+      }
       const trace = rebuildTraceSteps(owned['trace'], capturedModel);
       if (trace === null) {
         return { ok: false, message: 'VIOLATED result trace is malformed.' };
@@ -696,6 +770,7 @@ export function sanitizeAndFreezeVerifyResult(
       if (
         !Array.isArray(rawViolated) ||
         rawViolated.length === 0 ||
+        rawViolated.length > MAX_CAPTURE_VIOLATED_IDS ||
         !rawViolated.every((id) => typeof id === 'string' && invIds.has(id))
       ) {
         return { ok: false, message: 'VIOLATED result has invalid violatedInvariantIds.' };
@@ -754,8 +829,17 @@ export function sanitizeAndFreezeVerifyResult(
     }
 
     // status === 'INCONCLUSIVE'
-    if (owned['trace'] !== undefined) {
-      return { ok: false, message: 'INCONCLUSIVE result must not include a counterexample trace.' };
+    const forbiddenInconclusive = findForbiddenProp(owned, [
+      'trace',
+      'terminalState',
+      'violatedInvariantIds',
+      'errors',
+    ]);
+    if (forbiddenInconclusive !== null) {
+      return {
+        ok: false,
+        message: `INCONCLUSIVE result must not include ${forbiddenInconclusive}.`,
+      };
     }
     const reason = owned['reason'];
     if (reason !== 'MAX_STATES' && reason !== 'MAX_DEPTH') {

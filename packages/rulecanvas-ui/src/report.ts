@@ -190,6 +190,44 @@ function readPreferredField(
   return readOwnDataProp(record, fallback);
 }
 
+type DefinedPropRead = 'missing' | 'defined' | 'accessor';
+
+function hasDefinedProp(record: Record<string, unknown>, key: string): DefinedPropRead {
+  const prop = readOwnDataProp(record, key);
+  if (prop.kind === 'accessor') {
+    return 'accessor';
+  }
+  if (prop.kind === 'value' && prop.value !== undefined) {
+    return 'defined';
+  }
+  return 'missing';
+}
+
+function rejectForbiddenProps(
+  record: Record<string, unknown>,
+  keys: readonly string[],
+  status: string,
+): InspectFailure | null {
+  for (const key of keys) {
+    const read = hasDefinedProp(record, key);
+    if (read === 'accessor') {
+      return failure(
+        'INVALID_RESULT',
+        `result.${key}`,
+        `${status} result must not declare ${key} through an accessor.`,
+      );
+    }
+    if (read === 'defined') {
+      return failure(
+        'INVALID_RESULT',
+        `result.${key}`,
+        `${status} result must not include ${key}.`,
+      );
+    }
+  }
+  return null;
+}
+
 function canonicalizeModel(raw: unknown): { readonly ok: true; readonly model: TransitionSystemModel } | InspectFailure {
   const errors = validateModel(raw);
   if (errors.length > 0) {
@@ -526,31 +564,33 @@ function readGoalReachable(record: Record<string, unknown>): GoalReachRead | nul
   return { present: true, value: prop.value };
 }
 
-function findMatchingRuntimeDiagnostic(
+function allRuntimeDiagnosticsReproduced(
   model: TransitionSystemModel,
   endpoint: StateSnapshot,
   runtimeErrors: readonly ValidationError[],
 ): boolean {
-  for (const rule of model.rules) {
-    const stepped = stepModel(model, endpoint, rule.id);
-    if (stepped.ok) {
-      continue;
-    }
-    const produced = stepped.error;
-    if (produced.code !== 'OUT_OF_DOMAIN_TRANSITION') {
-      continue;
-    }
-    for (const diagnostic of runtimeErrors) {
+  for (const diagnostic of runtimeErrors) {
+    let reproduced = false;
+    for (const rule of model.rules) {
+      const stepped = stepModel(model, endpoint, rule.id);
+      if (stepped.ok) {
+        continue;
+      }
+      const produced = stepped.error;
       if (
-        diagnostic.code === produced.code &&
-        diagnostic.path === produced.path &&
-        diagnostic.message === produced.message
+        produced.code === diagnostic.code &&
+        produced.path === diagnostic.path &&
+        produced.message === diagnostic.message
       ) {
-        return true;
+        reproduced = true;
+        break;
       }
     }
+    if (!reproduced) {
+      return false;
+    }
   }
-  return false;
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -633,6 +673,22 @@ export function inspectVerificationSnapshot(snapshot: unknown): InspectedVerific
     const status = statusProp.value;
 
     if (status === 'VERIFIED') {
+      const forbidden = rejectForbiddenProps(
+        resultRecord,
+        [
+          'trace',
+          'terminalState',
+          'violatedInvariantIds',
+          'reason',
+          'completedDepth',
+          'frontierRemaining',
+          'errors',
+        ],
+        'VERIFIED',
+      );
+      if (forbidden !== null) {
+        return forbidden;
+      }
       const statsRead = readOwnDataProp(resultRecord, 'stats');
       if (statsRead.kind !== 'value') {
         return failure('INVALID_RESULT', 'result.stats', 'VERIFIED result must include statistics.');
@@ -698,6 +754,14 @@ export function inspectVerificationSnapshot(snapshot: unknown): InspectedVerific
     }
 
     if (status === 'VIOLATED') {
+      const forbidden = rejectForbiddenProps(
+        resultRecord,
+        ['reason', 'completedDepth', 'frontierRemaining', 'errors'],
+        'VIOLATED',
+      );
+      if (forbidden !== null) {
+        return forbidden;
+      }
       const statsRead = readOwnDataProp(resultRecord, 'stats');
       if (statsRead.kind !== 'value') {
         return failure('INVALID_RESULT', 'result.stats', 'VIOLATED result must include statistics.');
@@ -825,6 +889,14 @@ export function inspectVerificationSnapshot(snapshot: unknown): InspectedVerific
     }
 
     if (status === 'INCONCLUSIVE') {
+      const forbidden = rejectForbiddenProps(
+        resultRecord,
+        ['trace', 'terminalState', 'violatedInvariantIds', 'errors'],
+        'INCONCLUSIVE',
+      );
+      if (forbidden !== null) {
+        return forbidden;
+      }
       const statsRead = readOwnDataProp(resultRecord, 'stats');
       if (statsRead.kind !== 'value') {
         return failure('INVALID_RESULT', 'result.stats', 'INCONCLUSIVE result must include statistics.');
@@ -948,6 +1020,22 @@ export function inspectVerificationSnapshot(snapshot: unknown): InspectedVerific
     }
 
     if (status === 'INVALID') {
+      const forbidden = rejectForbiddenProps(
+        resultRecord,
+        [
+          'assumptions',
+          'goalReachable',
+          'terminalState',
+          'violatedInvariantIds',
+          'reason',
+          'completedDepth',
+          'frontierRemaining',
+        ],
+        'INVALID',
+      );
+      if (forbidden !== null) {
+        return forbidden;
+      }
       const errorsRead = readOwnDataProp(resultRecord, 'errors');
       if (errorsRead.kind !== 'value') {
         return failure('INVALID_RESULT', 'result.errors', 'INVALID result must include validation errors.');
@@ -966,6 +1054,13 @@ export function inspectVerificationSnapshot(snapshot: unknown): InspectedVerific
       }
 
       const runtimeErrors = errors.filter((entry) => entry.code === 'OUT_OF_DOMAIN_TRANSITION');
+      if (runtimeErrors.length > 0 && runtimeErrors.length !== errors.length) {
+        return failure(
+          'INVALID_RESULT',
+          'result.errors',
+          'INVALID result must not mix validation errors with runtime out-of-domain diagnostics.',
+        );
+      }
       const goalStatus: VerificationReportGoalStatus = hasGoal ? 'NOT_EVALUATED' : 'NO_GOAL_DECLARED';
 
       if (runtimeErrors.length === 0) {
@@ -973,7 +1068,9 @@ export function inspectVerificationSnapshot(snapshot: unknown): InspectedVerific
         const traceProp = readOwnDataProp(resultRecord, 'trace');
         if (
           (statsProp.kind === 'value' && statsProp.value !== undefined) ||
-          (traceProp.kind === 'value' && traceProp.value !== undefined)
+          (traceProp.kind === 'value' && traceProp.value !== undefined) ||
+          statsProp.kind === 'accessor' ||
+          traceProp.kind === 'accessor'
         ) {
           return failure(
             'INVALID_RESULT',
@@ -1034,7 +1131,7 @@ export function inspectVerificationSnapshot(snapshot: unknown): InspectedVerific
         return failure('TRACE_REPLAY_FAILED', 'result.trace', 'Trace replay did not produce a final state.');
       }
 
-      if (!findMatchingRuntimeDiagnostic(model, replay.finalState, runtimeErrors)) {
+      if (!allRuntimeDiagnosticsReproduced(model, replay.finalState, runtimeErrors)) {
         return failure(
           'RUNTIME_DIAGNOSTIC_MISMATCH',
           'result.errors',
@@ -1372,6 +1469,14 @@ function sanitizeTableCell(value: string): string {
   return sanitized;
 }
 
+function sanitizeListItem(value: string): string {
+  let out = sanitizeInline(value);
+  out = out.replace(/^ +/, (spaces) => '&#32;'.repeat(spaces.length));
+  out = out.replace(/^((?:&#32;)*)([+-])(?=\s|$|-)/, '$1\\$2');
+  out = out.replace(/^((?:&#32;)*[0-9]{1,9})\.(?=\s|$)/, '$1\\.');
+  return out;
+}
+
 function longestBacktickRun(value: string): number {
   let longest = 0;
   let current = 0;
@@ -1645,7 +1750,7 @@ export function formatVerificationReportMarkdown(report: VerificationReport): st
     lines.push('Nothing was listed as not modeled.');
   } else {
     for (const entry of report.notModeled) {
-      lines.push(`- ${sanitizeInline(entry)}`);
+      lines.push(`- ${sanitizeListItem(entry)}`);
     }
   }
   lines.push('');

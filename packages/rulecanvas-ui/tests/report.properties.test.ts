@@ -749,4 +749,129 @@ describe('@rulecanvas/ui verification report', () => {
       expect(badCompletedDepth.ok).toBe(false);
     });
   });
+
+  describe('Markdown list-item hardening for notModeled and model strings', () => {
+    const LIST_PAYLOADS = [
+      '---',
+      '- - -',
+      '***',
+      '___',
+      '   ---',
+      '# fake',
+      '## fake',
+      '- nested',
+      '+ nested',
+      '1. nested',
+      '1) nested',
+      '> quote',
+      '    code',
+      'a|b|c',
+      '```',
+      '<script>',
+      '<img src=x onerror=alert(1)>',
+      '![beacon](https://example.invalid/x.png)',
+    ] as const;
+
+    function notModeledReportMarkdown(payloads: readonly string[]): string {
+      const model: TransitionSystemModel = {
+        id: 'markdown-hardening',
+        name: 'Markdown hardening',
+        schema: { ok: { kind: 'boolean' } },
+        initialState: { ok: true },
+        rules: [
+          {
+            id: 'stay_ok',
+            label: 'Keep ok true',
+            guard: boolLit(true),
+            updates: [{ var: 'ok', value: valueLit(true) }],
+          },
+        ],
+        invariants: [{ id: 'inv_ok', label: 'Must stay ok', holds: boolLit(true) }],
+        assumptions: payloads.map((payload, index) => ({
+          id: `a${index}`,
+          category: 'scope',
+          statement: `Statement ${index}.`,
+          notModeled: payload,
+        })),
+      };
+      const built = buildVerificationReportFromSnapshot(snapshotOf(model));
+      if (!built.ok) {
+        throw new Error('Expected the markdown hardening snapshot to validate.');
+      }
+      return formatVerificationReportMarkdown(built.report);
+    }
+
+    function notModeledSection(markdown: string): string[] {
+      const start = markdown.indexOf('## What is not modeled');
+      expect(start).toBeGreaterThan(-1);
+      const end = markdown.indexOf('## Scope disclaimer', start);
+      expect(end).toBeGreaterThan(start);
+      return markdown
+        .slice(start + '## What is not modeled'.length, end)
+        .split('\n')
+        .filter((line) => line.length > 0);
+    }
+
+    it('renders every notModeled entry as a literal top-level bullet', () => {
+      const markdown = notModeledReportMarkdown(LIST_PAYLOADS);
+      const lines = notModeledSection(markdown);
+      expect(lines).toHaveLength(LIST_PAYLOADS.length);
+
+      for (const line of lines) {
+        expect(line.startsWith('- ')).toBe(true);
+        const body = line.slice(2);
+        expect(body.length).toBeGreaterThan(0);
+        expect(body).not.toMatch(/^(?: {4}|\t)/);
+        expect(body).not.toMatch(/^#{1,6}(?:\s|$)/);
+        expect(body).not.toMatch(/^>/);
+        expect(body).not.toMatch(/^(?:[-+*]|\d{1,9}[.)])(?:\s|$)/);
+        expect(body).not.toMatch(/^(?:[-*_])(?:\s*(?:[-*_])){2,}$/);
+        expect(body).not.toMatch(/<\/?[a-zA-Z][^>]*>/);
+        expect(body).not.toContain('![');
+        expect(body).not.toMatch(/\]\(/);
+        expect(body).not.toMatch(/^`{3,}/);
+      }
+    });
+
+    it('neutralizes block starts in model, rule, invariant, goal, and assumption strings', () => {
+      for (const payload of LIST_PAYLOADS) {
+        const model: TransitionSystemModel = {
+          id: 'markdown-metadata',
+          name: payload,
+          schema: { ok: { kind: 'boolean' } },
+          initialState: { ok: true },
+          rules: [
+            {
+              id: 'stay_ok',
+              label: payload,
+              guard: boolLit(true),
+              updates: [{ var: 'ok', value: valueLit(true) }],
+            },
+          ],
+          invariants: [{ id: 'inv_ok', label: payload, holds: boolLit(true) }],
+          goal: { id: 'goal_ok', label: payload, reached: boolLit(true) },
+          assumptions: [
+            {
+              id: 'a1',
+              category: payload,
+              statement: payload,
+              notModeled: payload,
+            },
+          ],
+        };
+        const built = buildVerificationReportFromSnapshot(snapshotOf(model));
+        if (!built.ok) {
+          throw new Error('Expected the metadata hardening snapshot to validate.');
+        }
+        const markdown = formatVerificationReportMarkdown(built.report);
+
+        expect(markdown).not.toContain('<script');
+        expect(markdown).not.toContain('![beacon]');
+        expect(markdown).not.toMatch(/^---\s*$/m);
+        expect(markdown).not.toMatch(/^#{1,6} fake\s*$/m);
+        expect(markdown).not.toMatch(/^> quote\s*$/m);
+        expect(markdown).not.toMatch(/^ {4}code\s*$/m);
+      }
+    });
+  });
 });
