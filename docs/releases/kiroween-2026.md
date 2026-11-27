@@ -16,34 +16,16 @@ Use `main` at the `v0.5.0` release revision as the candidate (merged from [PR #1
 | Working project on its intended platform | Both browser apps and their workers passed the local and CI gates. The staged archives passed a fresh same-origin smoke test at both a root and a repository subpath. |
 | Functional app URLs and free judge access | Deployed on Cloudflare Pages (`rulecanvaskit` project, deployment `https://d100be44.rulecanvaskit.pages.dev`): https://rulecanvaskit.pages.dev/agent-gate/ and https://rulecanvaskit.pages.dev/interlock-sim/. Verified publicly over HTTPS with `Background Web Worker` execution, preset deep links, and reciprocal navigation. Keep hosting available through January 29, 2027 at 1:00 p.m. Pacific. |
 | Public GitHub source, instructions, assets and detectable open-source license | GitHub reports PUBLIC and MIT. The candidate contains source, assets, and setup and build instructions. At submission, use a public repository link plus a direct link to the source revision matching the live apps. |
-| Visible, tracked root `.kiro/` | Candidate tracks steering, the hook definition, the specs directory README, and `.kiro/specs/release-artifact-preflight/`. Preserve these paths and verify them on the submitted revision. |
-| Working project built using Kiro and a factual usage write-up | Recorded Kiro review influenced the legacy worker fix and regression test, a separate CLI session loaded tracked steering, and `.kiro/specs/release-artifact-preflight/` executed the release preflight spec. The [write-up](../TOOL_ATTRIBUTION.md) describes all three activities. The judge decides whether the evidence establishes sufficient use. |
+| Visible, tracked root `.kiro/` | Candidate tracks steering (`.kiro/steering/`), `boundary-auditor` agent (`.kiro/agents/`), hook definitions (`.kiro/hooks/`), `.kiro/specs/README.md`, `.kiro/specs/release-artifact-preflight/`, and `.kiro/specs/skeleton-crew-hub-and-starter/`. Preserve these paths and verify them on the submitted revision. |
+| Working project built using Kiro and a factual usage write-up | Recorded Kiro review influenced the legacy worker fix and regression test, a separate CLI session loaded tracked steering, `.kiro/specs/release-artifact-preflight/` executed the release preflight spec in Kiro Spec mode, and `.kiro/specs/skeleton-crew-hub-and-starter/` was executed in a Kiro IDE agent session (with Task 2.1 hook confirmation open). The [write-up](../TOOL_ATTRIBUTION.md) describes all recorded activities. The judge decides whether the evidence establishes sufficient use. |
 | Features and functionality described in English | Copy the [submission description](../SKELETON_CREW_SUBMISSION.md#project-description) and Kiro section into Devpost. Keep testing instructions and all other materials in English, or supply English translations. |
 | Working demo footage, under three minutes, public on YouTube, with media rights | The staged 64-second recording shows both apps running, with English narration and captions. The entrant must confirm media rights, approve public upload, and verify signed-out playback and captions. Add the YouTube watch URL to Devpost. |
 
 Complete all required form fields. If claiming an optional bonus, check its separate rule. Startup requires founder and profile information. Student requires eligibility and enrollment details for all members. Ghost of Kiroween Past requires prior registration. Kiro Crew App requires its own write-up and public repository. Blog and Social Blitz require qualifying public posts during the submission period. The Best Demo bonus uses the judging criteria. [Official rules](https://kiroween.devpost.com/rules)
 
-## Stage the frozen build
+## Stage the candidate build
 
-Run these commands from the repository root on macOS with the locally staged, checksum-verified release evidence. On Linux, replace `shasum -a 256 -c` with `sha256sum -c`. Preserve the archive and manifest outside the host so a later rollback can reuse the same bytes.
-
-```bash
-set -e
-candidate=634435e152faca6dfd70aed3abcee768d033568a
-evidence="$PWD/.planning/2026-11-24-rulecanvaskit-development/evidence/634435e"
-test "$(cat "$evidence/COMMIT")" = "$candidate"
-(
-  cd "$evidence/archives"
-  shasum -a 256 -c SHA256SUMS.txt
-)
-site="$(mktemp -d)"
-tar -xzf "$evidence/archives/rulecanvas-static-site.tar.gz" -C "$site"
-test -f "$site/agent-gate/index.html"
-test -f "$site/interlock-sim/index.html"
-printf 'Upload directory: %s\n' "$site"
-```
-
-To preflight the hosted candidate from a passing GitHub Actions CI run (`<ci_run_id>`), download the CI artifact while it remains available. Use Node.js, Python 3, and the installed Playwright Chromium used by the [browser gate](../../README.md#build-pack-and-verification-instructions). Set `PLAYWRIGHT_MODULE` if Playwright is outside the default search paths.
+To preflight and stage the hosted candidate from a passing GitHub Actions CI run (`<ci_run_id>`), download the CI artifact while it remains available. Use Node.js, Python 3, and the installed Playwright Chromium used by the [browser gate](../../README.md#build-pack-and-verification-instructions). Set `PLAYWRIGHT_MODULE` if Playwright is outside the default search paths.
 
 ```bash
 set -e
@@ -59,7 +41,7 @@ pnpm verify:release:preflight --archive-dir "$archives" --output "$site"
 printf 'Upload directory: %s\n' "$site"
 ```
 
-The local and hosted archive commands produced identical app files. To repeat the origin-root smoke test, run `python3 -m http.server 4189 --bind 127.0.0.1 --directory "$site"`. For a repository-subpath test, copy both app directories under a `rulecanvas-kit` directory inside the server root and rerun the same checks with the `/rulecanvas-kit` prefix. Both placements passed on the extracted candidate with background workers and reciprocal navigation.
+On Linux, replace `shasum -a 256 -c` with `sha256sum -c`. `pnpm verify:release:preflight` extracts `site-static.tar.gz`, `agent-gate-static.tar.gz`, and `interlock-sim-static.tar.gz` into `$site` and runs the same-origin root (`/`) and `/rulecanvas-kit/` Chromium smoke checks before atomic output placement.
 
 ## Deploy after approval
 

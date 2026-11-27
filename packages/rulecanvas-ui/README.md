@@ -1,6 +1,6 @@
 # @rulecanvas/ui
 
-Framework-independent ES2022 presentation view models, safe HTML renderers, core-backed replay/simulation controller, diagnostic indexing, and strict integer draft parsing for RuleCanvasKit (`v0.2.0`).
+Framework-independent ES2022 presentation view models, safe HTML renderers, core-backed replay/simulation controller, deterministic verification reports, verdict delta analysis, diagnostic indexing, and strict integer draft parsing for RuleCanvasKit (`v0.8.0`).
 
 ## Purity & Dependency Contract
 
@@ -31,6 +31,18 @@ Built entry point: `./dist/index.js` (`./dist/index.d.ts`).
 
 - Functions: `escapeHtml`, `buildVerdictSummaryView`, `renderVerdictSummaryHtml`, `buildStateTableView`, `renderStateTableHtml`, `buildInvariantsPanelView`, `renderInvariantsPanelHtml`, `renderReplayTimelineHtml`, `renderAssumptionsPanelHtml`, `renderValidationErrorsHtml`
 - Types: `VerdictTone`, `VerdictStatItem`, `VerdictSummaryView`, `StateTableRowView`, `StateTableView`, `InvariantRowView`, `GoalPanelView`, `InvariantsPanelView`
+
+### Deterministic Verification Reports (`report.ts`)
+
+- Constants & Functions: `VERIFICATION_REPORT_SCHEMA_VERSION`, `buildVerificationReportFromSnapshot`, `verifyAndBuildReport`, `formatVerificationReportMarkdown`, `serializeVerificationReportJson`, `sanitizeReportFilename`, `isTrustedVerificationReport`
+- Types: `VerificationReport`, `VerificationReportProvenance`, `VerificationReportGoalStatus`, `VerificationReportModelSummary`, `VerificationReportGoalRef`, `VerificationReportInvariantRef`, `VerificationReportTraceDiff`, `VerificationReportTraceStep`, `VerificationReportInconclusive`, `ReportBuildResult`
+- Distinguishes `'validated-snapshot'` reports (restating a structurally validated snapshot; trace replay checks `VIOLATED` and runtime `INVALID` prefix consistency without independently re-running exhaustive search) from `'recomputed-core'` reports (produced directly by `@rulecanvas/core` `verifyModel`), encodes `theoreticalStates` as decimal strings (`bigIntEncoding: 'decimal-string'`), and flags unreachable goals with `vacuousGoalWarning`.
+
+### Verdict Delta Analysis (`delta.ts`)
+
+- Functions: `computeVerdictDelta`
+- Types: `VerdictDelta`, `VerdictDeltaResult`, `VerdictDeltaClassification`, `VerdictDeltaChangedSection`, `VerdictDeltaEndpoint`
+- Compares two non-stale snapshots (`repaired`, `verified-with-spec-change`, `vacuous-lockout`, `inconclusive-after-violation`, `still-violated`, `regression`, `unchanged`, `other`) while separating rule edits from spec/bound changes.
 
 ## Quick Start
 

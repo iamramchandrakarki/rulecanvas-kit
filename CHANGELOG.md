@@ -7,17 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-27
+
+See [docs/releases/v0.8.0.md](./docs/releases/v0.8.0.md) for package versions, verification summary, and known limitations.
+
 ### Added
 
-- Static hub under `site/`: the problem statement, a System, Light, and Dark switch, and AgentGate and InterlockSim panels that open each broken preset or its fixes through relative links. A test checks every verdict and counterexample the hub states against `verifyModel`.
+- Static hub under `site/`: the problem statement, a System, Light, and Dark switch, AgentGate and InterlockSim panels that open each broken preset or its fixes through relative links, and a `pnpm check:model` CLI snippet. A test checks every verdict and counterexample the hub states against `verifyModel`.
 - `WorkbenchBrandLink` in `@rulecanvas/workbench-react`. Both workbenches link their brand mark back to the hub (`../`, or `VITE_HUB_URL`), with discard protection for unsaved edits.
-- Skeleton Crew Starter Template under `templates/workbench-starter/`: a CI/CD production release gate workbench that installs from local tarballs. `pnpm run pack:local` writes those tarballs.
+- Skeleton Crew Starter Template under `templates/workbench-starter/`: a CI/CD production release gate workbench that installs from local tarballs (`pnpm run pack:local`), including non-stale `validated-snapshot` report export (`Copy Markdown`, `Download Markdown`, `Download JSON`) and `tests/model.test.mjs`.
 - Release preflight support for `site-static.tar.gz`, with collision protection for the app directories and hub navigation checks.
+- Deterministic verification reports (`report.ts`: `VERIFICATION_REPORT_SCHEMA_VERSION = '1.0.0'`, `'validated-snapshot'` vs `'recomputed-core'` provenance, decimal-string BigInt counts, `vacuousGoalWarning`, Markdown/JSON serializers, `TRUSTED_REPORTS` `WeakSet`) and verdict delta comparison (`delta.ts`: `computeVerdictDelta`) in `@rulecanvas/ui`, with seeded property-based tests (`tests/report.properties.test.ts`, `tests/delta.test.ts`).
+- `scripts/check-model.mjs` (`pnpm check:model`) CLI and `tests/check-model.test.mjs` (`pnpm test:cli`) supporting `--markdown`, `--max-states`, `--max-depth`, and `--allow-vacuous` with exit codes `0` / `1` / `2`.
+- `ExportReportMenu` and `VerdictDeltaRow` in `@rulecanvas/workbench-react`, wired into both `apps/agent-gate` and `apps/interlock-sim`.
+- Inline trace toolbar (`Reset`, `Previous`, `Next`, `Restore Counterexample`) in `apps/interlock-sim` and global `[` / `]` replay step keyboard shortcuts in both workbenches.
 
 ### Changed
 
-- `pnpm verify:pack` builds and tests the starter template instead of an inline booking fixture. `STARTER_FIXTURE_DIST` replaces `BOOKING_FIXTURE_DIST`, which remains an alias.
+- `pnpm verify:pack` builds and tests `templates/workbench-starter/` instead of an inline booking fixture. `STARTER_FIXTURE_DIST` replaces `BOOKING_FIXTURE_DIST`, which remains an alias.
 - The overclaim boundary test also scans `site/`, `templates/`, and `apps/*/index.html` for paraphrased claims. Test hygiene also scans `templates/`.
+- `@rulecanvas/workbench/verify` (`sanitizeAndFreezeVerifyResult`) now reconstructs `VerifyResult` objects strictly from allowlisted fields, checks `stats.theoreticalStates` via exact `BigInt` multiplication, and verifies trace steps with `@rulecanvas/core` `replayTrace` / `stepModel`.
+- Both `apps/agent-gate` (`model-editor.ts`) and `apps/interlock-sim` (`model-inspector.ts`) now use `@rulecanvas/workbench/model-json` with `duplicateKeys: 'reject'` and `DEFAULT_MODEL_JSON_LIMITS` (512,000 chars / 10,000 nodes), and both `verify-client.ts` files configure `asyncStartupError: 'report'`.
+- Header primary and compare controls use concise labels (`Verify`, `Compare (5)`, `Compare (3)`), and wide comparison tables add `.rc-scroll-x` horizontal scroll cues with a sticky `Action` column.
+- `@rulecanvas/core` remains unchanged at `v0.1.0`; `@rulecanvas/ui`, `@rulecanvas/workbench`, `@rulecanvas/workbench-react`, `@rulecanvas/agent-gate`, and `@rulecanvas/interlock-sim` are versioned at `0.8.0`.
+
+### Fixed
+
+- `WorkbenchSelect` removes `[popover]` and compensates for transformed ancestor containing blocks when the Popover API top layer is unavailable.
+- `WorkbenchGuideControl` clamps its panel within viewport bounds on resize and scroll, closes on `focusin` outside the control, and enlarges its close button hit target (`32×32px`, `40×40px` on coarse pointers).
+- Small-laptop media rules (`1024–1279px`) collapse only the `Guide` label to an icon while keeping `Guide` visible at `1280px` and `1440px`.
 
 ## [0.7.0] - 2026-11-27
 
@@ -171,7 +189,8 @@ See [docs/releases/v0.2.0.md](./docs/releases/v0.2.0.md) and the [`v0.2.0`](http
   - GitHub Actions CI workflow (`.github/workflows/ci.yml`) running build, strict ES2022 typecheck, tests, seeded PBT, boundary checks, anti-skip hygiene, tracked workspace config verification, and benchmarks.
   - Open-source documentation and repository templates (`README.md`, `docs/ARCHITECTURE.md`, `CONTRIBUTING.md`, `SECURITY.md`, `CHANGELOG.md`, GitHub issue and pull request templates).
 
-[Unreleased]: https://github.com/iamramchandrakarki/rulecanvas-kit/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/iamramchandrakarki/rulecanvas-kit/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/iamramchandrakarki/rulecanvas-kit/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/iamramchandrakarki/rulecanvas-kit/compare/v0.5.0...v0.7.0
 [0.5.0]: https://github.com/iamramchandrakarki/rulecanvas-kit/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/iamramchandrakarki/rulecanvas-kit/compare/v0.3.0...v0.4.0
