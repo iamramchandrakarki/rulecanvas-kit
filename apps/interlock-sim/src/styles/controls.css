@@ -620,6 +620,27 @@ select:focus-visible,
   color: var(--color-ink-secondary);
 }
 
+/* Contradictory verdicts for identical semantic inputs are an integrity failure. */
+.rc-verdict-delta[data-classification='contradictory'],
+.rc-verdict-delta[data-tone='error'] {
+  padding: 6px 8px;
+  border-top-color: var(--color-error-border);
+  border-radius: var(--radius-sm);
+  background-color: var(--color-error-soft);
+  color: var(--color-error);
+}
+
+.rc-verdict-delta[data-classification='contradictory'] .rc-verdict-delta-now,
+.rc-verdict-delta[data-tone='error'] .rc-verdict-delta-now {
+  color: var(--color-error);
+}
+
+.rc-verdict-delta[data-classification='contradictory'] .rc-verdict-delta-detail,
+.rc-verdict-delta[data-tone='error'] .rc-verdict-delta-detail {
+  color: var(--color-error);
+  font-weight: 600;
+}
+
 /* Subtle horizontal scrolling shadow cues on wide data tables */
 .rc-scroll-x {
   background-image:

@@ -136,6 +136,9 @@ function formatCurrentQualification(
   classification: string,
   changedSections: readonly string[],
 ): string {
+  if (classification === 'contradictory') {
+    return 'Contradictory verdicts for identical semantic inputs — integrity failure, not a confirmed repair';
+  }
   const parts: string[] = [];
   if (endpoint.status === 'VERIFIED') {
     if (endpoint.goalStatus === 'REACHED') {
@@ -191,12 +194,15 @@ export function VerdictDeltaRow({
     delta.changedSections,
   );
   const rootClass = ['rc-verdict-delta', className].filter(Boolean).join(' ');
+  const isContradictory = delta.classification === 'contradictory';
 
   return (
     <p
       className={rootClass}
       data-classification={delta.classification}
       data-spec-changed={delta.specOrBoundsChanged ? 'true' : 'false'}
+      data-tone={isContradictory ? 'error' : undefined}
+      role={isContradictory ? 'status' : undefined}
     >
       <span className="rc-verdict-delta-label">Previous run:</span>{' '}
       <span className="rc-verdict-delta-before">{beforeLabel}</span>{' '}

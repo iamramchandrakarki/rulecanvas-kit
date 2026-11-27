@@ -42,7 +42,7 @@ Built entry point: `./dist/index.js` (`./dist/index.d.ts`).
 
 - Functions: `computeVerdictDelta`
 - Types: `VerdictDelta`, `VerdictDeltaResult`, `VerdictDeltaClassification`, `VerdictDeltaChangedSection`, `VerdictDeltaEndpoint`
-- Compares two non-stale snapshots (`repaired`, `verified-with-spec-change`, `vacuous-lockout`, `inconclusive-after-violation`, `still-violated`, `regression`, `unchanged`, `other`) while separating rule edits from spec/bound changes.
+- Compares two non-stale snapshots (`repaired`, `verified-with-spec-change`, `vacuous-lockout`, `inconclusive-after-violation`, `still-violated`, `regression`, `unchanged`, `contradictory`, `other`) while separating rule edits from spec/bound changes. `contradictory` reports verdicts that disagree for identical semantic model inputs and bounds (including when only cosmetic metadata or assumptions changed); deterministic verification cannot produce such an outcome, so it is reported as an integrity contradiction rather than a confirmed repair. Cosmetic metadata (model name, rule/invariant/goal ids and labels) never counts as a semantic rule or spec change, and `repaired` requires an actual rule change.
 
 ## Quick Start
 
