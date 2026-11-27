@@ -1,5 +1,6 @@
 // Browser stage of the release preflight: serves the Staging_Directory on loopback under
-// two base paths and checks both workbenches in Chromium with real worker verification.
+// two base paths and checks the hub, hub <-> app navigation, and both workbenches in Chromium
+// with real worker verification.
 import { createServer } from 'node:http';
 import { lstatSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -46,6 +47,67 @@ const APPS = [
     ],
   },
 ];
+
+const HUB_APPS = [
+  { app: 'agent-gate', verdict: 'section.ag-verdict', presets: ['broken', 'vacuous-fix', 'principled-fix'] },
+  { app: 'interlock-sim', verdict: 'section.is-verdict', presets: ['broken', 'vacuous', 'fixed'] },
+];
+
+// Hub at <base>: HTTP 200, preset links resolve under <base>, and each "Open Broken Scenario"
+// link reaches a VIOLATED verdict whose brand link returns to the hub.
+async function checkHub(context, origin, basePath, failures) {
+  const hubUrl = `${origin}${basePath}`;
+  const label = `${basePath} hub`;
+  const page = await context.newPage();
+  try {
+    const response = await page.goto(hubUrl, { waitUntil: 'load' });
+    if (response?.status() !== 200) {
+      failures.push(`${label}: expected HTTP 200, got ${response?.status() ?? 'no response'}`);
+      return;
+    }
+    if ((await page.locator('h1').count()) !== 1) {
+      failures.push(`${label}: expected one h1`);
+      return;
+    }
+    for (const spec of HUB_APPS) {
+      await page.goto(hubUrl, { waitUntil: 'load' });
+      const hrefs = await page
+        .locator(`[data-app="${spec.app}"] a[data-preset]`)
+        .evaluateAll((links) => links.map((a) => a.href));
+      const expected = spec.presets.map((preset) => `${hubUrl}${spec.app}/?preset=${preset}`);
+      if (JSON.stringify(hrefs) !== JSON.stringify(expected)) {
+        failures.push(`${label}: ${spec.app} links resolve to ${JSON.stringify(hrefs)}, expected ${JSON.stringify(expected)}`);
+        continue;
+      }
+      try {
+        await page.locator(`[data-app="${spec.app}"] a[data-preset="broken"]`).click({ timeout: VERDICT_TIMEOUT_MS });
+        await page.waitForURL(expected[0], { timeout: VERDICT_TIMEOUT_MS });
+        await page
+          .locator(`${spec.verdict}[data-status="VIOLATED"]`)
+          .first()
+          .waitFor({ state: 'visible', timeout: VERDICT_TIMEOUT_MS });
+      } catch {
+        failures.push(`${label}: Open Broken Scenario did not render a VIOLATED ${spec.app} verdict`);
+        continue;
+      }
+      const brand = page.locator('a[data-rc-brand-link="true"]').first();
+      const brandHref = (await brand.count()) === 1 ? await brand.evaluate((a) => a.href) : null;
+      if (brandHref !== hubUrl) {
+        failures.push(`${label}: ${spec.app} brand link resolves to ${brandHref}, expected ${hubUrl}`);
+        continue;
+      }
+      try {
+        await brand.click({ timeout: VERDICT_TIMEOUT_MS });
+        await page.waitForURL(hubUrl, { timeout: VERDICT_TIMEOUT_MS });
+        await page.locator('h1').first().waitFor({ state: 'visible', timeout: VERDICT_TIMEOUT_MS });
+      } catch {
+        failures.push(`${label}: ${spec.app} brand link did not return to the hub`);
+      }
+    }
+  } finally {
+    await page.close().catch(() => {});
+  }
+}
 
 function startServer(stagingDir, errors) {
   const root = path.resolve(stagingDir);
@@ -179,6 +241,8 @@ export async function runBrowserChecks({ chromium, stagingDir }) {
         if (res.status() >= 400) record(res.url(), `HTTP ${res.status()}`);
       });
       try {
+        current = { app: 'hub' };
+        await checkHub(context, origin, basePath, failures);
         for (const spec of APPS) {
           current = spec;
           for (const preset of spec.presets) {

@@ -100,7 +100,7 @@ def normalise(ti):
     return segments
 
 
-def validate(tf, stream_len):
+def validate(tf, stream_len, reject_top_level=()):
     """Pass 1: validate every member without writing. Returns [(TarInfo, segments)]."""
     plan = []
     files = {}  # casefolded path -> original path
@@ -115,6 +115,8 @@ def validate(tf, stream_len):
             raise Reject("%s: not a regular file or directory" % entry_label(ti))
         segments = normalise(ti)
         is_dir = ti.type == tarfile.DIRTYPE
+        if segments and segments[0].casefold() in reject_top_level:
+            raise Reject("%s: top-level %s collides with a reserved directory" % (entry_label(ti), ascii(segments[0])))
         if not segments:
             if not is_dir:
                 raise Reject("%s: file with empty path" % entry_label(ti))
@@ -170,12 +172,14 @@ def make_dir(path):
         os.chmod(path, 0o755)
 
 
-def extract(tf, plan, dest):
+def extract(tf, plan, dest, dest_may_exist_empty=False):
     """Pass 2: write validated members under dest."""
     try:
         os.mkdir(dest, 0o755)
     except FileExistsError:
-        raise Reject("destination %s already exists" % ascii(dest))
+        st = os.lstat(dest)
+        if not dest_may_exist_empty or not stat.S_ISDIR(st.st_mode) or os.listdir(dest):
+            raise Reject("destination %s already exists" % ascii(dest))
     os.chmod(dest, 0o755)
     root = os.path.realpath(dest)
     for ti, segments in plan:
@@ -226,14 +230,15 @@ def run(args):
         raise Reject("SHA-256 mismatch: expected %s, computed %s" % (args.sha256, digest))
     raw = decompress(data)
     with tarfile.open(fileobj=io.BytesIO(raw), mode="r:") as tf:
-        plan = validate(tf, len(raw))
+        reserved = tuple(name.casefold() for name in (args.reject_top_level or []))
+        plan = validate(tf, len(raw), reserved)
         check_end_blocks(raw, tf.offset)
         if args.dest:
             if args.require_index and not any(
                 s == ["index.html"] and t.type != tarfile.DIRTYPE for t, s in plan
             ):
                 raise Reject("missing index.html at archive root")
-            extract(tf, plan, args.dest)
+            extract(tf, plan, args.dest, args.dest_may_exist_empty)
             if args.require_index:
                 require_index(args.dest)
     if args.require_index and not args.dest:
@@ -246,6 +251,10 @@ def main():
     parser.add_argument("--sha256", required=True)
     parser.add_argument("--dest")
     parser.add_argument("--require-index", action="store_true")
+    # Reject any member whose first path segment matches NAME (case-insensitive). Repeatable.
+    parser.add_argument("--reject-top-level", action="append", metavar="NAME")
+    # Allow --dest to be an existing, empty, non-symlink directory (the staging root).
+    parser.add_argument("--dest-may-exist-empty", action="store_true")
     try:
         args = parser.parse_args()
     except SystemExit:

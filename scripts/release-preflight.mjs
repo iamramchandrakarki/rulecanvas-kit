@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// Release-only preflight: validates the CI artifact directory, extracts the static
-// archives into a staging directory, runs Chromium checks, then publishes with one rename.
+// Release-only preflight: validates the CI artifact directory, extracts the hub archive into
+// the staging root and each app archive into its own subdirectory, runs Chromium checks, then
+// publishes with one rename.
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
@@ -31,6 +32,8 @@ const STATIC_APPS = [
   { app: 'agent-gate', file: 'agent-gate-static.tar.gz' },
   { app: 'interlock-sim', file: 'interlock-sim-static.tar.gz' },
 ];
+// The hub is extracted into the staging root, so it must not claim either app directory.
+const SITE_ARCHIVE = 'site-static.tar.gz';
 const USAGE = 'usage: node scripts/release-preflight.mjs --archive-dir DIR --output DIR';
 
 class PreflightError extends Error {
@@ -106,7 +109,7 @@ function expectedArchiveNames() {
     const { version } = JSON.parse(readFileSync(manifestPath, 'utf8'));
     return `rulecanvas-${name}-${version}.tgz`;
   });
-  return { libs, all: [...libs, ...STATIC_APPS.map((s) => s.file)] };
+  return { libs, all: [...libs, ...STATIC_APPS.map((s) => s.file), SITE_ARCHIVE] };
 }
 
 function checkListing(archiveDir, archiveNames) {
@@ -184,9 +187,11 @@ function readCaptured(file, limit, artifact) {
   }
 }
 
-function runHelper(name, bytes, digest, dest) {
+function runHelper(name, bytes, digest, { dest, destMayExistEmpty = false, rejectTopLevel = [] } = {}) {
   const args = [HELPER, '--name', name, '--sha256', digest];
   if (dest) args.push('--dest', dest, '--require-index');
+  if (destMayExistEmpty) args.push('--dest-may-exist-empty');
+  for (const reserved of rejectTopLevel) args.push('--reject-top-level', reserved);
   return new Promise((resolve, reject) => {
     const child = spawn('python3', args, { stdio: ['pipe', 'ignore', 'pipe'] });
     const stderrChunks = [];
@@ -243,8 +248,13 @@ async function main() {
   try {
     staging = mkdtempSync(path.join(path.dirname(output), '.release-preflight-staging-'));
     for (const name of libs) await runHelper(name, captured.get(name), manifest.get(name));
+    await runHelper(SITE_ARCHIVE, captured.get(SITE_ARCHIVE), manifest.get(SITE_ARCHIVE), {
+      dest: staging,
+      destMayExistEmpty: true,
+      rejectTopLevel: STATIC_APPS.map((s) => s.app),
+    });
     for (const { app, file } of STATIC_APPS) {
-      await runHelper(file, captured.get(file), manifest.get(file), path.join(staging, app));
+      await runHelper(file, captured.get(file), manifest.get(file), { dest: path.join(staging, app) });
     }
     try {
       await runBrowserChecks({ chromium, stagingDir: staging });

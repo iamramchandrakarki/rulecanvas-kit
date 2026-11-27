@@ -86,7 +86,8 @@ const versions = Object.fromEntries(
 const LIB_NAMES = ['core', 'ui', 'workbench', 'workbench-react'].map(
   (name) => `rulecanvas-${name}-${versions[name]}.tgz`,
 );
-const STATIC_NAMES = ['agent-gate-static.tar.gz', 'interlock-sim-static.tar.gz'];
+const STATIC_NAMES = ['agent-gate-static.tar.gz', 'interlock-sim-static.tar.gz', 'site-static.tar.gz'];
+const SITE_DIR = path.join(REPO_ROOT, 'site');
 const ARCHIVE_NAMES = [...LIB_NAMES, ...STATIC_NAMES];
 const MANIFEST = 'SHA256SUMS.txt';
 
@@ -104,6 +105,10 @@ function distEntries(app, inject) {
   if (!existsSync(path.join(dist, 'index.html'))) {
     assert.fail(`apps/${app}/dist is missing; run "pnpm build" before pnpm test:release:preflight`);
   }
+  return treeEntries(dist, inject);
+}
+
+function treeEntries(dist, inject) {
   const entries = [{ name: '.', type: 'dir' }];
   const walk = (rel) => {
     for (const child of readdirSync(path.join(dist, rel)).sort()) {
@@ -141,7 +146,15 @@ function writeManifest(archiveDir, { extraLines = [], names = ARCHIVE_NAMES } = 
  * Creates an isolated sandbox with a valid archive directory and an empty parent for the output.
  * `staticEntries` maps an app to a function that rewrites its entry list.
  */
-function createFixture({ agentEntries, interlockEntries, agentOptions = {}, agentInject, interlockInject } = {}) {
+function createFixture({
+  agentEntries,
+  interlockEntries,
+  siteEntries,
+  agentOptions = {},
+  agentInject,
+  interlockInject,
+  siteInject,
+} = {}) {
   const root = mkdtempSync(path.join(tmpdir(), 'rulecanvas-preflight-'));
   tempRoots.push(root);
   const archiveDir = path.join(root, 'archives');
@@ -163,6 +176,10 @@ function createFixture({ agentEntries, interlockEntries, agentOptions = {}, agen
   specs.push({
     out: path.join(archiveDir, 'interlock-sim-static.tar.gz'),
     entries: interlockEntries ?? distEntries('interlock-sim', interlockInject),
+  });
+  specs.push({
+    out: path.join(archiveDir, 'site-static.tar.gz'),
+    entries: siteEntries ?? treeEntries(SITE_DIR, siteInject),
   });
   buildArchives(specs);
   writeManifest(archiveDir);
@@ -215,12 +232,16 @@ function assertFailure(fixture, run, check, artifacts, { expectedParent = [] } =
 }
 
 describe('release preflight: success', () => {
-  test('publishes exactly agent-gate/ and interlock-sim/ after a clean run', { timeout: BROWSER_TIMEOUT_MS }, () => {
+  test('publishes the hub at the root with agent-gate/ and interlock-sim/ beside it', { timeout: BROWSER_TIMEOUT_MS }, () => {
     const fixture = createFixture();
     const { result, before } = runFixture(fixture);
     assert.equal(result.status, 0, `stdout=${result.stdout} stderr=${result.stderr}`);
     assert.ok(result.stdout.includes(fixture.output), `stdout should name the output path: ${result.stdout}`);
-    assert.deepEqual(readdirSync(fixture.output).sort(), ['agent-gate', 'interlock-sim']);
+    assert.deepEqual(
+      readdirSync(fixture.output).sort(),
+      [...readdirSync(SITE_DIR), 'agent-gate', 'interlock-sim'].sort(),
+    );
+    assert.equal(readFileSync(path.join(fixture.output, 'index.html'), 'utf8'), readFileSync(path.join(SITE_DIR, 'index.html'), 'utf8'));
     for (const app of ['agent-gate', 'interlock-sim']) {
       assert.ok(lstatSync(path.join(fixture.output, app, 'index.html')).isFile());
     }
@@ -326,6 +347,53 @@ describe('release preflight: directory and manifest failures', () => {
     } else {
       assertFailure(fixture, run, 'archive-listing', [LIB_NAMES[0]]);
     }
+  });
+});
+
+describe('release preflight: hub archive', () => {
+  test('missing site-static.tar.gz', () => {
+    const fixture = createFixture();
+    rmSync(path.join(fixture.archiveDir, 'site-static.tar.gz'));
+    writeManifest(fixture.archiveDir, { names: ARCHIVE_NAMES.filter((name) => name !== 'site-static.tar.gz') });
+    assertFailure(fixture, runFixture(fixture), 'archive-listing', ['site-static.tar.gz']);
+  });
+
+  const collisions = [
+    { title: 'top-level agent-gate/ directory', entries: [{ name: 'agent-gate', type: 'dir' }] },
+    { title: 'top-level interlock-sim file', entries: [{ name: './interlock-sim', type: 'file', text: 'x' }] },
+    {
+      title: 'case-folded Interlock-Sim/ member',
+      entries: [{ name: 'Interlock-Sim/index.html', type: 'file', text: '<!doctype html>' }],
+    },
+  ];
+  for (const { title, entries } of collisions) {
+    test(`rejects a ${title} in the hub archive`, () => {
+      const fixture = createFixture({
+        siteEntries: [...treeEntries(SITE_DIR), ...entries],
+      });
+      assertFailure(fixture, runFixture(fixture), 'archive', ['site-static.tar.gz', 'collides with a reserved directory']);
+    });
+  }
+
+  test('hub archive without index.html', () => {
+    const fixture = createFixture({
+      siteEntries: treeEntries(SITE_DIR).filter((entry) => entry.name !== './index.html'),
+    });
+    assertFailure(fixture, runFixture(fixture), 'archive', ['site-static.tar.gz', 'missing index.html']);
+  });
+
+  test('Browser_Error on the hub (console.error) prevents publication', { timeout: BROWSER_TIMEOUT_MS }, () => {
+    const fixture = createFixture({ siteInject: `<script>console.error('preflight-hub-error')</script>` });
+    assertFailure(fixture, runFixture(fixture), 'browser', ['app=hub', 'preflight-hub-error']);
+    assert.equal(existsSync(fixture.output), false);
+  });
+
+  test('hub request to another origin prevents publication', { timeout: BROWSER_TIMEOUT_MS }, () => {
+    const fixture = createFixture({
+      siteInject: `<link rel="stylesheet" href="https://cdn.example.invalid/x.css">`,
+    });
+    assertFailure(fixture, runFixture(fixture), 'browser', ['cdn.example.invalid']);
+    assert.equal(existsSync(fixture.output), false);
   });
 });
 
