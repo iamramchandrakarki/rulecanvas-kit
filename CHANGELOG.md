@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Static hub under `site/`: the problem statement, a System, Light, and Dark switch, and AgentGate and InterlockSim panels that open each broken preset or its fixes through relative links. A test checks every verdict and counterexample the hub states against `verifyModel`.
+- `WorkbenchBrandLink` in `@rulecanvas/workbench-react`. Both workbenches link their brand mark back to the hub (`../`, or `VITE_HUB_URL`), with discard protection for unsaved edits.
+- Skeleton Crew Starter Template under `templates/workbench-starter/`: a CI/CD production release gate workbench that installs from local tarballs. `pnpm run pack:local` writes those tarballs.
+- Release preflight support for `site-static.tar.gz`, with collision protection for the app directories and hub navigation checks.
+
+### Changed
+
+- `pnpm verify:pack` builds and tests the starter template instead of an inline booking fixture. `STARTER_FIXTURE_DIST` replaces `BOOKING_FIXTURE_DIST`, which remains an alias.
+- The overclaim boundary test also scans `site/`, `templates/`, and `apps/*/index.html` for paraphrased claims. Test hygiene also scans `templates/`.
+
 ## [0.7.0] - 2026-11-27
 
 See [docs/releases/v0.7.0.md](./docs/releases/v0.7.0.md) for package versions, verification summary, and known limitations.

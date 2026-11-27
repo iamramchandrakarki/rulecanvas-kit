@@ -112,6 +112,8 @@ pnpm --filter @rulecanvas/interlock-sim preview
 
 To use the navigation between apps, serve the two production builds as sibling directories on one origin. The [static preview and release instructions](./docs/releases/workbench-integration.md) show the directory layout.
 
+The static hub in `site/` is the landing page for that layout. Copy `site/` to the deployment root and the two app builds into `agent-gate/` and `interlock-sim/` beside it. Every hub link is relative, so the same files work under `/` or a subpath such as `/rulecanvas-kit/`. Each workbench links its RuleCanvasKit brand mark back to `../`. Set `VITE_HUB_URL` at build time to point it elsewhere on the same origin. With unsaved edits, the existing discard dialog asks first.
+
 ## Usage Examples
 
 Define a bounded model with a schema, transition rules, invariants, an optional goal, and explicit assumptions, then run `verifyModel` and replay any counterexample with `replayTrace`:
@@ -198,7 +200,7 @@ if (result.status === 'VIOLATED') {
 RuleCanvasKit powers two domain-separated React 19 + Vite workbenches built on the four shared packages and styled according to [DESIGN.md](./DESIGN.md). Both apps provide:
 
 - **Persistent System / Light / Dark themes & self-hosted typography**: `useWorkbenchTheme` and `WorkbenchThemeSwitch` persist `System` / `Light` / `Dark` preferences (with `Light` fallback), paired with self-hosted IBM Plex Sans and IBM Plex Mono Latin WOFF2 subsets (SIL Open Font License 1.1) with zero external CDN requests.
-- **Reciprocal same-origin navigation**: `WorkbenchNavigation` links between `AgentGate` and `InterlockSim` (`../interlock-sim/` and `../agent-gate/` by default for sibling static deployments, configurable at build time via `VITE_INTERLOCK_SIM_URL` and `VITE_AGENT_GATE_URL`, and validated against the deployment path prefix).
+- **Reciprocal same-origin navigation**: `WorkbenchNavigation` links between `AgentGate` and `InterlockSim` (`../interlock-sim/` and `../agent-gate/` by default for sibling static deployments, configurable at build time via `VITE_INTERLOCK_SIM_URL` and `VITE_AGENT_GATE_URL`, and validated against the deployment path prefix). `WorkbenchBrandLink` turns the brand mark into a link back to the hub (`../`, or `VITE_HUB_URL`).
 - **Preset URL query routing with discard protection**: Both apps synchronize active presets with `?preset=...` via `useWorkbenchRoute`. When switching presets or comparison rows with unsaved edits, the confirmation dialog keeps keyboard focus inside and restores focus when dismissed.
 - **Snapshot-bound Web Worker verification**: Verification runs in a Vite module worker via `@rulecanvas/workbench/verify` and `useVerificationSnapshot`, with automatic cancellation of superseded runs, synchronous main-thread fallback when Web Workers are unavailable, and explicit `OUTDATED:` status separation after edits.
 - **Trace-to-editor navigation**: Jump from a replay step to its rule or guard editor. On an outdated trace, the active step shows the snapshot guard and labels any available editor link as a draft action.
@@ -217,7 +219,9 @@ InterlockSim is an educational browser workbench for exploring discrete BSL-3 ai
 1. Add an app under `apps/`. Give it its own scenario, interface, and Vite entry point. Use `workspace:*` for the shared packages your app imports.
 2. Define a bounded model with invariants, an optional goal, and explicit assumptions. Start with `verifyModel` and `replayTrace` from `@rulecanvas/core`.
 3. Add only the adapters your app needs. The UI library can format and replay results. For a React workbench with module-worker verification, follow the worker entry and snapshot hook used by either existing app.
-4. Add a domain test with an expected verdict and, for a failing model, an expected replay. Run `pnpm build`, `pnpm test`, and `pnpm verify:boundaries`. Run `pnpm verify:pack` to see the shared packages build and verify a booking model in an independent consumer.
+4. Add a domain test with an expected verdict and, for a failing model, an expected replay. Run `pnpm build`, `pnpm test`, and `pnpm verify:boundaries`. Run `pnpm verify:pack` to see the shared packages build and verify the starter template in an independent consumer.
+
+To start outside this repository instead, use the [Skeleton Crew Starter Template](./templates/workbench-starter/README.md). It is a small React workbench for a CI/CD production release gate. `pnpm run pack:local` writes the four library tarballs it installs from.
 
 ## Screenshots
 
@@ -273,20 +277,20 @@ pnpm test:release:preflight
 pnpm bench
 ```
 
-To run the headless Chromium browser regression gate (`pnpm test:browser`) against both built workbenches and, optionally, the packed third-app consumer produced by `pnpm verify:pack`:
+To run the headless Chromium browser regression gate (`pnpm test:browser`) against both built workbenches and, optionally, the starter template build produced by `pnpm verify:pack`:
 
 ```bash
 qa_dir=$(mktemp -d)
 npm install --no-save --prefix "$qa_dir" playwright@1.65.1 @axe-core/playwright@4.14.1
 "$qa_dir/node_modules/.bin/playwright" install chromium
-BOOKING_FIXTURE_DIST="$qa_dir/booking" pnpm verify:pack
+STARTER_FIXTURE_DIST="$qa_dir/starter" pnpm verify:pack
 PLAYWRIGHT_MODULE="$qa_dir/node_modules/playwright/index.mjs" \
   AXE_PLAYWRIGHT_MODULE="$qa_dir/node_modules/@axe-core/playwright/dist/index.mjs" \
-  BOOKING_FIXTURE_DIST="$qa_dir/booking" \
+  STARTER_FIXTURE_DIST="$qa_dir/starter" \
   SCREENSHOT_DIR="$qa_dir/screenshots" pnpm test:browser
 ```
 
-The browser gate checks both workbench journeys, keyboard operation, self-hosted font loading with zero external network requests, viewport widths down to 360 CSS pixels, and axe WCAG A/AA rules in both Light and Dark themes. It also checks the built booking worker when `BOOKING_FIXTURE_DIST` is set.
+The browser gate checks both workbench journeys, keyboard operation, self-hosted font loading with zero external network requests, viewport widths down to 360 CSS pixels, and axe WCAG A/AA rules in both Light and Dark themes. It also serves the hub from `site/` under `/` and `/rulecanvas-kit/` with both apps beside it, and checks hub-to-workbench and brand-to-hub navigation, the discard guard, and the first viewport at 1280x720 and 1440x900. When `STARTER_FIXTURE_DIST` is set, it checks both starter variants in worker mode. `BOOKING_FIXTURE_DIST` is still accepted as an alias.
 
 ## Known Limitations
 
