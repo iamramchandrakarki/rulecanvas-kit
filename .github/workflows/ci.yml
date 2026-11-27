@@ -100,6 +100,11 @@ jobs:
           STARTER_FIXTURE_DIST: ${{ runner.temp }}/rulecanvas-starter-${{ github.sha }}
         run: pnpm test:browser
 
+      - name: Run release preflight tests
+        env:
+          PLAYWRIGHT_MODULE: ${{ runner.temp }}/pw/node_modules/playwright/index.mjs
+        run: pnpm test:release:preflight
+
       - name: Archive the hub and the independently deployable app builds
         env:
           ARCHIVE_DIR: ${{ runner.temp }}/rulecanvas-archives-${{ github.sha }}
