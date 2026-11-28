@@ -35,7 +35,7 @@ For an approved deployment, copy the same directory tree to the static host. Kee
 
 ## Release evidence
 
-- Use the [verification commands](../../README.md#build-pack-and-verification-instructions) on the candidate commit. The CI run publishes commit-scoped screenshots, four library tarballs, two app archives, and a SHA-256 manifest.
+- Use the [verification commands](../../README.md#testing-and-verification) on the candidate commit. The CI run publishes commit-scoped screenshots, four library tarballs, two app archives, and a SHA-256 manifest.
 - Follow the [timed demo script](../SKELETON_CREW_SUBMISSION.md#demo-video-script) to check the five-step AgentGate counterexample, the goal reachability comparison, and the six-step InterlockSim counterexample followed by a guided repair.
 - Check the release archives with `sha256sum -c SHA256SUMS.txt` on Linux or `shasum -a 256 -c SHA256SUMS.txt` on macOS.
 - The two workbench adapter packages are workspace-private. The archive gate uses all four tarballs in a clean consumer to verify exports, TypeScript resolution, and browser worker bundling.
