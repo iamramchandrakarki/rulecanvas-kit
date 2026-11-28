@@ -8,7 +8,7 @@ RuleCanvasKit is a TypeScript finite-state verification toolkit for Guarded Tran
 
 The monorepo pairs four acyclic library packages (`@rulecanvas/core`, `@rulecanvas/ui`, `@rulecanvas/workbench`, and `@rulecanvas/workbench-react`) with two integrated browser workbenches (`apps/agent-gate` and `apps/interlock-sim`) connected by reciprocal same-origin navigation and shareable preset URL routing.
 
-**Live Workbenches:**
+**Hosted Workbenches (currently serving the prior `v0.7.0` release; `v0.8.0` static hub and workbench deployment pending release approval):**
 - **AgentGate**: https://rulecanvaskit.pages.dev/agent-gate/
 - **InterlockSim**: https://rulecanvaskit.pages.dev/interlock-sim/
 

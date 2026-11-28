@@ -51,10 +51,10 @@ The timestamps follow the captioned recording. Both workbenches can be run from 
 ## Submission checklist
 
 - [ ] Confirm entrant eligibility, project ownership, and registration. Confirm that the project began after October 30, 2026 at 9:00 a.m. Pacific time and disclose any incorporated pre-existing work as required.
-- [x] Provide both functional app URLs (`https://rulecanvaskit.pages.dev/agent-gate/` and `https://rulecanvaskit.pages.dev/interlock-sim/`). Confirm in a signed-out browser that judges can access them without logging in and keep hosting available through January 29, 2027.
-- [x] Link the public MIT-licensed [GitHub repository](https://github.com/iamramchandrakarki/rulecanvas-kit). Both app folders (`apps/agent-gate`, `apps/interlock-sim`) and the root `.kiro/` directory are tracked at the released revision.
+- [ ] Deploy the verified `v0.8.0` build (`site/`, `agent-gate/`, and `interlock-sim/`) to `https://rulecanvaskit.pages.dev/` (currently serving the prior `v0.7.0` app builds without the `v0.8.0` static hub) and confirm signed-out HTTPS access at `/`, `/agent-gate/`, and `/interlock-sim/` without logging in; keep hosting available through January 29, 2027.
+- [ ] Merge and record the final public MIT-licensed [GitHub repository](https://github.com/iamramchandrakarki/rulecanvas-kit) source SHA with a passing exact-SHA GitHub Actions CI run, confirming `apps/agent-gate`, `apps/interlock-sim`, and the root `.kiro/` directory at the released revision.
 - [ ] Include the English project description, select Skeleton Crew, and attach a factual Kiro usage write-up.
-- [x] Replaced the app URL placeholders in the video description with `https://rulecanvaskit.pages.dev/agent-gate/` and `https://rulecanvaskit.pages.dev/interlock-sim/`. Confirm the deployed static build matches the selected submission revision (`v0.8.0` once deployed) and verify signed-out access on your device before submitting.
+- [ ] Target app URLs (`https://rulecanvaskit.pages.dev/agent-gate/` and `https://rulecanvaskit.pages.dev/interlock-sim/`) are populated in the draft video description above; confirm the deployed static build matches the released `v0.8.0` revision and verify signed-out access before submitting.
 - [ ] Upload the demo to YouTube with public visibility. Use English captions and original or authorized media. Keep the runtime under three minutes and test the URL signed out.
 - [ ] Obtain maintainer approval and submit by December 4, 2026 at 2:00 p.m. Pacific time.
 
