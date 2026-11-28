@@ -55,7 +55,7 @@ pnpm verify:hygiene
 pnpm bench
 ```
 
-Run the [browser regression suite](./README.md#build-pack-and-verification-instructions) with the pinned Playwright and axe versions. Share `STARTER_FIXTURE_DIST` between the package and browser gates to exercise the starter template worker built from the tarballs.
+Run the [browser regression suite](./README.md#testing-and-verification) with the pinned Playwright and axe versions. Share `STARTER_FIXTURE_DIST` between the package and browser gates to exercise the starter template worker built from the tarballs.
 
 ## Workspace Layering & Packaging Invariants
 

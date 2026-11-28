@@ -31,7 +31,7 @@ RuleCanvasKit finds sequences of rule changes that violate a model's invariants 
 - 0:43 Apply the guided repair and verify again
 - 0:54 The shared TypeScript foundation
 
-Try AgentGate at https://rulecanvaskit.pages.dev/agent-gate/. Try InterlockSim at https://rulecanvaskit.pages.dev/interlock-sim/.
+Try the RuleCanvasKit hub at https://rulecanvaskit.pages.dev/, AgentGate at https://rulecanvaskit.pages.dev/agent-gate/, and InterlockSim at https://rulecanvaskit.pages.dev/interlock-sim/.
 
 Submitted for Skeleton Crew at Kiroween 2026. Model verdicts apply to the declared models and assumptions. [Source, install instructions, and Kiro usage write-up](https://github.com/iamramchandrakarki/rulecanvas-kit)
 
@@ -51,10 +51,10 @@ The timestamps follow the captioned recording. Both workbenches can be run from 
 ## Submission checklist
 
 - [ ] Confirm entrant eligibility, project ownership, and registration. Confirm that the project began after October 30, 2026 at 9:00 a.m. Pacific time and disclose any incorporated pre-existing work as required.
-- [ ] Deploy the verified `v0.8.0` build (`site/`, `agent-gate/`, and `interlock-sim/`) to `https://rulecanvaskit.pages.dev/` (currently serving the prior `v0.7.0` app builds without the `v0.8.0` static hub) and confirm signed-out HTTPS access at `/`, `/agent-gate/`, and `/interlock-sim/` without logging in; keep hosting available through January 29, 2027.
-- [ ] Merge and record the final public MIT-licensed [GitHub repository](https://github.com/iamramchandrakarki/rulecanvas-kit) source SHA with a passing exact-SHA GitHub Actions CI run, confirming `apps/agent-gate`, `apps/interlock-sim`, and the root `.kiro/` directory at the released revision.
-- [ ] Include the English project description, select Skeleton Crew, and attach a factual Kiro usage write-up.
-- [ ] Target app URLs (`https://rulecanvaskit.pages.dev/agent-gate/` and `https://rulecanvaskit.pages.dev/interlock-sim/`) are populated in the draft video description above; confirm the deployed static build matches the released `v0.8.0` revision and verify signed-out access before submitting.
+- [x] Deploy the verified `v0.8.0` build (`site/`, `agent-gate/`, and `interlock-sim/`) to Cloudflare Pages Production (`389bdf83-77e6-4f09-90f1-c8f8c935cbd8`, `https://rulecanvaskit.pages.dev/`) and confirm signed-out HTTPS access at `/`, `/agent-gate/`, and `/interlock-sim/` without logging in; keep hosting available through January 29, 2027.
+- [x] Merge PR [#21](https://github.com/iamramchandrakarki/rulecanvas-kit/pull/21) and record the released `v0.8.0` public MIT-licensed [GitHub repository](https://github.com/iamramchandrakarki/rulecanvas-kit) source SHA (`57bd86da0e1ca64a9ac5690cdf23655e89e35c65`, tag `v0.8.0`) with passing exact-SHA GitHub Actions CI run [`46106983991`](https://github.com/iamramchandrakarki/rulecanvas-kit/actions/runs/46106983991), confirming `apps/agent-gate`, `apps/interlock-sim`, and the root `.kiro/` directory at the released revision (subsequent documentation-only commits do not modify the released application source).
+- [ ] Confirm Kiro Spec 1 Task `2.1` (`.kiro/hooks/verify-boundaries.json` automatic `PostFileSave` hook firing in a fresh interactive Kiro IDE session) or preserve it explicitly as open in the factual Kiro usage write-up.
+- [ ] Include the English project description, select Skeleton Crew, and attach the factual Kiro usage write-up in Devpost.
 - [ ] Upload the demo to YouTube with public visibility. Use English captions and original or authorized media. Keep the runtime under three minutes and test the URL signed out.
 - [ ] Obtain maintainer approval and submit by December 4, 2026 at 2:00 p.m. Pacific time.
 
