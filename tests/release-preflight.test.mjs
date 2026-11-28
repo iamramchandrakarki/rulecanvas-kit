@@ -9,6 +9,7 @@ import {
   readdirSync,
   readFileSync,
   readlinkSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -18,6 +19,7 @@ import path from 'node:path';
 import { after, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { publishPackageSet } from '../scripts/pack-local.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SCRIPT = path.join(REPO_ROOT, 'scripts', 'release-preflight.mjs');
@@ -991,6 +993,296 @@ describe('release preflight: archive creation and metadata exclusion integration
       assert.ok(members.includes('package/package.json'), `${libName} missing package.json`);
       assert.ok(members.includes('package/README.md'), `${libName} missing README.md`);
       assert.ok(members.includes('package/LICENSE'), `${libName} missing LICENSE`);
+    }
+  });
+
+  test('validates single root directory and rejects duplicate or non-directory root entries in clean-tgz and preflight', () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'rulecanvas-root-dir-'));
+    tempRoots.push(root);
+    const helperPath = path.join(REPO_ROOT, 'scripts', 'release-preflight-archive.py');
+
+    // Single valid root directory passes both clean-tgz and strict preflight.
+    const singleRootIn = path.join(root, 'single-root.tgz');
+    const singleRootOut = path.join(root, 'single-root-clean.tgz');
+    buildArchives([
+      {
+        out: singleRootIn,
+        entries: [
+          { name: '.', type: 'dir' },
+          { name: './index.html', type: 'file', text: '<!doctype html><title>ok</title>\n' },
+        ],
+      },
+    ]);
+    const cleanSingle = spawnSync(
+      'python3',
+      [CREATE_ARCHIVE_SCRIPT, 'clean-tgz', '--input', singleRootIn, '--output', singleRootOut],
+      { cwd: REPO_ROOT, encoding: 'utf8' },
+    );
+    assert.equal(cleanSingle.status, 0, `single root failed clean-tgz: ${cleanSingle.stderr}`);
+    const singleBytes = readFileSync(singleRootOut);
+    const pfSingle = spawnSync(
+      'python3',
+      ['-B', helperPath, '--name', 'single-root.tgz', '--sha256', sha256(singleBytes)],
+      { cwd: REPO_ROOT, input: singleBytes },
+    );
+    assert.equal(pfSingle.status, 0, `single root failed preflight: ${pfSingle.stderr.toString('utf8')}`);
+
+    // Duplicate root directories (exact and normalized variants) and non-directory root entries fail both.
+    const badRootCases = [
+      {
+        name: 'dup-dot.tgz',
+        expectStderr: 'duplicate root directory',
+        entries: [
+          { name: '.', type: 'dir' },
+          { name: '.', type: 'dir' },
+          { name: './index.html', type: 'file', text: 'ok' },
+        ],
+      },
+      {
+        name: 'dup-dot-slash.tgz',
+        expectStderr: 'duplicate root directory',
+        entries: [
+          { name: '.', type: 'dir' },
+          { name: './', type: 'dir' },
+          { name: './index.html', type: 'file', text: 'ok' },
+        ],
+      },
+      {
+        name: 'dup-dot-dot-slash.tgz',
+        expectStderr: 'duplicate root directory',
+        entries: [
+          { name: './', type: 'dir' },
+          { name: './.', type: 'dir' },
+          { name: './index.html', type: 'file', text: 'ok' },
+        ],
+      },
+      {
+        name: 'dup-double-slash-dot.tgz',
+        expectStderr: 'duplicate root directory',
+        entries: [
+          { name: '.', type: 'dir' },
+          { name: './/.', type: 'dir' },
+          { name: './index.html', type: 'file', text: 'ok' },
+        ],
+      },
+      {
+        name: 'file-empty-root.tgz',
+        expectStderr: 'file with empty path',
+        entries: [{ name: '.', type: 'file', text: 'bad' }],
+      },
+      {
+        name: 'symlink-root.tgz',
+        expectStderr: 'not a regular file or directory',
+        entries: [{ name: '.', type: 'symlink', linkname: '/etc' }],
+      },
+    ];
+
+    buildArchives(badRootCases.map((c) => ({ out: path.join(root, c.name), entries: c.entries })));
+    for (const c of badRootCases) {
+      const archivePath = path.join(root, c.name);
+      const outPath = path.join(root, `out-${c.name}`);
+      const rawBytes = readFileSync(archivePath);
+
+      const pf = spawnSync(
+        'python3',
+        ['-B', helperPath, '--name', c.name, '--sha256', sha256(rawBytes)],
+        { cwd: REPO_ROOT, input: rawBytes },
+      );
+      assert.notEqual(pf.status, 0, `preflight must reject ${c.name}`);
+      assert.ok(
+        pf.stderr.toString('utf8').includes(c.expectStderr),
+        `preflight ${c.name} stderr should include "${c.expectStderr}", got: ${pf.stderr.toString('utf8')}`,
+      );
+
+      const clean = spawnSync(
+        'python3',
+        [CREATE_ARCHIVE_SCRIPT, 'clean-tgz', '--input', archivePath, '--output', outPath],
+        { cwd: REPO_ROOT, encoding: 'utf8' },
+      );
+      assert.notEqual(clean.status, 0, `clean-tgz must reject ${c.name}`);
+      assert.ok(
+        clean.stderr.includes(c.expectStderr),
+        `clean-tgz ${c.name} stderr should include "${c.expectStderr}", got: ${clean.stderr}`,
+      );
+      assert.equal(existsSync(outPath), false, `clean-tgz must not create output for ${c.name}`);
+    }
+  });
+
+  test('publishPackageSet preserves existing checksums, unrelated files, and cleans temp files on failure at any commit step', () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'rulecanvas-publish-set-'));
+    tempRoots.push(root);
+
+    const newSet = LIB_NAMES.map((fileName, idx) => ({
+      fileName,
+      bytes: Buffer.from(`NEW-PACKAGE-${idx}-${fileName}\n`, 'utf8'),
+    }));
+
+    // 1. Fresh/non-existent destination: failure on 1st..4th commit rename leaves no partial files or temp remnants.
+    for (let failStep = 1; failStep <= LIB_NAMES.length; failStep += 1) {
+      const freshOut = path.join(root, `fresh-fail-${failStep}`);
+      let renameCalls = 0;
+      assert.throws(
+        () =>
+          publishPackageSet(freshOut, newSet, {
+            renameSync(src, dst) {
+              renameCalls += 1;
+              if (renameCalls === failStep) {
+                const err = new Error(`injected commit failure at step ${failStep}`);
+                err.code = 'EPERM';
+                throw err;
+              }
+              return renameSync(src, dst);
+            },
+          }),
+        /pack:local publication failed/,
+      );
+      assert.equal(existsSync(freshOut), false, `fresh destination should be cleaned up on failure step ${failStep}`);
+    }
+
+    // 2. Fresh destination succeeds cleanly and writes all four packages.
+    const createdOut = path.join(root, 'fresh-success');
+    const publishedFresh = publishPackageSet(createdOut, newSet);
+    assert.equal(publishedFresh.length, 4);
+    assert.deepEqual(readdirSync(createdOut).sort(), [...LIB_NAMES].sort());
+    for (const item of newSet) {
+      assert.equal(sha256(readFileSync(path.join(createdOut, item.fileName))), sha256(item.bytes));
+    }
+
+    // 3. Existing destination with 4 prior packages + unrelated file: failure at every commit step (1..4) and backup step (3) restores all 4 prior checksums and preserves unrelated file.
+    for (const mode of ['backup-3', 'commit-1', 'commit-2', 'commit-3', 'commit-4']) {
+      const existingOut = path.join(root, `existing-${mode}`);
+      mkdirSync(existingOut);
+      const priorChecksums = new Map();
+      for (const fileName of LIB_NAMES) {
+        const oldBytes = Buffer.from(`OLD-${mode}-${fileName}\n`, 'utf8');
+        writeFileSync(path.join(existingOut, fileName), oldBytes);
+        priorChecksums.set(fileName, sha256(oldBytes));
+      }
+      const unrelatedPath = path.join(existingOut, 'keep-notes.txt');
+      writeFileSync(unrelatedPath, 'do-not-touch\n', 'utf8');
+      const unrelatedSha = sha256(readFileSync(unrelatedPath));
+
+      let backupCount = 0;
+      let commitCount = 0;
+      assert.throws(
+        () =>
+          publishPackageSet(existingOut, newSet, {
+            renameSync(src, dst) {
+              const srcBase = path.basename(src);
+              const dstBase = path.basename(dst);
+              if (dstBase.startsWith('.bak-')) {
+                backupCount += 1;
+                if (mode === `backup-${backupCount}`) {
+                  const err = new Error(`injected backup EPERM at ${backupCount}`);
+                  err.code = 'EPERM';
+                  throw err;
+                }
+              } else if (srcBase.startsWith('.tmp-')) {
+                commitCount += 1;
+                if (mode === `commit-${commitCount}`) {
+                  const err = new Error(`injected commit EPERM at ${commitCount}`);
+                  err.code = 'EPERM';
+                  throw err;
+                }
+              }
+              return renameSync(src, dst);
+            },
+          }),
+        /existing destination state was restored/,
+      );
+
+      assert.deepEqual(
+        readdirSync(existingOut).sort(),
+        [...LIB_NAMES, 'keep-notes.txt'].sort(),
+        `${mode}: no temp or backup files should remain`,
+      );
+      for (const fileName of LIB_NAMES) {
+        assert.equal(
+          sha256(readFileSync(path.join(existingOut, fileName))),
+          priorChecksums.get(fileName),
+          `${mode}: ${fileName} checksum must match prior value`,
+        );
+      }
+      assert.equal(sha256(readFileSync(unrelatedPath)), unrelatedSha, `${mode}: unrelated file must be preserved`);
+    }
+
+    // 4. Existing destination replacement succeeds cleanly while preserving unrelated file.
+    const replaceOut = path.join(root, 'existing-success');
+    mkdirSync(replaceOut);
+    for (const fileName of LIB_NAMES) {
+      writeFileSync(path.join(replaceOut, fileName), `OLD-${fileName}\n`);
+    }
+    writeFileSync(path.join(replaceOut, 'keep-notes.txt'), 'still-here\n');
+    publishPackageSet(replaceOut, newSet);
+    assert.deepEqual(readdirSync(replaceOut).sort(), [...LIB_NAMES, 'keep-notes.txt'].sort());
+    for (const item of newSet) {
+      assert.equal(sha256(readFileSync(path.join(replaceOut, item.fileName))), sha256(item.bytes));
+    }
+    assert.equal(readFileSync(path.join(replaceOut, 'keep-notes.txt'), 'utf8'), 'still-here\n');
+  });
+
+  test('pack:local preserves entire existing package set and unrelated files when third destination is immutable', { timeout: RUN_TIMEOUT_MS }, () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'rulecanvas-pack-local-immutable-'));
+    tempRoots.push(root);
+    const outDir = path.join(root, 'tarballs');
+    const packScript = path.join(REPO_ROOT, 'scripts', 'pack-local.mjs');
+
+    // Seed with four real valid tarballs, then replace with distinct sentinel tarballs so checksum changes are unambiguous.
+    mkdirSync(outDir);
+    const beforeChecksums = new Map();
+    for (const libName of LIB_NAMES) {
+      const target = path.join(outDir, libName);
+      const sentinel = Buffer.from(`PRIOR-VALID-${libName}\n`, 'utf8');
+      writeFileSync(target, sentinel);
+      beforeChecksums.set(libName, sha256(sentinel));
+    }
+    const unrelatedFile = path.join(outDir, 'unrelated.txt');
+    writeFileSync(unrelatedFile, 'preserve-me\n', 'utf8');
+    const unrelatedSha = sha256(readFileSync(unrelatedFile));
+
+    const thirdTarget = path.join(outDir, LIB_NAMES[2]);
+    let usedImmutableFlag = false;
+    if (process.platform === 'darwin') {
+      const flagRes = spawnSync('chflags', ['uchg', thirdTarget], { encoding: 'utf8' });
+      usedImmutableFlag = flagRes.status === 0;
+    }
+
+    try {
+      if (!usedImmutableFlag) {
+        // Portable fallback on non-macOS hosts: replace 3rd target with a directory so publication fails deterministically.
+        rmSync(thirdTarget);
+        mkdirSync(thirdTarget);
+      }
+
+      const res = spawnSync(process.execPath, [packScript, '--out', outDir], {
+        cwd: REPO_ROOT,
+        encoding: 'utf8',
+        timeout: RUN_TIMEOUT_MS,
+      });
+      assert.notEqual(res.status, 0, 'pack:local must fail when third destination cannot be replaced');
+      assert.ok(
+        res.stderr.includes('pack:local'),
+        `stderr should include actionable pack:local error, got: ${res.stderr}`,
+      );
+
+      assert.deepEqual(
+        readdirSync(outDir).sort(),
+        [...LIB_NAMES, 'unrelated.txt'].sort(),
+        'no temp or backup files should remain in destination directory',
+      );
+      assert.equal(sha256(readFileSync(unrelatedFile)), unrelatedSha, 'unrelated file must remain unchanged');
+      for (const libName of LIB_NAMES) {
+        if (!usedImmutableFlag && libName === LIB_NAMES[2]) continue;
+        assert.equal(
+          sha256(readFileSync(path.join(outDir, libName))),
+          beforeChecksums.get(libName),
+          `${libName} must retain its exact prior checksum after failed publication`,
+        );
+      }
+    } finally {
+      if (usedImmutableFlag) {
+        spawnSync('chflags', ['nouchg', thirdTarget], { encoding: 'utf8' });
+      }
     }
   });
 });

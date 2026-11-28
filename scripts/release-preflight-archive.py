@@ -116,6 +116,7 @@ def validate(tf, stream_len, reject_top_level=(), allow_filesystem_metadata=Fals
     plan = []
     files = {}  # casefolded path -> original path
     dirs = {}
+    seen_root_dir = False
     total = 0
     count = 0
     for ti in tf:
@@ -135,6 +136,9 @@ def validate(tf, stream_len, reject_top_level=(), allow_filesystem_metadata=Fals
         if not segments:
             if not is_dir:
                 raise Reject("%s: file with empty path" % entry_label(ti))
+            if seen_root_dir:
+                raise Reject("%s: duplicate root directory" % entry_label(ti))
+            seen_root_dir = True
             plan.append((ti, segments))
             continue
         key = "/".join(segments).casefold()
