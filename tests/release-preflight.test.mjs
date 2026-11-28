@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import {
+  closeSync,
   cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readdirSync,
   readFileSync,
   readlinkSync,
@@ -13,6 +15,7 @@ import {
   rmSync,
   symlinkSync,
   writeFileSync,
+  writeSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -1284,5 +1287,375 @@ describe('release preflight: archive creation and metadata exclusion integration
         spawnSync('chflags', ['nouchg', thirdTarget], { encoding: 'utf8' });
       }
     }
+  });
+
+  test('publishPackageSet handles Phase 4 backup cleanup failures on first, middle, last, and multiple backups without rolling back', { timeout: RUN_TIMEOUT_MS }, () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'rulecanvas-phase4-cleanup-'));
+    tempRoots.push(root);
+
+    const newSet = LIB_NAMES.map((fileName, idx) => ({
+      fileName,
+      bytes: Buffer.from(`NEW-PHASE4-${idx}-${fileName}\n`, 'utf8'),
+    }));
+
+    const failureCases = [
+      { label: 'first', failIndices: [0] },
+      { label: 'middle-1', failIndices: [1] },
+      { label: 'middle-2', failIndices: [2] },
+      { label: 'last', failIndices: [3] },
+      { label: 'multiple', failIndices: [0, 2] },
+      { label: 'all', failIndices: [0, 1, 2, 3] },
+    ];
+
+    for (const { label, failIndices } of failureCases) {
+      const outDir = path.join(root, `phase4-${label}`);
+      mkdirSync(outDir);
+      for (const fileName of LIB_NAMES) {
+        writeFileSync(path.join(outDir, fileName), `OLD-${label}-${fileName}\n`, 'utf8');
+      }
+      const unrelatedPath = path.join(outDir, 'keep-notes.txt');
+      writeFileSync(unrelatedPath, `unrelated-${label}\n`, 'utf8');
+      const unrelatedSha = sha256(readFileSync(unrelatedPath));
+
+      const failNames = new Set(failIndices.map((idx) => LIB_NAMES[idx]));
+      let err;
+      assert.throws(
+        () =>
+          publishPackageSet(outDir, newSet, {
+            rmSync(target, opts) {
+              const base = path.basename(target);
+              if (base.startsWith('.bak-') && [...failNames].some((name) => base.endsWith(`-${name}`))) {
+                const e = new Error('EPERM: simulated lock');
+                e.code = 'EPERM';
+                throw e;
+              }
+              return rmSync(target, opts);
+            },
+          }),
+        (caught) => {
+          err = caught;
+          return /pack:local publication succeeded .* but backup cleanup failed/.test(caught.message);
+        },
+      );
+
+      for (const item of newSet) {
+        assert.equal(
+          sha256(readFileSync(path.join(outDir, item.fileName))),
+          sha256(item.bytes),
+          `${label}: ${item.fileName} must remain published with exact new checksum`,
+        );
+      }
+      assert.equal(sha256(readFileSync(unrelatedPath)), unrelatedSha, `${label}: unrelated file must remain intact`);
+
+      const entries = readdirSync(outDir).sort();
+      const remainingBackups = entries.filter((name) => name.startsWith('.bak-'));
+      assert.equal(
+        remainingBackups.length,
+        failIndices.length,
+        `${label}: only unremovable backups should remain, got: ${remainingBackups.join(', ')}`,
+      );
+      for (const idx of failIndices) {
+        const bak = remainingBackups.find((name) => name.endsWith(`-${LIB_NAMES[idx]}`));
+        assert.ok(bak, `${label}: expected leftover backup for ${LIB_NAMES[idx]}`);
+        assert.ok(err.message.includes(path.join(outDir, bak)), `${label}: error must name ${bak}`);
+      }
+      for (let i = 0; i < LIB_NAMES.length; i += 1) {
+        if (!failIndices.includes(i)) {
+          assert.equal(
+            entries.some((name) => name.startsWith('.bak-') && name.endsWith(`-${LIB_NAMES[i]}`)),
+            false,
+            `${label}: removable backup for ${LIB_NAMES[i]} should be deleted`,
+          );
+        }
+      }
+      assert.equal(
+        entries.some((name) => name.startsWith('.tmp-')),
+        false,
+        `${label}: no temp files should remain`,
+      );
+    }
+
+    // Full CLI subprocess verification: nonzero exit status, published tarballs valid, only failed backup remains.
+    const cliOutDir = path.join(root, 'cli-phase4');
+    mkdirSync(cliOutDir);
+    const priorShas = new Map();
+    for (const libName of LIB_NAMES) {
+      const sentinel = Buffer.from(`PRIOR-CLI-${libName}\n`, 'utf8');
+      writeFileSync(path.join(cliOutDir, libName), sentinel);
+      priorShas.set(libName, sha256(sentinel));
+    }
+    const cliUnrelated = path.join(cliOutDir, 'unrelated.txt');
+    writeFileSync(cliUnrelated, 'cli-unrelated\n', 'utf8');
+    const cliUnrelatedSha = sha256(readFileSync(cliUnrelated));
+
+    const targetBackupSuffix = `-${LIB_NAMES[1]}`;
+    const preloadSource = [
+      'import fs from "node:fs";',
+      'import path from "node:path";',
+      'import { syncBuiltinESMExports } from "node:module";',
+      'const origRmSync = fs.rmSync;',
+      'fs.rmSync = (target, opts) => {',
+      '  const base = path.basename(String(target));',
+      `  if (base.startsWith(".bak-") && base.endsWith(${JSON.stringify(targetBackupSuffix)})) {`,
+      '    const err = new Error("EPERM: simulated CLI backup unlink failure");',
+      '    err.code = "EPERM";',
+      '    throw err;',
+      '  }',
+      '  return origRmSync(target, opts);',
+      '};',
+      'syncBuiltinESMExports();',
+    ].join('\n');
+    const preloadDataUrl = `data:text/javascript;base64,${Buffer.from(preloadSource, 'utf8').toString('base64')}`;
+    const packScript = path.join(REPO_ROOT, 'scripts', 'pack-local.mjs');
+    const helperPath = path.join(REPO_ROOT, 'scripts', 'release-preflight-archive.py');
+
+    const res = spawnSync(process.execPath, ['--import', preloadDataUrl, packScript, '--out', cliOutDir], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      timeout: RUN_TIMEOUT_MS,
+    });
+    assert.notEqual(res.status, 0, 'pack:local CLI must exit nonzero when Phase 4 backup cleanup fails');
+    assert.ok(res.stderr.includes('pack:local publication succeeded'), res.stderr);
+    assert.ok(res.stderr.includes('backup cleanup failed'), res.stderr);
+
+    const cliEntries = readdirSync(cliOutDir).sort();
+    const cliBackups = cliEntries.filter((name) => name.startsWith('.bak-'));
+    assert.equal(cliBackups.length, 1, `expected only 1 leftover backup, got: ${cliBackups.join(', ')}`);
+    assert.ok(cliBackups[0].endsWith(targetBackupSuffix), `unexpected leftover backup: ${cliBackups[0]}`);
+    assert.ok(res.stderr.includes(path.join(cliOutDir, cliBackups[0])), 'CLI stderr must name exact leftover backup');
+    assert.equal(sha256(readFileSync(cliUnrelated)), cliUnrelatedSha, 'unrelated file must remain unchanged');
+
+    for (const libName of LIB_NAMES) {
+      const publishedBytes = readFileSync(path.join(cliOutDir, libName));
+      assert.notEqual(sha256(publishedBytes), priorShas.get(libName), `${libName} must be updated`);
+      const pf = spawnSync(
+        'python3',
+        ['-B', helperPath, '--name', libName, '--sha256', sha256(publishedBytes)],
+        { cwd: REPO_ROOT, input: publishedBytes },
+      );
+      assert.equal(pf.status, 0, `${libName} failed preflight after Phase 4 cleanup failure: ${pf.stderr.toString('utf8')}`);
+    }
+  });
+
+  test('publishPackageSet cleans partial temporary files across ENOSPC, EDQUOT, and EIO at positions 1..4 without deleting foreign temp files', () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'rulecanvas-partial-tmp-'));
+    tempRoots.push(root);
+
+    const newSet = LIB_NAMES.map((fileName, idx) => ({
+      fileName,
+      bytes: Buffer.from(`NEW-PARTIAL-${idx}-${fileName}\n`, 'utf8'),
+    }));
+    const errorCodes = ['ENOSPC', 'EDQUOT', 'EIO'];
+
+    for (let failStep = 1; failStep <= LIB_NAMES.length; failStep += 1) {
+      const code = errorCodes[(failStep - 1) % errorCodes.length];
+
+      // 1. Existing destination with prior packages, unrelated file, and a foreign .tmp-* file.
+      const existingOut = path.join(root, `existing-${failStep}-${code}`);
+      mkdirSync(existingOut);
+      const priorShas = new Map();
+      for (const fileName of LIB_NAMES) {
+        const oldBytes = Buffer.from(`OLD-${failStep}-${fileName}\n`, 'utf8');
+        writeFileSync(path.join(existingOut, fileName), oldBytes);
+        priorShas.set(fileName, sha256(oldBytes));
+      }
+      const unrelatedPath = path.join(existingOut, 'keep-notes.txt');
+      writeFileSync(unrelatedPath, 'preserve-existing\n', 'utf8');
+      const unrelatedSha = sha256(readFileSync(unrelatedPath));
+      const foreignTmpName = `.tmp-999999-deadbeef-${LIB_NAMES[0]}`;
+      const foreignTmpPath = path.join(existingOut, foreignTmpName);
+      writeFileSync(foreignTmpPath, 'foreign-tmp\n', 'utf8');
+      const foreignTmpSha = sha256(readFileSync(foreignTmpPath));
+
+      let existingWrites = 0;
+      assert.throws(
+        () =>
+          publishPackageSet(existingOut, newSet, {
+            writeFileSync(p, data, opts) {
+              existingWrites += 1;
+              if (existingWrites === failStep) {
+                const fd = openSync(p, 'w', 0o644);
+                writeSync(fd, data.subarray(0, Math.max(1, Math.floor(data.length / 2))));
+                closeSync(fd);
+                assert.equal(existsSync(p), true, 'partial temp file must exist on disk before throw');
+                const err = new Error(`${code}: simulated mid-write failure at step ${failStep}`);
+                err.code = code;
+                throw err;
+              }
+              return writeFileSync(p, data, opts);
+            },
+          }),
+        /existing destination state was restored/,
+      );
+
+      assert.deepEqual(
+        readdirSync(existingOut).sort(),
+        [...LIB_NAMES, foreignTmpName, 'keep-notes.txt'].sort(),
+        `existing step ${failStep} (${code}): only prior packages, unrelated file, and foreign temp may remain`,
+      );
+      for (const fileName of LIB_NAMES) {
+        assert.equal(sha256(readFileSync(path.join(existingOut, fileName))), priorShas.get(fileName));
+      }
+      assert.equal(sha256(readFileSync(unrelatedPath)), unrelatedSha);
+      assert.equal(sha256(readFileSync(foreignTmpPath)), foreignTmpSha);
+
+      // 2. Fresh destination: partial temp write failure leaves no partial files and removes fresh directory.
+      const freshOut = path.join(root, `fresh-${failStep}-${code}`);
+      let freshWrites = 0;
+      let freshErr;
+      assert.throws(
+        () =>
+          publishPackageSet(freshOut, newSet, {
+            writeFileSync(p, data, opts) {
+              freshWrites += 1;
+              if (freshWrites === failStep) {
+                const fd = openSync(p, 'w', 0o644);
+                writeSync(fd, data.subarray(0, Math.max(1, Math.floor(data.length / 2))));
+                closeSync(fd);
+                assert.equal(existsSync(p), true, 'partial temp file must exist on disk before throw');
+                const err = new Error(`${code}: simulated fresh mid-write failure at step ${failStep}`);
+                err.code = code;
+                throw err;
+              }
+              return writeFileSync(p, data, opts);
+            },
+          }),
+        (caught) => {
+          freshErr = caught;
+          return /newly created destination directory was removed/.test(caught.message);
+        },
+      );
+      assert.equal(/existing destination state was restored/.test(freshErr.message), false);
+      assert.equal(existsSync(freshOut), false, `fresh step ${failStep} (${code}): directory must be removed`);
+    }
+
+    // 3. Incomplete cleanup never claims successful restoration or directory removal.
+    const stuckTmpOut = path.join(root, 'stuck-tmp-existing');
+    mkdirSync(stuckTmpOut);
+    for (const fileName of LIB_NAMES) {
+      writeFileSync(path.join(stuckTmpOut, fileName), `OLD-STUCK-${fileName}\n`, 'utf8');
+    }
+    let stuckWrites = 0;
+    let stuckErr;
+    assert.throws(
+      () =>
+        publishPackageSet(stuckTmpOut, newSet, {
+          writeFileSync(p, data, opts) {
+            stuckWrites += 1;
+            if (stuckWrites === 2) {
+              const fd = openSync(p, 'w', 0o644);
+              writeSync(fd, data.subarray(0, 4));
+              closeSync(fd);
+              const err = new Error('ENOSPC: disk full');
+              err.code = 'ENOSPC';
+              throw err;
+            }
+            return writeFileSync(p, data, opts);
+          },
+          rmSync(p, opts) {
+            if (path.basename(p).startsWith('.tmp-')) {
+              const err = new Error('EIO: temp unlink failed');
+              err.code = 'EIO';
+              throw err;
+            }
+            return rmSync(p, opts);
+          },
+        }),
+      (caught) => {
+        stuckErr = caught;
+        return /rollback encountered errors/.test(caught.message);
+      },
+    );
+    assert.equal(/existing destination state was restored/.test(stuckErr.message), false);
+
+    const stuckFreshOut = path.join(root, 'stuck-fresh-rmdir');
+    let freshCommitCalls = 0;
+    let stuckFreshErr;
+    assert.throws(
+      () =>
+        publishPackageSet(stuckFreshOut, newSet, {
+          renameSync(src, dst) {
+            freshCommitCalls += 1;
+            if (freshCommitCalls === 2) {
+              const err = new Error('EIO: commit failed');
+              err.code = 'EIO';
+              throw err;
+            }
+            return renameSync(src, dst);
+          },
+          rmdirSync() {
+            const err = new Error('EBUSY: dir busy');
+            err.code = 'EBUSY';
+            throw err;
+          },
+        }),
+      (caught) => {
+        stuckFreshErr = caught;
+        return /rollback encountered errors/.test(caught.message);
+      },
+    );
+    assert.equal(/newly created destination directory was removed/.test(stuckFreshErr.message), false);
+    assert.equal(/existing destination state was restored/.test(stuckFreshErr.message), false);
+  });
+
+  test('publishPackageSet names preserved .bak-* paths on pathless restore errors and preserves backup bytes', () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'rulecanvas-restore-diag-'));
+    tempRoots.push(root);
+    const outDir = path.join(root, 'tarballs');
+    mkdirSync(outDir);
+
+    const priorShas = new Map();
+    for (const fileName of LIB_NAMES) {
+      const oldBytes = Buffer.from(`PRIOR-DIAG-${fileName}\n`, 'utf8');
+      writeFileSync(path.join(outDir, fileName), oldBytes);
+      priorShas.set(fileName, sha256(oldBytes));
+    }
+    const unrelatedPath = path.join(outDir, 'notes.txt');
+    writeFileSync(unrelatedPath, 'keep-notes\n', 'utf8');
+    const unrelatedSha = sha256(readFileSync(unrelatedPath));
+
+    const newSet = LIB_NAMES.map((fileName, idx) => ({
+      fileName,
+      bytes: Buffer.from(`NEW-DIAG-${idx}-${fileName}\n`, 'utf8'),
+    }));
+
+    let commitCalls = 0;
+    let thrown;
+    assert.throws(
+      () =>
+        publishPackageSet(outDir, newSet, {
+          renameSync(src, dst) {
+            const srcBase = path.basename(src);
+            if (srcBase.startsWith('.tmp-')) {
+              commitCalls += 1;
+              if (commitCalls === 3) {
+                throw new Error('EPERM: simulated commit-3 failure');
+              }
+            }
+            if (srcBase.startsWith('.bak-') && (dst.endsWith(LIB_NAMES[0]) || dst.endsWith(LIB_NAMES[2]))) {
+              throw new Error('EIO: simulated restore failure');
+            }
+            return renameSync(src, dst);
+          },
+        }),
+      (caught) => {
+        thrown = caught;
+        return /rollback encountered errors/.test(caught.message);
+      },
+    );
+
+    const entries = readdirSync(outDir).sort();
+    const bak0 = entries.find((name) => name.startsWith('.bak-') && name.endsWith(`-${LIB_NAMES[0]}`));
+    const bak2 = entries.find((name) => name.startsWith('.bak-') && name.endsWith(`-${LIB_NAMES[2]}`));
+    assert.ok(bak0 && bak2, `expected preserved backups for ${LIB_NAMES[0]} and ${LIB_NAMES[2]}`);
+    assert.ok(thrown.message.includes('preserved backup(s) for manual recovery'), thrown.message);
+    assert.ok(thrown.message.includes(path.join(outDir, bak0)), thrown.message);
+    assert.ok(thrown.message.includes(path.join(outDir, bak2)), thrown.message);
+
+    assert.equal(sha256(readFileSync(path.join(outDir, bak0))), priorShas.get(LIB_NAMES[0]));
+    assert.equal(sha256(readFileSync(path.join(outDir, bak2))), priorShas.get(LIB_NAMES[2]));
+    assert.equal(sha256(readFileSync(path.join(outDir, LIB_NAMES[1]))), priorShas.get(LIB_NAMES[1]));
+    assert.equal(sha256(readFileSync(path.join(outDir, LIB_NAMES[3]))), priorShas.get(LIB_NAMES[3]));
+    assert.equal(sha256(readFileSync(unrelatedPath)), unrelatedSha);
   });
 });

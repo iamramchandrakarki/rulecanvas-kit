@@ -5,15 +5,26 @@
 // Publication contract:
 //   1. All four archives are built, cleaned, preflight-validated, and allowlist-checked in a
 //      temporary staging directory before the destination directory is modified.
-//   2. Validated bytes are written to unique temporary files in the destination directory,
-//      existing target archives are moved to sibling backup paths, and the four new archives
-//      are renamed into place. Unrelated files in the destination directory are untouched.
-//   3. If any write, backup, or rename operation fails in-process, committed archives are
-//      removed, backed-up targets are restored in reverse order, temporary files are deleted,
-//      and the process exits nonzero with an actionable error message.
-//   Limitation: Multi-file rename with in-process rollback is not crash-atomic; abrupt
-//   process termination (e.g., SIGKILL or power loss) mid-publication can leave temporary
-//   or backup files or a partially updated set that requires re-running `pnpm run pack:local`.
+//   2. `pack:local` assumes exclusive access to workspace `packages/*/dist` outputs and `outDir`
+//      (concurrent writers or builds are unsupported). Because publication spans multiple
+//      `renameSync` calls, it is not filesystem-wide atomic: concurrent readers of `outDir` may
+//      briefly observe missing or mixed-version archives. Unrelated files and foreign `.tmp-*`/`.bak-*`
+//      files are untouched.
+//   3. Validated bytes are written to unique temporary files in `outDir`, existing target archives
+//      are moved to sibling backup paths, and the four new archives are renamed into place.
+//      If any write, backup, or rename fails in-process before all four archives are committed,
+//      best-effort rollback removes committed files, restores backups in reverse order, deletes
+//      temporary files owned by this invocation, and removes a freshly created empty `outDir`.
+//   4. Limitations:
+//      - Rollback is not unconditional: if rollback encounters OS/filesystem errors (e.g., EACCES,
+//        EPERM, EIO), un-restored `.bak-<pid>-<token>-<file>` backups remain in `outDir` and are
+//        named in the error message so an operator can manually rename them back to `<file>`.
+//      - If post-commit backup cleanup fails after all four new archives are committed, the new
+//        package set is preserved, cleanup continues across remaining backups, and the process
+//        exits nonzero naming the leftover `.bak-*` paths for manual deletion.
+//      - Abrupt process termination (e.g., SIGKILL or power loss) cannot run in-process cleanup
+//        and may leave `.tmp-*`/`.bak-*` files or a partially updated set; inspect `.bak-*` files
+//        to recover prior archives or remove stale `.tmp-*`/`.bak-*` files and re-run `pnpm run pack:local`.
 import { execFileSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import {
@@ -66,15 +77,28 @@ const DEFAULT_FS_OPS = {
   writeFileSync,
 };
 
+function lstatOrNull(ops, target) {
+  try {
+    return ops.lstatSync(target);
+  } catch (err) {
+    if (err && typeof err === 'object' && err.code === 'ENOENT') return null;
+    throw err;
+  }
+}
+
 /**
  * Publishes a pre-validated set of `{ fileName, bytes }` archives into `outDir` with
- * pre-commit backup and reverse-order rollback on any in-process publication error.
+ * pre-commit backup and best-effort reverse-order rollback on pre-commit errors.
+ *
+ * Once all four archives are committed, post-commit backup cleanup runs independently for
+ * each backup without rolling back the published set; any cleanup failure exits nonzero
+ * with every leftover backup path named for manual deletion.
  */
 export function publishPackageSet(outDir, stagedTarballs, fsOps = DEFAULT_FS_OPS) {
   const ops = { ...DEFAULT_FS_OPS, ...fsOps };
-  const dirExistedBefore = ops.existsSync(outDir);
+  const outStat = lstatOrNull(ops, outDir);
+  const dirExistedBefore = outStat !== null;
   if (dirExistedBefore) {
-    const outStat = ops.lstatSync(outDir);
     if (!outStat.isDirectory()) {
       throw new Error(`pack:local failed: destination "${outDir}" exists and is not a directory`);
     }
@@ -91,32 +115,37 @@ export function publishPackageSet(outDir, stagedTarballs, fsOps = DEFAULT_FS_OPS
     finalDest: path.join(outDir, fileName),
   }));
 
-  // Pre-check that no target path is a directory before mutating anything.
-  for (const item of plan) {
-    if (ops.existsSync(item.finalDest)) {
-      const st = ops.lstatSync(item.finalDest);
-      if (st.isDirectory()) {
+  // Pre-check that no target path is a directory and no run-scoped temp/backup path exists.
+  if (dirExistedBefore) {
+    for (const item of plan) {
+      if (lstatOrNull(ops, item.finalDest)?.isDirectory()) {
         throw new Error(
           `pack:local failed: destination "${item.finalDest}" is a directory, not a regular file`,
         );
       }
+      if (lstatOrNull(ops, item.tmpDest) !== null) {
+        throw new Error(`pack:local failed: temporary path "${item.tmpDest}" already exists`);
+      }
+      if (lstatOrNull(ops, item.backupDest) !== null) {
+        throw new Error(`pack:local failed: backup path "${item.backupDest}" already exists`);
+      }
     }
   }
 
-  const writtenTemps = [];
+  const ownedTemps = [];
   const backedUp = [];
   const committed = [];
 
   try {
-    // Phase 1: write all validated archives into unique temp files in outDir.
+    // Phase 1: record ownership before writing so partial files from failed writes are cleaned up.
     for (const item of plan) {
-      ops.writeFileSync(item.tmpDest, item.bytes, { mode: 0o644 });
-      writtenTemps.push(item);
+      ownedTemps.push(item);
+      ops.writeFileSync(item.tmpDest, item.bytes, { mode: 0o644, flag: 'wx' });
     }
 
     // Phase 2: move any existing target archives to sibling backups before placing new files.
     for (const item of plan) {
-      if (ops.existsSync(item.finalDest)) {
+      if (lstatOrNull(ops, item.finalDest) !== null) {
         ops.renameSync(item.finalDest, item.backupDest);
         backedUp.push(item);
       }
@@ -125,10 +154,13 @@ export function publishPackageSet(outDir, stagedTarballs, fsOps = DEFAULT_FS_OPS
     // Phase 3: move all new temp archives into their final paths.
     for (const item of plan) {
       ops.renameSync(item.tmpDest, item.finalDest);
+      const idx = ownedTemps.indexOf(item);
+      if (idx !== -1) ownedTemps.splice(idx, 1);
       committed.push(item);
     }
   } catch (publishError) {
     const rollbackErrors = [];
+    const preservedBackups = [];
 
     // Remove newly placed archives in reverse order.
     for (let i = committed.length - 1; i >= 0; i -= 1) {
@@ -136,7 +168,8 @@ export function publishPackageSet(outDir, stagedTarballs, fsOps = DEFAULT_FS_OPS
       try {
         ops.rmSync(item.finalDest, { force: true });
       } catch (err) {
-        rollbackErrors.push(`remove ${item.fileName}: ${err.message}`);
+        const msg = err instanceof Error ? err.message : String(err);
+        rollbackErrors.push(`remove ${item.finalDest}: ${msg}`);
       }
     }
 
@@ -146,44 +179,79 @@ export function publishPackageSet(outDir, stagedTarballs, fsOps = DEFAULT_FS_OPS
       try {
         ops.renameSync(item.backupDest, item.finalDest);
       } catch (err) {
-        rollbackErrors.push(`restore ${item.fileName}: ${err.message}`);
+        const msg = err instanceof Error ? err.message : String(err);
+        preservedBackups.push(item.backupDest);
+        rollbackErrors.push(
+          `restore ${item.finalDest} from preserved backup ${item.backupDest}: ${msg}`,
+        );
       }
     }
 
-    // Remove any remaining temporary files.
-    for (const item of writtenTemps) {
+    // Remove only temporary files owned by this invocation.
+    for (let i = ownedTemps.length - 1; i >= 0; i -= 1) {
+      const item = ownedTemps[i];
       try {
         ops.rmSync(item.tmpDest, { force: true });
       } catch (err) {
-        rollbackErrors.push(`cleanup ${path.basename(item.tmpDest)}: ${err.message}`);
+        const msg = err instanceof Error ? err.message : String(err);
+        rollbackErrors.push(`cleanup ${item.tmpDest}: ${msg}`);
       }
     }
 
     // If outDir was freshly created and is now empty, remove it.
     if (!dirExistedBefore) {
       try {
-        if (ops.existsSync(outDir) && ops.readdirSync(outDir).length === 0) {
-          ops.rmdirSync(outDir);
+        if (lstatOrNull(ops, outDir) !== null) {
+          const remaining = ops.readdirSync(outDir);
+          if (remaining.length === 0) {
+            ops.rmdirSync(outDir);
+          } else if (rollbackErrors.length === 0) {
+            rollbackErrors.push(
+              `cleanup destination directory ${outDir}: directory not empty (${remaining.join(', ')})`,
+            );
+          }
         }
-      } catch {
-        // Best-effort cleanup of empty freshly created directory.
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        rollbackErrors.push(`cleanup destination directory ${outDir}: ${msg}`);
       }
     }
 
     const detail = publishError instanceof Error ? publishError.message : String(publishError);
     if (rollbackErrors.length > 0) {
+      const preservedNote =
+        preservedBackups.length > 0
+          ? `; preserved backup(s) for manual recovery: ${preservedBackups.join(', ')}`
+          : '';
       throw new Error(
-        `pack:local publication failed (${detail}); rollback encountered errors: ${rollbackErrors.join('; ')}`,
+        `pack:local publication failed (${detail}); rollback encountered errors: ${rollbackErrors.join('; ')}${preservedNote}`,
+      );
+    }
+    if (dirExistedBefore) {
+      throw new Error(
+        `pack:local publication failed (${detail}); existing destination state was restored`,
       );
     }
     throw new Error(
-      `pack:local publication failed (${detail}); existing destination state was restored`,
+      `pack:local publication failed (${detail}); newly created destination directory was removed`,
     );
   }
 
-  // Phase 4: remove backups only after all four archives are in place.
+  // Phase 4: remove backups independently after all four archives are in place.
+  const backupCleanupErrors = [];
   for (const item of backedUp) {
-    ops.rmSync(item.backupDest, { force: true });
+    try {
+      ops.rmSync(item.backupDest, { force: true });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      backupCleanupErrors.push(`${item.backupDest}: ${msg}`);
+    }
+  }
+
+  if (backupCleanupErrors.length > 0) {
+    throw new Error(
+      `pack:local publication succeeded (all ${plan.length} archives published to "${outDir}"), but backup cleanup failed for ${backupCleanupErrors.length} backup file(s): ${backupCleanupErrors.join('; ')}`,
+    );
   }
 
   return plan.map((item) => item.finalDest);
