@@ -29,6 +29,17 @@ MAX_SEGMENTS = 16
 CHUNK = 1024 * 1024
 MIN_END_BLOCKS = 1024
 
+FILESYSTEM_METADATA_NAMES = frozenset({
+    ".ds_store",
+    "__macosx",
+    "thumbs.db",
+    "desktop.ini",
+})
+
+
+def is_filesystem_metadata_segment(segment):
+    return segment.casefold() in FILESYSTEM_METADATA_NAMES or segment.startswith("._")
+
 TYPE_NAMES = {
     tarfile.REGTYPE: "regular file",
     tarfile.AREGTYPE: "regular file",
@@ -100,11 +111,12 @@ def normalise(ti):
     return segments
 
 
-def validate(tf, stream_len):
+def validate(tf, stream_len, reject_top_level=(), allow_filesystem_metadata=False):
     """Pass 1: validate every member without writing. Returns [(TarInfo, segments)]."""
     plan = []
     files = {}  # casefolded path -> original path
     dirs = {}
+    seen_root_dir = False
     total = 0
     count = 0
     for ti in tf:
@@ -114,10 +126,19 @@ def validate(tf, stream_len):
         if ti.type not in (tarfile.REGTYPE, tarfile.AREGTYPE, tarfile.DIRTYPE) or getattr(ti, "sparse", None) is not None:
             raise Reject("%s: not a regular file or directory" % entry_label(ti))
         segments = normalise(ti)
+        if not allow_filesystem_metadata:
+            for seg in segments:
+                if is_filesystem_metadata_segment(seg):
+                    raise Reject("%s: unintended filesystem metadata artifact" % entry_label(ti))
         is_dir = ti.type == tarfile.DIRTYPE
+        if segments and segments[0].casefold() in reject_top_level:
+            raise Reject("%s: top-level %s collides with a reserved directory" % (entry_label(ti), ascii(segments[0])))
         if not segments:
             if not is_dir:
                 raise Reject("%s: file with empty path" % entry_label(ti))
+            if seen_root_dir:
+                raise Reject("%s: duplicate root directory" % entry_label(ti))
+            seen_root_dir = True
             plan.append((ti, segments))
             continue
         key = "/".join(segments).casefold()
@@ -170,12 +191,14 @@ def make_dir(path):
         os.chmod(path, 0o755)
 
 
-def extract(tf, plan, dest):
+def extract(tf, plan, dest, dest_may_exist_empty=False):
     """Pass 2: write validated members under dest."""
     try:
         os.mkdir(dest, 0o755)
     except FileExistsError:
-        raise Reject("destination %s already exists" % ascii(dest))
+        st = os.lstat(dest)
+        if not dest_may_exist_empty or not stat.S_ISDIR(st.st_mode) or os.listdir(dest):
+            raise Reject("destination %s already exists" % ascii(dest))
     os.chmod(dest, 0o755)
     root = os.path.realpath(dest)
     for ti, segments in plan:
@@ -226,14 +249,15 @@ def run(args):
         raise Reject("SHA-256 mismatch: expected %s, computed %s" % (args.sha256, digest))
     raw = decompress(data)
     with tarfile.open(fileobj=io.BytesIO(raw), mode="r:") as tf:
-        plan = validate(tf, len(raw))
+        reserved = tuple(name.casefold() for name in (args.reject_top_level or []))
+        plan = validate(tf, len(raw), reserved)
         check_end_blocks(raw, tf.offset)
         if args.dest:
             if args.require_index and not any(
                 s == ["index.html"] and t.type != tarfile.DIRTYPE for t, s in plan
             ):
                 raise Reject("missing index.html at archive root")
-            extract(tf, plan, args.dest)
+            extract(tf, plan, args.dest, args.dest_may_exist_empty)
             if args.require_index:
                 require_index(args.dest)
     if args.require_index and not args.dest:
@@ -246,6 +270,10 @@ def main():
     parser.add_argument("--sha256", required=True)
     parser.add_argument("--dest")
     parser.add_argument("--require-index", action="store_true")
+    # Reject any member whose first path segment matches NAME (case-insensitive). Repeatable.
+    parser.add_argument("--reject-top-level", action="append", metavar="NAME")
+    # Allow --dest to be an existing, empty, non-symlink directory (the staging root).
+    parser.add_argument("--dest-may-exist-empty", action="store_true")
     try:
         args = parser.parse_args()
     except SystemExit:

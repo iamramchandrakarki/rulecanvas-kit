@@ -46,10 +46,10 @@ jobs:
       - name: Verify public package exports
         run: pnpm verify:exports
 
-      - name: Verify package archives and third-app consumer
+      - name: Verify package archives and the starter template consumer
         env:
           PACK_ARCHIVE_DIR: ${{ runner.temp }}/rulecanvas-archives-${{ github.sha }}
-          BOOKING_FIXTURE_DIST: ${{ runner.temp }}/rulecanvas-booking-${{ github.sha }}
+          STARTER_FIXTURE_DIST: ${{ runner.temp }}/rulecanvas-starter-${{ github.sha }}
         run: pnpm verify:pack
 
       - name: Run unit, property, replay, and scenario tests
@@ -57,6 +57,12 @@ jobs:
 
       - name: Run deterministic seeded property-based tests
         run: FC_SEED=918273645 pnpm --filter @rulecanvas/core exec vitest run tests/properties.test.ts
+
+      - name: Run deterministic seeded UI report and delta property-based tests
+        run: FC_SEED=918273645 pnpm --filter @rulecanvas/ui exec vitest run tests/report.properties.test.ts tests/delta.test.ts
+
+      - name: Run CLI regression tests
+        run: pnpm test:cli
 
       - name: Verify architecture boundaries
         run: pnpm verify:boundaries
@@ -68,10 +74,13 @@ jobs:
         run: |
           git ls-files --error-unmatch \
             .kiro/hooks/verify-core.json \
+            .kiro/hooks/verify-boundaries.json \
+            .kiro/agents/boundary-auditor.md \
             .kiro/specs/README.md \
             .kiro/steering/architecture-boundaries.md \
-            .kiro/steering/engine-correctness.md >/dev/null
-          for p in .kiro .kiro/specs .kiro/steering .kiro/hooks; do
+            .kiro/steering/engine-correctness.md \
+            .kiro/steering/workbench-ui-and-reports.md >/dev/null
+          for p in .kiro .kiro/specs .kiro/steering .kiro/hooks .kiro/agents; do
             rc=0
             git check-ignore -q "$p" || rc=$?
             if [ "$rc" -ne 1 ]; then
@@ -94,18 +103,26 @@ jobs:
           PLAYWRIGHT_MODULE: ${{ runner.temp }}/pw/node_modules/playwright/index.mjs
           AXE_PLAYWRIGHT_MODULE: ${{ runner.temp }}/pw/node_modules/@axe-core/playwright/dist/index.mjs
           SCREENSHOT_DIR: ${{ runner.temp }}/rulecanvas-screenshots-${{ github.sha }}
-          BOOKING_FIXTURE_DIST: ${{ runner.temp }}/rulecanvas-booking-${{ github.sha }}
+          STARTER_FIXTURE_DIST: ${{ runner.temp }}/rulecanvas-starter-${{ github.sha }}
         run: pnpm test:browser
 
-      - name: Archive independently deployable production builds
+      - name: Run release preflight tests
+        env:
+          PLAYWRIGHT_MODULE: ${{ runner.temp }}/pw/node_modules/playwright/index.mjs
+        run: pnpm test:release:preflight
+
+      - name: Archive the hub and the independently deployable app builds
         env:
           ARCHIVE_DIR: ${{ runner.temp }}/rulecanvas-archives-${{ github.sha }}
+          COPYFILE_DISABLE: "1"
         run: |
-          for app in agent-gate interlock-sim; do
-            tar -czf "$ARCHIVE_DIR/$app-static.tar.gz" -C "apps/$app/dist" .
-          done
+          python3 scripts/create-release-archive.py static --source apps/agent-gate/dist --output "$ARCHIVE_DIR/agent-gate-static.tar.gz"
+          python3 scripts/create-release-archive.py static --source apps/interlock-sim/dist --output "$ARCHIVE_DIR/interlock-sim-static.tar.gz"
+          python3 scripts/create-release-archive.py static --source site --output "$ARCHIVE_DIR/site-static.tar.gz"
           cd "$ARCHIVE_DIR"
-          sha256sum agent-gate-static.tar.gz interlock-sim-static.tar.gz >> SHA256SUMS.txt
+          sha256sum agent-gate-static.tar.gz interlock-sim-static.tar.gz site-static.tar.gz >> SHA256SUMS.txt
+          test "$(wc -l < SHA256SUMS.txt)" -eq 7
+          sha256sum -c SHA256SUMS.txt
 
       - name: Upload commit-scoped browser screenshots and archives
         uses: actions/upload-artifact@v4

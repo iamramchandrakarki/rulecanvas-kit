@@ -46,12 +46,12 @@ export function ComparisonPanel({
       )}
 
       <div
-        className="ag-table-wrap"
+        className="ag-table-wrap rc-scroll-x"
         tabIndex={0}
         role="region"
         aria-label="Preset policy comparison matrix table"
       >
-        <table className="ag-table">
+        <table className="ag-table ag-table-comparison">
           <thead>
             <tr>
               <th scope="col">Preset</th>

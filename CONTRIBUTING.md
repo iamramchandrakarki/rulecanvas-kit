@@ -6,6 +6,7 @@ Thank you for your interest in contributing to RuleCanvasKit. This guide covers 
 
 - Node.js `^22.12.0 || ^24.0.0 || >=26.0.0` (Node 24 LTS recommended; CI runs Node 24)
 - `pnpm` (`12.21.0`, matching `packageManager` in `package.json`)
+- Python 3 (`python3`, standard library only) for packing release archives from source (`pnpm run pack:local`, `pnpm verify:pack`) and running release preflight (`pnpm verify:release:preflight`, `pnpm test:release:preflight`); not required when only consuming already-packed packages
 
 Install dependencies and build all libraries and applications:
 
@@ -54,7 +55,7 @@ pnpm verify:hygiene
 pnpm bench
 ```
 
-Run the [browser regression suite](./README.md#build-pack-and-verification-instructions) with the pinned Playwright and axe versions. Share `BOOKING_FIXTURE_DIST` between the package and browser gates to exercise the worker built from the tarballs.
+Run the [browser regression suite](./README.md#build-pack-and-verification-instructions) with the pinned Playwright and axe versions. Share `STARTER_FIXTURE_DIST` between the package and browser gates to exercise the starter template worker built from the tarballs.
 
 ## Workspace Layering & Packaging Invariants
 

@@ -1,0 +1,16 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "verify-package-boundaries",
+      "description": "Run the package boundary test after an agent saves a TypeScript source file in any shared package.",
+      "trigger": "PostFileSave",
+      "matcher": "packages/.*/src/.*\\.tsx?$",
+      "timeout": 300,
+      "action": {
+        "type": "command",
+        "command": "pnpm verify:boundaries"
+      }
+    }
+  ]
+}

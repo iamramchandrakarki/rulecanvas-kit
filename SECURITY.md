@@ -19,9 +19,9 @@ RuleCanvasKit (`@rulecanvas/core`) is a design-time finite-state model checker f
 
 ## Browser workbenches
 
-- The workbenches process models and results in the browser. The module worker runs the same verifier as direct execution.
+- The workbenches process models and results in the browser. The module worker runs the same verifier as direct execution, and `@rulecanvas/workbench/verify` reconstructs `VerifyResult` replies from allowlisted fields before deep-freezing.
 - Verification clients correlate a reply with the active request, validate its shape and bounds, and bind replay to the captured model. Only supply worker factories you trust. Protocol correlation and replay checks do not establish that an arbitrary worker ran the engine.
-- The portable codec checks structural and size budgets before accepting model JSON. The workbenches preserve last-value behavior for duplicate keys in legacy imports. The shared codec rejects duplicate keys by default.
+- The portable codec checks structural and size budgets before accepting model JSON. Both workbenches and the shared codec reject duplicate keys (`duplicateKeys: 'reject'`) by default (the codec also exposes an opt-in `'last-value'` mode for explicit legacy callers).
 
 ## Reporting a Vulnerability
 

@@ -113,13 +113,21 @@ function supportsPopover(el: HTMLElement): boolean {
   return typeof (el as HTMLElement & { showPopover?: unknown }).showPopover === 'function';
 }
 
+function isTopLayerOpen(el: HTMLElement): boolean {
+  try {
+    return el.matches(':popover-open');
+  } catch {
+    return false;
+  }
+}
+
 /** Places the menu below (or, when cramped, above) the trigger inside the viewport. */
 function positionMenu(trigger: HTMLElement, menu: HTMLElement): void {
   const doc = trigger.ownerDocument;
   const view = doc.defaultView;
   if (view === null) return;
   const rect = trigger.getBoundingClientRect();
-  const vw = doc.documentElement.clientWidth;
+  const vw = doc.documentElement.clientWidth || view.innerWidth;
   const vh = view.innerHeight;
 
   menu.style.minWidth = `${Math.round(Math.min(rect.width, vw - VIEWPORT_MARGIN * 2))}px`;
@@ -133,10 +141,26 @@ function positionMenu(trigger: HTMLElement, menu: HTMLElement): void {
   menu.style.maxHeight = `${Math.floor(Math.min(MENU_MAX_HEIGHT, available))}px`;
 
   const width = menu.offsetWidth;
-  const left = Math.min(Math.max(rect.left, VIEWPORT_MARGIN), vw - VIEWPORT_MARGIN - width);
-  const top = placement === 'bottom' ? rect.bottom + TRIGGER_GAP : rect.top - TRIGGER_GAP - height;
-  menu.style.left = `${Math.round(Math.max(VIEWPORT_MARGIN, left))}px`;
-  menu.style.top = `${Math.round(Math.max(VIEWPORT_MARGIN, top))}px`;
+  const left = Math.round(
+    Math.max(VIEWPORT_MARGIN, Math.min(Math.max(rect.left, VIEWPORT_MARGIN), vw - VIEWPORT_MARGIN - width)),
+  );
+  const top = Math.round(
+    Math.max(VIEWPORT_MARGIN, placement === 'bottom' ? rect.bottom + TRIGGER_GAP : rect.top - TRIGGER_GAP - height),
+  );
+  menu.style.left = `${left}px`;
+  menu.style.top = `${top}px`;
+
+  // In browsers without Popover API top-layer support, an ancestor with transform/filter/contain
+  // shifts the fixed containing block away from viewport (0, 0). Compensate using actual rect delta.
+  if (!isTopLayerOpen(menu)) {
+    const actual = menu.getBoundingClientRect();
+    const dx = Math.round(actual.left - left);
+    const dy = Math.round(actual.top - top);
+    if (dx !== 0 || dy !== 0) {
+      menu.style.left = `${left - dx}px`;
+      menu.style.top = `${top - dy}px`;
+    }
+  }
   menu.dataset['placement'] = placement;
 }
 
@@ -267,17 +291,26 @@ export function WorkbenchSelect<V extends string = string>({
     if (option.value !== value) onChange(option.value);
   };
 
-  // Show in the top layer and position before the first paint of the open menu.
+  // Show in the top layer when supported, otherwise fall back cleanly to fixed positioning without [popover].
   useLayoutEffect(() => {
     const menu = menuEl.current;
     const trigger = triggerEl.current;
     if (!isOpen || menu === null || trigger === null) return;
+    let inTopLayer = false;
     if (supportsPopover(menu)) {
       try {
-        if (!menu.matches(':popover-open')) menu.showPopover();
+        menu.setAttribute('popover', 'manual');
+        if (!isTopLayerOpen(menu)) menu.showPopover();
+        inTopLayer = isTopLayerOpen(menu);
       } catch {
-        // Already shown or unsupported selector; fixed positioning still applies.
+        inTopLayer = false;
       }
+    }
+    if (!inTopLayer) {
+      menu.removeAttribute('popover');
+      menu.dataset['popoverFallback'] = 'true';
+    } else {
+      delete menu.dataset['popoverFallback'];
     }
     // Name the listbox after the trigger's own label (not its current value).
     if (ariaLabel === undefined && ariaLabelledBy === undefined) {
@@ -550,7 +583,6 @@ export function WorkbenchSelect<V extends string = string>({
           ref={menuEl}
           id={listboxId}
           role="listbox"
-          popover="manual"
           className={menuClass}
           aria-label={ariaLabel}
           aria-labelledby={ariaLabel === undefined ? ariaLabelledBy : undefined}

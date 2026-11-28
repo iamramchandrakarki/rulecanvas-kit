@@ -8,6 +8,7 @@ import {
   StrictIntegerInput,
   VerdictSummary,
   WORKBENCH_THEME_STORAGE_KEY,
+  WorkbenchBrandLink,
   WorkbenchBrandMark,
   WorkbenchDiscardDialog,
   WorkbenchNavigation,
@@ -1107,6 +1108,23 @@ describe('@rulecanvas/workbench-react components, navigation, and race-safe hist
     const markHtml = renderToStaticMarkup(createElement(WorkbenchBrandMark));
     expect(markHtml).toContain('<svg');
     expect(markHtml).toContain('aria-hidden="true"');
+    const brandLinkHtml = renderToStaticMarkup(
+      createElement(WorkbenchBrandLink, { href: ' ../ ', className: 'brand', children: 'RuleCanvasKit' }),
+    );
+    expect(brandLinkHtml).toBe(
+      '<a href="../" class="brand" data-rc-brand-link="true">RuleCanvasKit</a>',
+    );
+    for (const unsafe of ['https://evil.example/', '//evil.example/', 'javascript:alert(1)', '']) {
+      const html = renderToStaticMarkup(
+        createElement(WorkbenchBrandLink, { href: unsafe, className: 'brand', children: 'RuleCanvasKit' }),
+      );
+      expect(html).toBe('<span class="brand">RuleCanvasKit</span>');
+    }
+    expect(
+      renderToStaticMarkup(
+        createElement(WorkbenchBrandLink, { href: '/other/', allowedPrefix: '/app/', children: 'R' }),
+      ),
+    ).toBe('<span>R</span>');
 
     const dialogHtml = renderToStaticMarkup(
       createElement(WorkbenchDiscardDialog, {

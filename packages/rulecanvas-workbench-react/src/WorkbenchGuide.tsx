@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 
 export interface WorkbenchGlossaryTerm {
   readonly term: string;
@@ -96,7 +96,56 @@ export function WorkbenchGuideControl({
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
   const panelId = `${useId()}-guide-panel`;
+
+  useLayoutEffect(() => {
+    const panel = panelRef.current;
+    const trigger = triggerRef.current;
+    if (!open || panel === null || trigger === null) {
+      if (panel !== null) {
+        panel.style.position = '';
+        panel.style.top = '';
+        panel.style.left = '';
+        panel.style.right = '';
+        panel.style.maxHeight = '';
+      }
+      return;
+    }
+
+    const view = panel.ownerDocument.defaultView;
+    if (view === null) return;
+
+    const positionPanel = () => {
+      const vw = panel.ownerDocument.documentElement.clientWidth || view.innerWidth;
+      const vh = view.innerHeight;
+      const margin = 12;
+      const gap = 6;
+      const triggerRect = trigger.getBoundingClientRect();
+
+      panel.style.position = 'fixed';
+      panel.style.right = 'auto';
+
+      const panelWidth = Math.min(400, Math.max(200, vw - margin * 2));
+      const measuredWidth = panel.offsetWidth > 0 ? Math.min(panel.offsetWidth, vw - margin * 2) : panelWidth;
+      const idealLeft = triggerRect.right - measuredWidth;
+      const clampedLeft = Math.max(margin, Math.min(idealLeft, vw - margin - measuredWidth));
+
+      const belowTop = Math.max(margin, triggerRect.bottom + gap);
+      const availableBelow = Math.max(160, vh - belowTop - margin);
+      panel.style.left = `${Math.round(clampedLeft)}px`;
+      panel.style.top = `${Math.round(belowTop)}px`;
+      panel.style.maxHeight = `${Math.floor(Math.min(580, availableBelow))}px`;
+    };
+
+    positionPanel();
+    view.addEventListener('resize', positionPanel);
+    view.addEventListener('scroll', positionPanel, true);
+    return () => {
+      view.removeEventListener('resize', positionPanel);
+      view.removeEventListener('scroll', positionPanel, true);
+    };
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -108,8 +157,18 @@ export function WorkbenchGuideControl({
         setOpen(false);
       }
     };
-    doc.addEventListener('pointerdown', handlePointerDown);
-    return () => doc.removeEventListener('pointerdown', handlePointerDown);
+    const handleFocusIn = (event: FocusEvent) => {
+      const root = rootRef.current;
+      if (root !== null && event.target instanceof Node && !root.contains(event.target)) {
+        setOpen(false);
+      }
+    };
+    doc.addEventListener('pointerdown', handlePointerDown, true);
+    doc.addEventListener('focusin', handleFocusIn, true);
+    return () => {
+      doc.removeEventListener('pointerdown', handlePointerDown, true);
+      doc.removeEventListener('focusin', handleFocusIn, true);
+    };
   }, [open]);
 
   return (
@@ -158,6 +217,7 @@ export function WorkbenchGuideControl({
       </button>
 
       <div
+        ref={panelRef}
         id={panelId}
         className={panelClassName}
         role="region"

@@ -15,6 +15,7 @@ import {
   formatStateValue,
   type ReplaySession,
 } from '@rulecanvas/ui';
+import { ExportReportMenu, VerdictDeltaRow } from '@rulecanvas/workbench-react';
 import { isWebWorkerSupported, type VerifyExecutionMode } from '../verify-client.js';
 import { isCanonicalVacuousLockoutModel, type ModelDiagnosticsIndex } from '../model-inspector.js';
 import {
@@ -55,9 +56,15 @@ export interface VerificationWorkbenchPaneProps {
   readonly editorDraftErrors: readonly ValidationError[];
   readonly modelErrors: readonly ValidationError[];
   readonly verifiedSnapshot: VerifiedSnapshot | null;
+  readonly previousSnapshot?: VerifiedSnapshot | null | undefined;
   readonly replaySession: ReplaySession | null;
+  readonly replayError?: string | null | undefined;
   readonly onCancelRun: () => void;
   readonly onVerifyNow: () => void;
+  readonly onResetReplay?: (() => void) | undefined;
+  readonly onStepBack?: (() => void) | undefined;
+  readonly onStepForward?: (() => void) | undefined;
+  readonly onRestoreVerdictTrace?: (() => void) | undefined;
   readonly onJumpToStep: (stepIndex: number) => void;
   readonly onInspectRule?: ((ruleId: string) => void) | undefined;
   readonly editor?: IntegratedInterlockEditorProps | undefined;
@@ -104,9 +111,15 @@ function areAssumptionsEqual(
 interface TraceTimelineSectionProps {
   readonly replaySession: ReplaySession;
   readonly isStale: boolean;
+  readonly canRestoreCounterexample?: boolean | undefined;
+  readonly replayError?: string | null | undefined;
   readonly ruleLabels: ReadonlyMap<string, string>;
   readonly snapshotRulesById: ReadonlyMap<string, TransitionRule>;
   readonly draftRuleIds: ReadonlySet<string>;
+  readonly onResetReplay?: (() => void) | undefined;
+  readonly onStepBack?: (() => void) | undefined;
+  readonly onStepForward?: (() => void) | undefined;
+  readonly onRestoreVerdictTrace?: (() => void) | undefined;
   readonly onJumpToStep: (stepIndex: number) => void;
   readonly onInspectRule?: ((ruleId: string) => void) | undefined;
 }
@@ -114,24 +127,90 @@ interface TraceTimelineSectionProps {
 function TraceTimelineSection({
   replaySession,
   isStale,
+  canRestoreCounterexample = false,
+  replayError = null,
   ruleLabels,
   snapshotRulesById,
   draftRuleIds,
+  onResetReplay,
+  onStepBack,
+  onStepForward,
+  onRestoreVerdictTrace,
   onJumpToStep,
   onInspectRule,
 }: TraceTimelineSectionProps) {
   return (
     <div className="is-trace-block">
-      <div className="is-section-header">
+      <div className="is-replay-toolbar">
         <h3 className="is-section-title">
           {replaySession.mode === 'trace'
             ? `Counterexample Trace (${replaySession.totalSteps} steps)`
-            : `Manual Simulation Sequence (${replaySession.totalSteps} steps)`}
+            : `Manual Simulation (${replaySession.totalSteps} steps)`}
         </h3>
-        <span className="is-step-counter" aria-live="polite">
-          Cursor: Step {replaySession.cursor} / {replaySession.totalSteps}
-        </span>
+        <div className="is-inline-actions">
+          {onResetReplay !== undefined && (
+            <button
+              type="button"
+              className="is-btn is-btn-sm"
+              disabled={replaySession.cursor === 0 && replaySession.totalSteps === 0}
+              onClick={onResetReplay}
+            >
+              Reset
+            </button>
+          )}
+          {onStepBack !== undefined && (
+            <button
+              type="button"
+              className="is-btn is-btn-sm"
+              disabled={!replaySession.canStepBack}
+              aria-keyshortcuts="["
+              data-rc-tip-host="true"
+              onClick={onStepBack}
+            >
+              Previous
+              <span className="rc-tip" aria-hidden="true">
+                Previous step ([)
+              </span>
+            </button>
+          )}
+          <span className="is-step-counter" aria-live="polite">
+            Step {replaySession.cursor} of {replaySession.totalSteps}
+          </span>
+          {onStepForward !== undefined && (
+            <button
+              type="button"
+              className="is-btn is-btn-sm"
+              disabled={!replaySession.canStepForward}
+              aria-keyshortcuts="]"
+              data-rc-tip-host="true"
+              onClick={onStepForward}
+            >
+              Next
+              <span className="rc-tip" aria-hidden="true">
+                Next step (])
+              </span>
+            </button>
+          )}
+        </div>
+
+        {canRestoreCounterexample &&
+          replaySession.mode === 'manual' &&
+          onRestoreVerdictTrace !== undefined && (
+            <button
+              type="button"
+              className="is-btn is-btn-sm is-btn-active"
+              onClick={onRestoreVerdictTrace}
+            >
+              Restore Counterexample
+            </button>
+          )}
       </div>
+
+      {replayError !== null && (
+        <div className="is-alert" role="alert">
+          {replayError}
+        </div>
+      )}
 
       <ol className="is-timeline" aria-label="Execution trace steps">
         <li
@@ -468,6 +547,12 @@ interface IntegratedInspectorBodyProps {
   readonly hasVerifiedAssumptions: boolean;
   readonly verifiedAssumptions: readonly ModelAssumption[];
   readonly hasPendingEditedAssumptions: boolean;
+  readonly canRestoreCounterexample: boolean;
+  readonly replayError?: string | null | undefined;
+  readonly onResetReplay?: (() => void) | undefined;
+  readonly onStepBack?: (() => void) | undefined;
+  readonly onStepForward?: (() => void) | undefined;
+  readonly onRestoreVerdictTrace?: (() => void) | undefined;
   readonly onJumpToStep: (stepIndex: number) => void;
   readonly onInspectRule?: ((ruleId: string) => void) | undefined;
   readonly onVerifyNow: () => void;
@@ -486,6 +571,12 @@ function IntegratedInspectorBody({
   hasVerifiedAssumptions,
   verifiedAssumptions,
   hasPendingEditedAssumptions,
+  canRestoreCounterexample,
+  replayError,
+  onResetReplay,
+  onStepBack,
+  onStepForward,
+  onRestoreVerdictTrace,
   onJumpToStep,
   onInspectRule,
   onVerifyNow,
@@ -576,9 +667,15 @@ function IntegratedInspectorBody({
           <TraceTimelineSection
             replaySession={replaySession}
             isStale={isStale}
+            canRestoreCounterexample={canRestoreCounterexample}
+            replayError={replayError}
             ruleLabels={ruleLabels}
             snapshotRulesById={snapshotRulesById}
             draftRuleIds={draftRuleIds}
+            onResetReplay={onResetReplay}
+            onStepBack={onStepBack}
+            onStepForward={onStepForward}
+            onRestoreVerdictTrace={onRestoreVerdictTrace}
             onJumpToStep={onJumpToStep}
             onInspectRule={onInspectRule}
           />
@@ -666,9 +763,15 @@ export function VerificationWorkbenchPane({
   editorDraftErrors,
   modelErrors,
   verifiedSnapshot,
+  previousSnapshot = null,
   replaySession,
+  replayError = null,
   onCancelRun,
   onVerifyNow,
+  onResetReplay,
+  onStepBack,
+  onStepForward,
+  onRestoreVerdictTrace,
   onJumpToStep,
   onInspectRule,
   editor,
@@ -707,6 +810,13 @@ export function VerificationWorkbenchPane({
     <section className="is-pane" aria-label="Bounded model checking verdict and trace">
       <div className="is-pane-header">
         <h2 className="is-pane-title">Verification inspector</h2>
+        <ExportReportMenu
+          snapshot={verifiedSnapshot}
+          isRunning={isRunning}
+          isStale={isStale}
+          triggerClassName="is-btn is-btn-sm"
+          tooltipClassName="rc-tip"
+        />
       </div>
 
       {/* 1. Running */}
@@ -722,7 +832,9 @@ export function VerificationWorkbenchPane({
           </div>
           <p className="is-verdict-headline">
             {runningExecutionMode === 'main-thread'
-              ? 'Executing deterministic verification on main thread (Web Workers unavailable)'
+              ? isWebWorkerSupported()
+                ? 'Executing deterministic verification on main thread…'
+                : 'Executing deterministic verification on main thread (Web Workers unavailable)'
               : 'Exploring reachable airlock state space in Web Worker…'}
           </p>
         </div>
@@ -866,6 +978,13 @@ export function VerificationWorkbenchPane({
           <p className="is-verdict-headline">{verdictView.headline}</p>
           <p className="is-verdict-detail">{verdictView.detail}</p>
 
+          <VerdictDeltaRow
+            previous={previousSnapshot}
+            current={verifiedSnapshot}
+            isRunning={isRunning}
+            isStale={isStale}
+          />
+
           <div className="is-verdict-meta">
             <span>Snapshot: {verifiedSnapshot.modelLabel}</span>
             <span>
@@ -937,6 +1056,12 @@ export function VerificationWorkbenchPane({
           hasVerifiedAssumptions={hasVerifiedAssumptions}
           verifiedAssumptions={verifiedAssumptions}
           hasPendingEditedAssumptions={hasPendingEditedAssumptions}
+          canRestoreCounterexample={result?.status === 'VIOLATED'}
+          replayError={replayError}
+          onResetReplay={onResetReplay}
+          onStepBack={onStepBack}
+          onStepForward={onStepForward}
+          onRestoreVerdictTrace={onRestoreVerdictTrace}
           onJumpToStep={onJumpToStep}
           onInspectRule={onInspectRule}
           onVerifyNow={onVerifyNow}
@@ -949,9 +1074,15 @@ export function VerificationWorkbenchPane({
               <TraceTimelineSection
                 replaySession={replaySession}
                 isStale={isStale}
+                canRestoreCounterexample={result?.status === 'VIOLATED'}
+                replayError={replayError}
                 ruleLabels={ruleLabels}
                 snapshotRulesById={snapshotRulesById}
                 draftRuleIds={draftRuleIds}
+                onResetReplay={onResetReplay}
+                onStepBack={onStepBack}
+                onStepForward={onStepForward}
+                onRestoreVerdictTrace={onRestoreVerdictTrace}
                 onJumpToStep={onJumpToStep}
                 onInspectRule={onInspectRule}
               />

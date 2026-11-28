@@ -47,12 +47,12 @@ export function ComparisonPanel({
       )}
 
       <div
-        className="is-table-wrap"
+        className="is-table-wrap rc-scroll-x"
         tabIndex={0}
         role="region"
         aria-label="Interlock preset comparison matrix table"
       >
-        <table className="is-table">
+        <table className="is-table is-table-comparison">
           <thead>
             <tr>
               <th scope="col">Preset</th>

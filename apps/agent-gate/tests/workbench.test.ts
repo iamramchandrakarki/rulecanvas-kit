@@ -20,6 +20,7 @@ import {
 } from '@rulecanvas/ui';
 import { describe, expect, it, vi } from 'vitest';
 import { installVerifyWorker, type VerifyWorkerPort } from '@rulecanvas/workbench/verify-worker';
+import { DEFAULT_MODEL_JSON_LIMITS } from '@rulecanvas/workbench/model-json';
 import { App } from '../src/App.js';
 import { ComparisonPanel } from '../src/components/ComparisonPanel.js';
 import {
@@ -597,8 +598,9 @@ describe('AgentGate workbench domain modules and UI', () => {
     );
 
     expect(brokenHtml).toContain('AgentGate');
-    expect(brokenHtml).toContain('Verify Policy');
-    expect(brokenHtml).toContain('Compare All 5 Presets');
+    expect(brokenHtml).toContain('>Verify<');
+    expect(brokenHtml).toContain('Compare (5)');
+    expect(brokenHtml).toContain('Export report');
     expect(brokenHtml).toContain('VIOLATED');
     expect(brokenHtml).toContain('Counterexample found in 5 steps.');
     expect(brokenHtml).toContain('Step 5 of 5');
@@ -1665,15 +1667,16 @@ describe('AgentGate workbench domain modules and UI', () => {
       parseSpy.mockRestore();
     }
 
-    // Legacy import wrapper preserves last-value duplicate-key compatibility while core-valid exports enforce 512k common envelope
+    // Strict duplicate-key rejection replaces the legacy last-value import quirk
     const dupNameJson = validJson.replace(
       `"name": ${JSON.stringify(broken.name)},`,
       `"name": "Legacy First",\n  "name": "Legacy Second",`,
     );
     const dupImport = importModelFromJson(dupNameJson);
-    expect(dupImport.ok).toBe(true);
-    if (dupImport.ok) {
-      expect(dupImport.model.name).toBe('Legacy Second');
+    expect(dupImport.ok).toBe(false);
+    if (!dupImport.ok) {
+      expect(dupImport.errors[0]?.code).toBe('DUPLICATE_JSON_KEY');
+      expect(dupImport.errors[0]?.path).toBe('$');
     }
 
     const oversizedCommonValidModel: TransitionSystemModel = {
@@ -1694,8 +1697,8 @@ describe('AgentGate workbench domain modules and UI', () => {
       expect(commonExportFail.error.code).toBe('JSON_EXPORT_ERROR');
     }
 
-    // Exact v0.4.0 legacy compatibility:
-    // 1. Non-enumerable dense rule slot on an object candidate is accepted
+    // Shared codec semantics replace the v0.4.0 legacy compatibility quirks:
+    // 1. Non-enumerable dense rule slots on an object candidate are rejected
     const rulesWithNonEnumSlot = [...broken.rules];
     Object.defineProperty(rulesWithNonEnumSlot, 0, {
       value: structuredClone(broken.rules[0]!),
@@ -1708,15 +1711,27 @@ describe('AgentGate workbench domain modules and UI', () => {
       rules: rulesWithNonEnumSlot,
     };
     const nonEnumValueRes = validateImportedModelValue(nonEnumSlotCandidate);
-    expect(nonEnumValueRes.ok).toBe(true);
-    const nonEnumImportRes = importModelFromJson(nonEnumSlotCandidate);
-    expect(nonEnumImportRes.ok).toBe(true);
+    expect(nonEnumValueRes.ok).toBe(false);
+    if (!nonEnumValueRes.ok) {
+      expect(nonEnumValueRes.errors.some((e) => e.code === 'UNSUPPORTED_PROPERTY')).toBe(true);
+    }
+    expect(importModelFromJson(nonEnumSlotCandidate).ok).toBe(false);
 
-    // 2. Malformed trailing comma with non-integer number reports NON_INTEGER_JSON_NUMBER first (pre-JSON.parse precedence)
+    // 2. Malformed trailing comma reports JSON_PARSE_ERROR before number diagnostics
     const nonIntWithTrailingComma = importModelFromJson('{"x": 1.5,}');
     expect(nonIntWithTrailingComma.ok).toBe(false);
     if (!nonIntWithTrailingComma.ok) {
-      expect(nonIntWithTrailingComma.errors[0]?.code).toBe('NON_INTEGER_JSON_NUMBER');
+      expect(nonIntWithTrailingComma.errors[0]?.code).toBe('JSON_PARSE_ERROR');
+    }
+
+    // 3. Strict shared limits: 512_000 characters and maxRawNesting 256
+    expect(DEFAULT_MODEL_JSON_LIMITS.maxChars).toBe(512_000);
+    expect(DEFAULT_MODEL_JSON_LIMITS.maxRawNesting).toBe(256);
+    const nested257 = `${'['.repeat(257)}${']'.repeat(257)}`;
+    const deepJsonResult = importModelFromJson(nested257);
+    expect(deepJsonResult.ok).toBe(false);
+    if (!deepJsonResult.ok) {
+      expect(deepJsonResult.errors[0]?.code).toBe('IMPORT_COMPLEXITY_EXCEEDED');
     }
   });
 

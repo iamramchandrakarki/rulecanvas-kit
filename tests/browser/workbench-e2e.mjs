@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { runHubChecks } from './hub-checks.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const AGENT_GATE_DIST = path.join(REPO_ROOT, 'apps/agent-gate/dist');
@@ -57,7 +58,7 @@ async function checkGuardDraftRoundTrip(context, baseUrl, app, operator) {
   const integer = (label) => page.getByRole('textbox', { name: label, exact: true });
   const scenario = `${app} ${operator} guard`;
   const verify = page.locator('header').getByRole('button', {
-    name: isAgentGate ? 'Verify Policy' : 'Verify Interlock Model',
+    name: 'Verify',
     exact: true,
   });
   const verdict = page.locator(`section.${isAgentGate ? 'ag' : 'is'}-verdict`);
@@ -445,11 +446,6 @@ function startStaticSubpathServer() {
     { prefix: '/suite/agent-gate/', dir: AGENT_GATE_DIST },
     { prefix: '/suite/interlock-sim/', dir: INTERLOCK_SIM_DIST },
   ];
-  if (process.env.BOOKING_FIXTURE_DIST) {
-    const dir = path.resolve(process.env.BOOKING_FIXTURE_DIST);
-    assert(existsSync(path.join(dir, 'index.html')), 'Packed booking production fixture is missing');
-    mounts.push({ prefix: '/booking-demo/', dir });
-  }
 
   const server = createServer((req, res) => {
     const reqUrl = new URL(req.url ?? '/', 'http://127.0.0.1');
@@ -533,9 +529,16 @@ try {
     checkCompactAstEditor(context, baseUrl),
     checkDesktopWorkspace(browser, baseUrl),
     checkSharedSelect(browser, baseUrl, AxeBuilder),
+    runHubChecks({
+      browser,
+      AxeBuilder,
+      screenshotDir: SCREENSHOT_DIR,
+      starterDist: process.env.STARTER_FIXTURE_DIST || process.env.BOOKING_FIXTURE_DIST || null,
+    }),
   ]);
   const guardDraftFailures = guardDraftChecks.filter((check) => check.status === 'rejected');
   assert(guardDraftFailures.length === 0, guardDraftFailures.map((check) => check.reason.message).join('\n'));
+  const hubReport = guardDraftChecks.at(-1).value;
 
   const page = await context.newPage();
 
@@ -1142,14 +1145,33 @@ try {
   await checkAxeWcagAA('AgentGate principled-fix VERIFIED');
   await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'agent-gate-principled-verified-1280.png') });
 
-  // Verify Policy button via keyboard
-  const agVerifyBtn = page.getByRole('button', { name: 'Verify Policy' });
-  await focusViaKeyboard(agVerifyBtn, 'AgentGate Verify Policy button');
+  // Verify button via keyboard
+  const agVerifyBtn = page.locator('header').getByRole('button', { name: 'Verify', exact: true });
+  await focusViaKeyboard(agVerifyBtn, 'AgentGate Verify button');
   await page.keyboard.press('Enter');
   await page.locator('section.ag-verdict[data-status="VERIFIED"]').waitFor({ state: 'visible' });
 
+  // Export report menu: enabled on fresh snapshot, keyboard navigation, copy/download, disabled when stale
+  const agExportBtn = page.getByRole('button', { name: 'Export report', exact: true });
+  assert(!(await agExportBtn.isDisabled()), 'Export report should be enabled on fresh snapshot');
+  await agExportBtn.focus();
+  await page.keyboard.press('ArrowDown');
+  const agExportMenu = page.getByRole('menu', { name: 'Export verification report' });
+  await agExportMenu.waitFor({ state: 'visible' });
+  const agDownloadPromise = page.waitForEvent('download');
+  await agExportMenu.getByRole('menuitem', { name: /Download JSON/ }).click();
+  const agDownload = await agDownloadPromise;
+  assert(
+    agDownload.suggestedFilename().endsWith('.json'),
+    `Expected safe .json report download filename, got ${agDownload.suggestedFilename()}`,
+  );
+  await agExportBtn.click();
+  await agExportMenu.waitFor({ state: 'visible' });
+  await page.keyboard.press('Escape');
+  await agExportMenu.waitFor({ state: 'detached' });
+
   // Comparison matrix covering naive-patch-a, naive-patch-b, vacuous-fix, principled-fix
-  await page.getByRole('button', { name: 'Compare All 5 Presets' }).click();
+  await page.getByRole('button', { name: 'Compare (5)', exact: true }).click();
   const agCompSection = page.locator('.ag-comparison-section');
   await agCompSection.getByText('Naive Patch A').first().waitFor({ state: 'visible' });
   assert(
@@ -1178,7 +1200,7 @@ try {
   );
   await checkAxeWcagAA('AgentGate comparison matrix');
   await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'agent-gate-comparison-1280.png') });
-  await page.getByRole('button', { name: 'Compare All 5 Presets' }).click();
+  await page.getByRole('button', { name: 'Compare (5)', exact: true }).click();
 
   // INCONCLUSIVE & INVALID states + axe + icon+text checks in AgentGate
   await assertBoundsPopover('ag', 'AgentGate');
@@ -1364,13 +1386,18 @@ try {
     'Home in InterlockSim tablist did not activate Counterexample & Guard tab',
   );
 
-  const isStepBackBtn = page.getByRole('button', { name: 'Step Back', exact: true });
-  await focusViaKeyboard(isStepBackBtn, 'InterlockSim Step Back button');
+  const isStepBackBtn = page.getByRole('button', { name: 'Previous', exact: true });
+  await focusViaKeyboard(isStepBackBtn, 'InterlockSim Previous button');
   await page.keyboard.press('Enter');
+  await page.getByText('Step 5 of 6').first().waitFor({ state: 'visible' });
+  // Bracket shortcut '[' steps backward when focus is not in an editable input
+  await page.keyboard.press('[');
+  await page.getByText('Step 4 of 6').first().waitFor({ state: 'visible' });
+  await page.keyboard.press(']');
   await page.getByText('Step 5 of 6').first().waitFor({ state: 'visible' });
   await page.getByRole('button', { name: 'Reset', exact: true }).click();
   await page.getByText('Step 0 of 6').first().waitFor({ state: 'visible' });
-  const isStepForwardBtn = page.getByRole('button', { name: 'Step Forward', exact: true });
+  const isStepForwardBtn = page.getByRole('button', { name: 'Next', exact: true });
   await isStepForwardBtn.focus();
   for (let step = 1; step <= 6; step += 1) {
     await page.keyboard.press('Enter');
@@ -1487,16 +1514,28 @@ try {
     'OUTDATED: VIOLATED',
     'InterlockSim outdated badge',
   );
-  await page.getByRole('button', { name: 'Verify Interlock Model' }).click();
+  // Export report must be disabled while edits are stale
+  const isExportBtn = page.getByRole('button', { name: 'Export report', exact: true });
+  assert(await isExportBtn.isDisabled(), 'InterlockSim Export report must be disabled when stale');
+  await page.locator('header').getByRole('button', { name: 'Verify', exact: true }).click();
   await page.getByText('Goal reachable: Yes').first().waitFor({ state: 'visible' });
   assert(!(await page.getByText('OUTDATED:', { exact: false }).first().isVisible()),
     'Fresh InterlockSim verdict marked outdated');
   assert((await page.locator('body').innerText()).includes('29'), 'Expected 29 states after repair');
+  // Before-vs-after verdict delta row should confirm honest repaired transition
+  const deltaRow = page.locator('.rc-verdict-delta[data-classification="repaired"]');
+  await deltaRow.waitFor({ state: 'visible' });
+  const deltaText = (await deltaRow.innerText()).trim();
+  assert(
+    deltaText.includes('Previous run:') && deltaText.includes('VIOLATED (6 steps)') && deltaText.includes('Now: VERIFIED'),
+    `Unexpected InterlockSim verdict delta row: ${deltaText}`,
+  );
+  assert(!(await isExportBtn.isDisabled()), 'InterlockSim Export report should re-enable after Verify');
   await checkAxeWcagAA('InterlockSim repaired VERIFIED');
   await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'interlock-sim-repaired-verified-1280.png') });
 
   // InterlockSim INCONCLUSIVE & INVALID + malformed JSON import validation
-  const isVerifyHeaderBtn = page.locator('header').getByRole('button', { name: 'Verify Interlock Model' });
+  const isVerifyHeaderBtn = page.locator('header').getByRole('button', { name: 'Verify', exact: true });
   await assertBoundsPopover('is', 'InterlockSim');
   await fillBound('is', '#max-states-input', '2');
   await isVerifyHeaderBtn.click();
@@ -1577,7 +1616,7 @@ try {
   );
 
   // ComparisonPanel Load preset obeys discard guard and updates live URL in InterlockSim
-  await page.getByRole('button', { name: 'Compare Presets (3)' }).click();
+  await page.getByRole('button', { name: 'Compare (3)', exact: true }).click();
   await checkAxeWcagAA('InterlockSim comparison matrix');
   const isCompareRow = page.locator('.is-comparison-section tbody tr', {
     hasText: 'Vacuous Lockout',
@@ -1601,7 +1640,7 @@ try {
     page.url().includes('preset=vacuous'),
     `InterlockSim ComparisonPanel discard approval did not update URL: ${page.url()}`,
   );
-  await page.getByRole('button', { name: 'Compare Presets (3)' }).click();
+  await page.getByRole('button', { name: 'Compare (3)', exact: true }).click();
 
   // Preset URL direct load (?preset=vacuous)
   await page.goto(`${baseUrl}/suite/interlock-sim/?preset=vacuous`, { waitUntil: 'networkidle' });
@@ -1719,7 +1758,7 @@ try {
   await page.getByRole('tab', { name: 'JSON' }).click();
   const curAgJson = await page.locator('#model-json-textarea').inputValue();
   await page.locator('#model-json-textarea').fill(`${curAgJson}\n `);
-  await page.getByRole('button', { name: 'Compare All 5 Presets' }).click();
+  await page.getByRole('button', { name: 'Compare (5)', exact: true }).click();
   const agCompareRow = page.locator('.ag-comparison-section tbody tr', {
     hasText: 'Naive Patch A',
   });
@@ -1742,7 +1781,7 @@ try {
     page.url().includes('preset=naive-patch-a'),
     `AgentGate ComparisonPanel discard approval did not update URL: ${page.url()}`,
   );
-  await page.getByRole('button', { name: 'Compare All 5 Presets' }).click();
+  await page.getByRole('button', { name: 'Compare (5)', exact: true }).click();
 
   // --- 4. No-Navigation-API fallback recovery (fresh-session replaceState) ---
   const fallbackPage = await context.newPage();
@@ -1781,8 +1820,8 @@ try {
 
   // Check cancellation and no-Worker fallback through both production applications.
   for (const [app, verifyButton] of [
-    ['agent-gate', 'Verify Policy'],
-    ['interlock-sim', 'Verify Interlock Model'],
+    ['agent-gate', 'Verify'],
+    ['interlock-sim', 'Verify'],
   ]) {
     const faultPage = await context.newPage();
     await faultPage.addInitScript(() => {
@@ -1793,7 +1832,7 @@ try {
     });
     await faultPage.goto(`${baseUrl}/suite/${app}/`);
     await faultPage.getByRole('button', { name: 'Dark', exact: true }).click();
-    await faultPage.getByRole('button', { name: verifyButton }).click();
+    await faultPage.locator('header').getByRole('button', { name: verifyButton, exact: true }).click();
     const cancelBtn = faultPage.getByRole('button', { name: 'Cancel Verification' });
     await cancelBtn.hover();
     assert(
@@ -1850,19 +1889,6 @@ try {
   assert((await reloadedJson.inputValue()) === dirtyJson, 'Pre-reload preset Back lost the draft');
   await reloadPage.close();
 
-  // Exercise the module worker built from the isolated tarball installation.
-  if (process.env.BOOKING_FIXTURE_DIST) {
-    await page.goto(`${baseUrl}/booking-demo/`, { waitUntil: 'networkidle' });
-    await page.getByRole('heading', { name: 'Room Booking Fixture' }).waitFor();
-    assert(
-      (await page.locator('main').getAttribute('data-export-ok')) === 'true',
-      'Packed booking fixture could not export its model',
-    );
-    await page.getByRole('button', { name: 'Verify Booking Model' }).click();
-    await page.locator('main[data-verification-revision="1"][data-execution-mode="worker"]').waitFor();
-    await page.locator('main [data-status="VERIFIED"]').first().waitFor();
-  }
-
   assert(consoleErrors.length === 0, `Console errors: ${consoleErrors.join('; ')}`);
   assert(pageErrors.length === 0, `Page errors: ${pageErrors.join('; ')}`);
   assert(httpErrors.length === 0, `HTTP errors: ${httpErrors.join('; ')}`);
@@ -1879,7 +1905,9 @@ try {
         pageErrors: 0,
         httpErrors: 0,
         axeCriticalSeriousViolations: 0,
-        axeAudits,
+        axeAudits: [...axeAudits, ...hubReport.audits],
+        hubBasePaths: ['/', '/rulecanvas-kit/'],
+        starterChecked: hubReport.starterChecked,
         screenshotDir: SCREENSHOT_DIR,
         screenshots: [
           'agent-gate-desktop-1280.png',
@@ -1894,6 +1922,7 @@ try {
           'interlock-sim-tablet-768.png',
           'interlock-sim-mobile-390.png',
           'interlock-sim-mobile-375.png',
+          ...hubReport.screenshots,
         ],
       },
       null,

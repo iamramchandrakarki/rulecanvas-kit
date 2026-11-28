@@ -18,6 +18,7 @@ import {
   type ReplaySession,
 } from '@rulecanvas/ui';
 import {
+  WorkbenchBrandLink,
   WorkbenchBrandMark,
   WorkbenchDiscardDialog,
   WorkbenchGuideControl,
@@ -30,6 +31,7 @@ import {
   useWorkbenchRoute,
   useWorkbenchTheme,
   useWorkbenchTooltips,
+  type CommittedVerificationSnapshot,
   type WorkbenchNavLink,
 } from '@rulecanvas/workbench-react';
 import { DEFAULT_VERIFY_OPTIONS, runInterlockPresetComparison } from './comparison.js';
@@ -101,6 +103,28 @@ function resolveModelLabel(
 }
 
 const ALLOWED_INTERLOCK_PRESETS: readonly InterlockPresetVariant[] = ['broken', 'fixed', 'vacuous'];
+
+function isTraceShortcutBlocked(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  if (target instanceof HTMLElement && target.isContentEditable) return true;
+  if (target.closest('[contenteditable]:not([contenteditable="false"])') !== null) return true;
+  const tag = target.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+  if (target.getAttribute('aria-expanded') === 'true') return true;
+  return (
+    target.closest(
+      '[role="combobox"], [role="listbox"], [role="menu"], [role="menuitem"], [role="textbox"], [role="searchbox"], [role="spinbutton"], [role="dialog"], [role="alertdialog"]',
+    ) !== null
+  );
+}
+
+/** Landing page for the static site; `../` from this app by default, overridable at build time. */
+const HUB_HREF: string =
+  typeof import.meta !== 'undefined' &&
+  typeof (import.meta as { env?: Record<string, string | undefined> }).env?.['VITE_HUB_URL'] === 'string'
+    ? (import.meta as { env: Record<string, string> }).env['VITE_HUB_URL']!
+    : '../';
+const HUB_LABEL = 'RuleCanvasKit hub';
 
 const WORKBENCH_NAV_LINKS: readonly WorkbenchNavLink[] = [
   {
@@ -185,6 +209,23 @@ export function App({
   const [cancelledNotice, setCancelledNotice] = useState<string | null>(null);
   const [replayError, setReplayError] = useState<string | null>(null);
   const [jsonDraftDirty, setJsonDraftDirty] = useState<boolean>(false);
+  const [previousSnapshot, setPreviousSnapshot] = useState<CommittedVerificationSnapshot | null>(
+    null,
+  );
+  const lastCommittedSnapshotRef = useRef<CommittedVerificationSnapshot | null>(verifiedSnapshot);
+
+  useEffect(() => {
+    if (verifiedSnapshot === null) return;
+    const prev = lastCommittedSnapshotRef.current;
+    if (prev !== verifiedSnapshot) {
+      if (prev !== null && prev.model.id === verifiedSnapshot.model.id) {
+        setPreviousSnapshot(prev);
+      } else {
+        setPreviousSnapshot(null);
+      }
+      lastCommittedSnapshotRef.current = verifiedSnapshot;
+    }
+  }, [verifiedSnapshot]);
 
   const latestModelRef = useRef<TransitionSystemModel>(model);
   latestModelRef.current = model;
@@ -301,6 +342,8 @@ export function App({
       validateModel(targetModel).length > 0
     ) {
       clearVerification();
+      setPreviousSnapshot(null);
+      lastCommittedSnapshotRef.current = null;
       return;
     }
     runSnapshot({
@@ -317,6 +360,8 @@ export function App({
     const presetInfo = getInterlockPresetDescriptor(variant);
 
     clearVerification();
+    setPreviousSnapshot(null);
+    lastCommittedSnapshotRef.current = null;
     modelRevisionRef.current += 1;
     latestEditorDraftErrorMapRef.current = {};
     setEditorDraftErrorMap({});
@@ -348,6 +393,8 @@ export function App({
     const importedLabel = resolveModelLabel(importedModel, null);
 
     clearVerification();
+    setPreviousSnapshot(null);
+    lastCommittedSnapshotRef.current = null;
     modelRevisionRef.current += 1;
     latestEditorDraftErrorMapRef.current = {};
     setEditorDraftErrorMap({});
@@ -536,13 +583,48 @@ export function App({
       if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && pendingPrompt === null) {
         event.preventDefault();
         handleVerifyCurrent();
-      } else if (event.key === 'Escape' && showComparison && pendingPrompt === null) {
+        return;
+      }
+      if (event.key === 'Escape' && showComparison && pendingPrompt === null) {
         setShowComparison(false);
+        return;
+      }
+      if (
+        !event.defaultPrevented &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey &&
+        pendingPrompt === null &&
+        !isRunning &&
+        replaySession !== null &&
+        (event.key === '[' || event.key === ']') &&
+        !isTraceShortcutBlocked(event.target) &&
+        !isTraceShortcutBlocked(document.activeElement)
+      ) {
+        if (event.key === '[' && replaySession.canStepBack) {
+          event.preventDefault();
+          const res = stepReplayBackward(replaySession);
+          if (res.ok) {
+            setReplaySession(res.session);
+            setReplayError(null);
+          } else {
+            setReplayError(res.error.message);
+          }
+        } else if (event.key === ']' && replaySession.canStepForward) {
+          event.preventDefault();
+          const res = stepReplayForward(replaySession);
+          if (res.ok) {
+            setReplaySession(res.session);
+            setReplayError(null);
+          } else {
+            setReplayError(res.error.message);
+          }
+        }
       }
     };
     window.addEventListener('keydown', handleGlobalShortcut);
     return () => window.removeEventListener('keydown', handleGlobalShortcut);
-  }, [handleVerifyCurrent, pendingPrompt, showComparison]);
+  }, [handleVerifyCurrent, isRunning, pendingPrompt, replaySession, setReplaySession, showComparison]);
 
   const draftRuleIds = useMemo(() => new Set(model.rules.map((r) => r.id)), [model.rules]);
 
@@ -563,8 +645,21 @@ export function App({
       <header className="is-topbar">
         <div className="is-brand">
           <h1 className="is-brand-suite">
-            <WorkbenchBrandMark className="is-brand-icon" />
-            <span>RuleCanvasKit</span>
+            <WorkbenchBrandLink
+              href={HUB_HREF}
+              allowedPrefix={ALLOWED_NAV_PREFIX}
+              className="is-brand-link"
+              title="Back to the RuleCanvasKit hub"
+              onNavigate={(href, event) => {
+                if (isDirtyEditor) {
+                  event.preventDefault();
+                  requestLinkNavigation(href, HUB_LABEL);
+                }
+              }}
+            >
+              <WorkbenchBrandMark className="is-brand-icon" />
+              <span>RuleCanvasKit</span>
+            </WorkbenchBrandLink>
             <span className="is-visually-hidden"> InterlockSim</span>
           </h1>
           <WorkbenchNavigation
@@ -677,7 +772,7 @@ export function App({
             data-rc-tip-host="true"
             onClick={handleVerifyCurrent}
           >
-            Verify Interlock Model
+            Verify
             <span className="rc-tip" aria-hidden="true">
               Run bounded verification (Ctrl/Cmd + Enter)
             </span>
@@ -691,7 +786,7 @@ export function App({
             aria-expanded={showComparison}
             onClick={() => setShowComparison((prev) => !prev)}
           >
-            Compare Presets (3)
+            Compare (3)
           </button>
 
           <WorkbenchGuideControl
@@ -864,9 +959,15 @@ export function App({
             editorDraftErrors={editorDraftErrors}
             modelErrors={modelErrors}
             verifiedSnapshot={verifiedSnapshot}
+            previousSnapshot={previousSnapshot}
             replaySession={replaySession}
+            replayError={replayError}
             onCancelRun={handleCancelRun}
             onVerifyNow={handleVerifyCurrent}
+            onResetReplay={handleResetReplay}
+            onStepBack={handleStepBack}
+            onStepForward={handleStepForward}
+            onRestoreVerdictTrace={handleRestoreVerdictTrace}
             onJumpToStep={handleJumpToStep}
             onInspectRule={handleInspectRule}
             editor={{

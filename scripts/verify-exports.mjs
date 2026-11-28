@@ -47,6 +47,21 @@ const ui = await import(resolvedExports.get('@rulecanvas/ui'));
 assert(typeof ui.parseStrictIntegerDraft === 'function', '@rulecanvas/ui missing parseStrictIntegerDraft');
 assert(typeof ui.indexModelDiagnostics === 'function', '@rulecanvas/ui missing indexModelDiagnostics');
 assert(typeof ui.createVerdictReplaySession === 'function', '@rulecanvas/ui missing createVerdictReplaySession');
+assert(
+  typeof ui.buildVerificationReportFromSnapshot === 'function',
+  '@rulecanvas/ui missing buildVerificationReportFromSnapshot',
+);
+assert(typeof ui.verifyAndBuildReport === 'function', '@rulecanvas/ui missing verifyAndBuildReport');
+assert(
+  typeof ui.formatVerificationReportMarkdown === 'function',
+  '@rulecanvas/ui missing formatVerificationReportMarkdown',
+);
+assert(
+  typeof ui.serializeVerificationReportJson === 'function',
+  '@rulecanvas/ui missing serializeVerificationReportJson',
+);
+assert(typeof ui.sanitizeReportFilename === 'function', '@rulecanvas/ui missing sanitizeReportFilename');
+assert(typeof ui.computeVerdictDelta === 'function', '@rulecanvas/ui missing computeVerdictDelta');
 
 const wbVerify = await import(resolvedExports.get('@rulecanvas/workbench/verify'));
 assert(typeof wbVerify.createVerifyClient === 'function', '@rulecanvas/workbench/verify missing createVerifyClient');

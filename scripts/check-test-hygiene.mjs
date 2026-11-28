@@ -169,7 +169,7 @@ export function findTestHygieneViolations(filePath, source) {
 
 function main() {
   const files = [];
-  for (const dir of ['packages', 'apps']) {
+  for (const dir of ['packages', 'apps', 'templates']) {
     walkTestFiles(path.join(REPO_ROOT, dir), files, false);
   }
   const browserFiles = [];
