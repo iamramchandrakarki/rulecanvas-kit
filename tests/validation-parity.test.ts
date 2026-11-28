@@ -470,4 +470,184 @@ describe('report and worker result validation parity', () => {
       false,
     );
   });
+
+  it('rejects structured-cloned and direct arrays with unexpected properties, malformed indices, sparse holes, or bad descriptors identically', () => {
+    const runtimeInvalid = structuredClone(genuine(RUNTIME_DEPTH_N, OPTIONS)) as {
+      status: 'INVALID';
+      errors: Array<Record<string, unknown>> & Record<string, unknown>;
+      stats: Record<string, unknown>;
+      trace: Array<Record<string, unknown> & { changedVars: string[] & Record<string, unknown> }> &
+        Record<string, unknown>;
+    };
+    const violated = structuredClone(genuine(VIOLATED_WITNESS, OPTIONS)) as {
+      status: 'VIOLATED';
+      trace: Array<Record<string, unknown> & { changedVars: string[] & Record<string, unknown> }> &
+        Record<string, unknown>;
+      terminalState: Record<string, unknown>;
+      violatedInvariantIds: string[] & Record<string, unknown>;
+      stats: Record<string, unknown>;
+      assumptions: Array<Record<string, unknown>> & Record<string, unknown>;
+    };
+    const verified = structuredClone(genuine(VERIFIED_WITH_GOAL, OPTIONS)) as {
+      status: 'VERIFIED';
+      stats: Record<string, unknown>;
+      goalReachable: boolean;
+      assumptions: Array<Record<string, unknown>> & Record<string, unknown>;
+    };
+
+    // Exact Finding 1 repro: runtime INVALID with result.errors.extra = 'unexpected' through structuredClone
+    const runtimeExtraError = structuredClone(runtimeInvalid);
+    runtimeExtraError.errors.extra = 'unexpected';
+    expectParity(RUNTIME_DEPTH_N, OPTIONS, structuredClone(runtimeExtraError), false);
+
+    // Validation INVALID with result.errors.extra = 'unexpected' through structuredClone
+    const validationExtraError = structuredClone(VALIDATION_INVALID) as {
+      status: 'INVALID';
+      errors: Array<Record<string, unknown>> & Record<string, unknown>;
+    };
+    validationExtraError.errors.extra = 'unexpected';
+    expectParity(VERIFIED_WITHOUT_GOAL, OPTIONS, structuredClone(validationExtraError), false);
+
+    // result.trace.extra and result.trace[0].changedVars.extra across VIOLATED and runtime INVALID
+    const violatedExtraTrace = structuredClone(violated);
+    violatedExtraTrace.trace.extra = 'unexpected';
+    expectParity(VIOLATED_WITNESS, OPTIONS, structuredClone(violatedExtraTrace), false);
+
+    const runtimeExtraTrace = structuredClone(runtimeInvalid);
+    runtimeExtraTrace.trace.extra = 'unexpected';
+    expectParity(RUNTIME_DEPTH_N, OPTIONS, structuredClone(runtimeExtraTrace), false);
+
+    const violatedExtraChangedVars = structuredClone(violated);
+    violatedExtraChangedVars.trace[0]!.changedVars.extra = 'unexpected';
+    expectParity(VIOLATED_WITNESS, OPTIONS, structuredClone(violatedExtraChangedVars), false);
+
+    const runtimeExtraChangedVars = structuredClone(runtimeInvalid);
+    runtimeExtraChangedVars.trace[0]!.changedVars.extra = 'unexpected';
+    expectParity(RUNTIME_DEPTH_N, OPTIONS, structuredClone(runtimeExtraChangedVars), false);
+
+    // result.violatedInvariantIds.extra and result.assumptions.extra
+    const violatedExtraIds = structuredClone(violated);
+    violatedExtraIds.violatedInvariantIds.extra = 'unexpected';
+    expectParity(VIOLATED_WITNESS, OPTIONS, structuredClone(violatedExtraIds), false);
+
+    const verifiedExtraAssumptions = structuredClone(verified);
+    verifiedExtraAssumptions.assumptions.extra = 'unexpected';
+    expectParity(VERIFIED_WITH_GOAL, OPTIONS, structuredClone(verifiedExtraAssumptions), false);
+
+    // Nested arrays with unexpected properties inside extra result or error metadata
+    const nestedInError = structuredClone(runtimeInvalid);
+    const badNestedArr = ['ok'] as string[] & Record<string, unknown>;
+    badNestedArr.extra = 'unexpected';
+    nestedInError.errors[0]!['nested'] = badNestedArr;
+    expectParity(RUNTIME_DEPTH_N, OPTIONS, structuredClone(nestedInError), false);
+
+    const nestedInResultExtra = structuredClone(verified) as Record<string, unknown>;
+    nestedInResultExtra['meta'] = [badNestedArr];
+    expectParity(VERIFIED_WITH_GOAL, OPTIONS, structuredClone(nestedInResultExtra), false);
+
+    // Malformed index keys (leading zero, negative, fractional, exponential, out-of-range, reserved keys)
+    for (const badKey of ['01', '00', '-1', '1.5', '1e0', '5', 'constructor', 'prototype']) {
+      const withBadKey = structuredClone(runtimeInvalid);
+      withBadKey.errors[badKey] = 'malformed';
+      expectParity(RUNTIME_DEPTH_N, OPTIONS, withBadKey, false);
+      expectParity(RUNTIME_DEPTH_N, OPTIONS, structuredClone(withBadKey), false);
+    }
+
+    const withProtoKey = structuredClone(runtimeInvalid);
+    Object.defineProperty(withProtoKey.errors, '__proto__', {
+      value: 'malformed',
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+    expectParity(RUNTIME_DEPTH_N, OPTIONS, withProtoKey, false);
+
+    // Sparse arrays across errors, trace, changedVars, violatedInvariantIds, and assumptions
+    const sparseLeadingError: unknown[] = [];
+    sparseLeadingError[1] = runtimeInvalid.errors[0];
+    expectParity(RUNTIME_DEPTH_N, OPTIONS, { ...runtimeInvalid, errors: sparseLeadingError }, false);
+    expectParity(
+      RUNTIME_DEPTH_N,
+      OPTIONS,
+      structuredClone({ ...runtimeInvalid, errors: sparseLeadingError }),
+      false,
+    );
+
+    const sparseTrailingError = [...runtimeInvalid.errors];
+    sparseTrailingError.length = 2;
+    expectParity(RUNTIME_DEPTH_N, OPTIONS, { ...runtimeInvalid, errors: sparseTrailingError }, false);
+    expectParity(
+      RUNTIME_DEPTH_N,
+      OPTIONS,
+      structuredClone({ ...runtimeInvalid, errors: sparseTrailingError }),
+      false,
+    );
+
+    const sparseTrace = [...violated.trace];
+    sparseTrace.length = violated.trace.length + 1;
+    expectParity(VIOLATED_WITNESS, OPTIONS, { ...violated, trace: sparseTrace }, false);
+    expectParity(VIOLATED_WITNESS, OPTIONS, structuredClone({ ...violated, trace: sparseTrace }), false);
+
+    const sparseChanged = [...violated.trace[0]!.changedVars];
+    sparseChanged.length = sparseChanged.length + 1;
+    expectParity(
+      VIOLATED_WITNESS,
+      OPTIONS,
+      {
+        ...violated,
+        trace: violated.trace.map((step, index) =>
+          index === 0 ? { ...step, changedVars: sparseChanged } : step,
+        ),
+      },
+      false,
+    );
+
+    const sparseViolatedIds = [...violated.violatedInvariantIds];
+    sparseViolatedIds.length = 2;
+    expectParity(VIOLATED_WITNESS, OPTIONS, { ...violated, violatedInvariantIds: sparseViolatedIds }, false);
+
+    const sparseAssumptions = [...verified.assumptions];
+    sparseAssumptions.length = 2;
+    expectParity(VERIFIED_WITH_GOAL, OPTIONS, { ...verified, assumptions: sparseAssumptions }, false);
+
+    // Non-enumerable element, accessor element, symbol property, and custom Array prototype
+    const nonEnumErrors: unknown[] = [];
+    Object.defineProperty(nonEnumErrors, 0, {
+      value: runtimeInvalid.errors[0],
+      enumerable: false,
+      writable: true,
+      configurable: true,
+    });
+    expectParity(RUNTIME_DEPTH_N, OPTIONS, { ...runtimeInvalid, errors: nonEnumErrors }, false);
+
+    const accessorErrors: unknown[] = [];
+    Object.defineProperty(accessorErrors, 0, {
+      enumerable: true,
+      get() {
+        return runtimeInvalid.errors[0];
+      },
+    });
+    expectParity(RUNTIME_DEPTH_N, OPTIONS, { ...runtimeInvalid, errors: accessorErrors }, false);
+
+    const symbolErrors = [...runtimeInvalid.errors] as unknown[] & Record<symbol, unknown>;
+    symbolErrors[Symbol('tag')] = 'unexpected';
+    expectParity(RUNTIME_DEPTH_N, OPTIONS, { ...runtimeInvalid, errors: symbolErrors }, false);
+
+    class SubArray<T> extends Array<T> {}
+    const subErrors = new SubArray(...runtimeInvalid.errors);
+    expectParity(RUNTIME_DEPTH_N, OPTIONS, { ...runtimeInvalid, errors: subErrors }, false);
+
+    // Valid arrays (empty depth-0 trace, nested clean arrays in metadata, direct & structured-cloned)
+    const runtimeZero = genuine(RUNTIME_DEPTH_ZERO, OPTIONS);
+    expectParity(RUNTIME_DEPTH_ZERO, OPTIONS, runtimeZero, true);
+    expectParity(RUNTIME_DEPTH_ZERO, OPTIONS, structuredClone(runtimeZero), true);
+
+    const violatedZero = genuine(VIOLATED_INITIAL, OPTIONS);
+    expectParity(VIOLATED_INITIAL, OPTIONS, violatedZero, true);
+    expectParity(VIOLATED_INITIAL, OPTIONS, structuredClone(violatedZero), true);
+
+    const validNestedExtra = { ...verified, meta: [['a', 'b'], []] };
+    expectParity(VERIFIED_WITH_GOAL, OPTIONS, validNestedExtra, true);
+    expectParity(VERIFIED_WITH_GOAL, OPTIONS, structuredClone(validNestedExtra), true);
+  });
 });

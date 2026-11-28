@@ -24,6 +24,7 @@ import {
 declare const process: {
   readonly env: { readonly [key: string]: string | undefined };
 };
+declare function structuredClone<T>(value: T): T;
 
 function resolveSeed(): number {
   const raw = process.env['FC_SEED'];
@@ -429,6 +430,44 @@ describe('@rulecanvas/ui verification report', () => {
         },
       };
       expect(buildVerificationReportFromSnapshot(trailingForged).ok).toBe(false);
+    });
+
+    it('rejects structured-cloned extra array properties, malformed indices, sparse arrays, and tainted nested arrays', () => {
+      const runtimeSnap = snapshotOf(runtimeModel());
+      if (runtimeSnap.result.status !== 'INVALID') {
+        throw new Error('Expected a runtime INVALID snapshot.');
+      }
+      const invalidSnap = {
+        model: runtimeSnap.model,
+        options: runtimeSnap.options,
+        result: runtimeSnap.result,
+      };
+      const clonedRuntime = structuredClone(invalidSnap);
+      (clonedRuntime.result.errors as unknown as Record<string, unknown>)['extra'] = 'unexpected';
+      expect(buildVerificationReportFromSnapshot(structuredClone(clonedRuntime)).ok).toBe(false);
+
+      for (const badKey of ['01', '-1', '1.5', 'constructor']) {
+        const badIndexSnap = structuredClone(invalidSnap);
+        (badIndexSnap.result.errors as unknown as Record<string, unknown>)[badKey] = 'bad';
+        expect(buildVerificationReportFromSnapshot(structuredClone(badIndexSnap)).ok).toBe(false);
+      }
+
+      const sparseSnap = structuredClone(invalidSnap);
+      const sparseErrors = [...runtimeSnap.result.errors];
+      sparseErrors.length = 2;
+      (sparseSnap.result as unknown as { errors: unknown[] }).errors = sparseErrors;
+      expect(buildVerificationReportFromSnapshot(structuredClone(sparseSnap)).ok).toBe(false);
+
+      const nestedSnap = structuredClone(invalidSnap);
+      const nestedArr = ['x'] as string[] & Record<string, unknown>;
+      nestedArr['extra'] = 'unexpected';
+      (nestedSnap.result.errors[0] as unknown as Record<string, unknown>)['nested'] = nestedArr;
+      expect(buildVerificationReportFromSnapshot(structuredClone(nestedSnap)).ok).toBe(false);
+
+      const validSnap = snapshotOf(violatingModel());
+      const validWithNestedMeta = structuredClone(validSnap);
+      (validWithNestedMeta.result as unknown as Record<string, unknown>)['meta'] = [['clean'], []];
+      expect(buildVerificationReportFromSnapshot(structuredClone(validWithNestedMeta)).ok).toBe(true);
     });
 
     it('rejects a structurally identical but forged report object', () => {

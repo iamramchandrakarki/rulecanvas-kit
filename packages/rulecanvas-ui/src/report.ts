@@ -18,13 +18,16 @@ import {
 } from '@rulecanvas/core';
 import { formatBoolExpr, formatStateValue } from './format.js';
 import {
+  RESERVED_OBJECT_KEYS,
   cloneAndFreezeSnapshot,
   deepCloneAndFreezeModel,
+  isAccessorDescriptor,
   isPlainObject,
+  isStrictPlainResultValue,
   normalizeStateValue,
   readOwnDataProp,
-  readOwnStringArray,
-  readSafeArray,
+  readStrictArray,
+  readStrictStringArray,
   snapshotsEqual,
   stringArraysEqual,
   type OwnPropRead,
@@ -164,11 +167,11 @@ function inspectPlainRecord(value: unknown): Record<string, unknown> | null {
   }
   const keys = Reflect.ownKeys(value);
   for (const key of keys) {
-    if (typeof key === 'symbol') {
+    if (typeof key === 'symbol' || RESERVED_OBJECT_KEYS.has(key)) {
       return null;
     }
     const desc = Object.getOwnPropertyDescriptor(value, key);
-    if (desc === undefined || 'get' in desc || 'set' in desc) {
+    if (desc === undefined || isAccessorDescriptor(desc) || !desc.enumerable) {
       return null;
     }
   }
@@ -358,7 +361,7 @@ function statsRespectBounds(stats: VerifyStats, options: VerifyOptions): boolean
 }
 
 function readAssumptions(raw: unknown): readonly ModelAssumption[] | null {
-  const arr = readSafeArray(raw, MAX_ASSUMPTIONS);
+  const arr = readStrictArray(raw, MAX_ASSUMPTIONS);
   if (!arr.ok) {
     return null;
   }
@@ -422,7 +425,7 @@ function assumptionsMatch(
 }
 
 function readTraceSteps(raw: unknown): readonly TraceStep[] | null {
-  const arr = readSafeArray(raw, MAX_TRACE_STEPS);
+  const arr = readStrictArray(raw, MAX_TRACE_STEPS);
   if (!arr.ok) {
     return null;
   }
@@ -447,7 +450,7 @@ function readTraceSteps(raw: unknown): readonly TraceStep[] | null {
     }
     const before = cloneAndFreezeSnapshot(beforeProp.value);
     const after = cloneAndFreezeSnapshot(afterProp.value);
-    const changed = readOwnStringArray(changedProp.value, MAX_CHANGED_VARS);
+    const changed = readStrictStringArray(changedProp.value, MAX_CHANGED_VARS);
     if (before === null || after === null || !changed.ok) {
       return null;
     }
@@ -515,7 +518,7 @@ function replayCanonicalTrace(
 }
 
 function readValidationErrors(raw: unknown): readonly ValidationError[] | null {
-  const arr = readSafeArray(raw, MAX_VALIDATION_ERRORS);
+  const arr = readStrictArray(raw, MAX_VALIDATION_ERRORS);
   if (!arr.ok) {
     return null;
   }
@@ -663,8 +666,12 @@ export function inspectVerificationSnapshot(snapshot: unknown): InspectedVerific
     const hasGoal = model.goal !== undefined;
 
     const resultRecord = inspectPlainRecord(resultRead.value);
-    if (resultRecord === null) {
-      return failure('INVALID_RESULT', 'result', 'Verification result must be a plain data object.');
+    if (resultRecord === null || !isStrictPlainResultValue(resultRecord)) {
+      return failure(
+        'INVALID_RESULT',
+        'result',
+        'Verification result must be a plain data object without unexpected array properties, accessors, symbols, reserved keys, or non-finite values.',
+      );
     }
     const statusProp = readOwnDataProp(resultRecord, 'status');
     if (statusProp.kind !== 'value' || typeof statusProp.value !== 'string') {
@@ -822,7 +829,7 @@ export function inspectVerificationSnapshot(snapshot: unknown): InspectedVerific
           'VIOLATED result must include violated invariant ids.',
         );
       }
-      const violatedReadArray = readOwnStringArray(violatedRead.value, 256);
+      const violatedReadArray = readStrictStringArray(violatedRead.value, 256);
       if (!violatedReadArray.ok || violatedReadArray.items.length === 0) {
         return failure(
           'INVALID_RESULT',

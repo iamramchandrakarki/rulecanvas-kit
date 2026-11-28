@@ -29,6 +29,13 @@ export type SafeStringArrayRead =
 export const MAX_REPLAY_STEPS = 10_000;
 export const MAX_SAFE_ARRAY_LENGTH = 100_000;
 const MAX_AST_CLONE_DEPTH = 64;
+const MAX_STRICT_VALUE_DEPTH = 128;
+const MAX_STRICT_VALUE_NODES = 2_500_000;
+export const RESERVED_OBJECT_KEYS: ReadonlySet<string> = new Set([
+  '__proto__',
+  'constructor',
+  'prototype',
+]);
 
 export function isPlainObject(value: unknown): value is Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
@@ -36,6 +43,28 @@ export function isPlainObject(value: unknown): value is Record<string, unknown> 
   }
   const proto: unknown = Object.getPrototypeOf(value);
   return proto === Object.prototype || proto === null;
+}
+
+export function isAccessorDescriptor(desc: PropertyDescriptor): boolean {
+  return (
+    Object.hasOwn(desc, 'get') ||
+    Object.hasOwn(desc, 'set') ||
+    desc.get !== undefined ||
+    desc.set !== undefined
+  );
+}
+
+export function isCanonicalArrayIndex(key: string, length: number): boolean {
+  if (key.length === 0) return false;
+  if (key.length > 1 && key[0] === '0') return false;
+  let value = 0;
+  for (let i = 0; i < key.length; i += 1) {
+    const code = key.charCodeAt(i);
+    if (code < 48 || code > 57) return false;
+    value = value * 10 + (code - 48);
+    if (value >= length) return false;
+  }
+  return value >= 0 && value < length;
 }
 
 export function readOwnDataProp(obj: Record<string, unknown>, key: string): OwnPropRead {
@@ -94,6 +123,123 @@ export function readOwnStringArray(
     items.push(entry);
   }
   return { ok: true, items };
+}
+
+export function readStrictArray(value: unknown, maxLength = MAX_SAFE_ARRAY_LENGTH): SafeArrayRead {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) {
+    return { ok: false };
+  }
+  const lenDesc = Object.getOwnPropertyDescriptor(value, 'length');
+  if (
+    lenDesc === undefined ||
+    isAccessorDescriptor(lenDesc) ||
+    typeof lenDesc.value !== 'number' ||
+    !Number.isSafeInteger(lenDesc.value) ||
+    lenDesc.value < 0 ||
+    lenDesc.value > maxLength
+  ) {
+    return { ok: false };
+  }
+
+  const len = lenDesc.value;
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key === 'symbol') {
+      return { ok: false };
+    }
+    if (key === 'length') {
+      continue;
+    }
+    if (RESERVED_OBJECT_KEYS.has(key) || !isCanonicalArrayIndex(key, len)) {
+      return { ok: false };
+    }
+  }
+
+  const items: unknown[] = [];
+  for (let i = 0; i < len; i += 1) {
+    const elemDesc = Object.getOwnPropertyDescriptor(value, i);
+    if (elemDesc === undefined || isAccessorDescriptor(elemDesc) || !elemDesc.enumerable) {
+      return { ok: false };
+    }
+    items.push(elemDesc.value);
+  }
+  return { ok: true, items };
+}
+
+export function readStrictStringArray(
+  value: unknown,
+  maxLength = MAX_SAFE_ARRAY_LENGTH,
+): SafeStringArrayRead {
+  const arr = readStrictArray(value, maxLength);
+  if (!arr.ok) {
+    return { ok: false };
+  }
+  const items: string[] = [];
+  for (const entry of arr.items) {
+    if (typeof entry !== 'string') {
+      return { ok: false };
+    }
+    items.push(entry);
+  }
+  return { ok: true, items };
+}
+
+export function isStrictPlainResultValue(value: unknown): boolean {
+  const budget = { visited: 0, maxNodes: MAX_STRICT_VALUE_NODES };
+  const ancestors = new Set<object>();
+
+  const check = (val: unknown, depth: number): boolean => {
+    budget.visited += 1;
+    if (depth > MAX_STRICT_VALUE_DEPTH || budget.visited > budget.maxNodes) {
+      return false;
+    }
+    if (val === null || val === undefined || typeof val === 'boolean' || typeof val === 'string') {
+      return true;
+    }
+    if (typeof val === 'number') {
+      return Number.isFinite(val);
+    }
+    if (typeof val !== 'object') {
+      return false;
+    }
+    if (ancestors.has(val)) {
+      return false;
+    }
+    ancestors.add(val);
+    try {
+      if (Array.isArray(val)) {
+        const arr = readStrictArray(val, MAX_STRICT_VALUE_NODES);
+        if (!arr.ok) {
+          return false;
+        }
+        for (const item of arr.items) {
+          if (!check(item, depth + 1)) {
+            return false;
+          }
+        }
+        return true;
+      }
+      if (!isPlainObject(val)) {
+        return false;
+      }
+      for (const key of Reflect.ownKeys(val)) {
+        if (typeof key === 'symbol' || RESERVED_OBJECT_KEYS.has(key)) {
+          return false;
+        }
+        const desc = Object.getOwnPropertyDescriptor(val, key);
+        if (desc === undefined || isAccessorDescriptor(desc) || !desc.enumerable) {
+          return false;
+        }
+        if (!check(desc.value, depth + 1)) {
+          return false;
+        }
+      }
+      return true;
+    } finally {
+      ancestors.delete(val);
+    }
+  };
+
+  return check(value, 0);
 }
 
 export function isPrimitiveStateValue(value: unknown): value is StateValue {
