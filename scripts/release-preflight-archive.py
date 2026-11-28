@@ -29,6 +29,17 @@ MAX_SEGMENTS = 16
 CHUNK = 1024 * 1024
 MIN_END_BLOCKS = 1024
 
+FILESYSTEM_METADATA_NAMES = frozenset({
+    ".ds_store",
+    "__macosx",
+    "thumbs.db",
+    "desktop.ini",
+})
+
+
+def is_filesystem_metadata_segment(segment):
+    return segment.casefold() in FILESYSTEM_METADATA_NAMES or segment.startswith("._")
+
 TYPE_NAMES = {
     tarfile.REGTYPE: "regular file",
     tarfile.AREGTYPE: "regular file",
@@ -115,7 +126,7 @@ def validate(tf, stream_len, reject_top_level=()):
             raise Reject("%s: not a regular file or directory" % entry_label(ti))
         segments = normalise(ti)
         for seg in segments:
-            if seg.casefold() in (".ds_store", "__macosx", "thumbs.db", "desktop.ini") or seg.startswith("._"):
+            if is_filesystem_metadata_segment(seg):
                 raise Reject("%s: unintended filesystem metadata artifact" % entry_label(ti))
         is_dir = ti.type == tarfile.DIRTYPE
         if segments and segments[0].casefold() in reject_top_level:

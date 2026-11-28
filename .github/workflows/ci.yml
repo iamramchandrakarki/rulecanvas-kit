@@ -116,13 +116,13 @@ jobs:
           ARCHIVE_DIR: ${{ runner.temp }}/rulecanvas-archives-${{ github.sha }}
           COPYFILE_DISABLE: "1"
         run: |
-          for app in agent-gate interlock-sim; do
-            tar --exclude='.DS_Store' --exclude='__MACOSX' --exclude='._*' --exclude='Thumbs.db' --exclude='desktop.ini' -czf "$ARCHIVE_DIR/$app-static.tar.gz" -C "apps/$app/dist" .
-          done
-          tar --exclude='.DS_Store' --exclude='__MACOSX' --exclude='._*' --exclude='Thumbs.db' --exclude='desktop.ini' -czf "$ARCHIVE_DIR/site-static.tar.gz" -C site .
+          python3 scripts/create-release-archive.py static --source apps/agent-gate/dist --output "$ARCHIVE_DIR/agent-gate-static.tar.gz"
+          python3 scripts/create-release-archive.py static --source apps/interlock-sim/dist --output "$ARCHIVE_DIR/interlock-sim-static.tar.gz"
+          python3 scripts/create-release-archive.py static --source site --output "$ARCHIVE_DIR/site-static.tar.gz"
           cd "$ARCHIVE_DIR"
           sha256sum agent-gate-static.tar.gz interlock-sim-static.tar.gz site-static.tar.gz >> SHA256SUMS.txt
           test "$(wc -l < SHA256SUMS.txt)" -eq 7
+          sha256sum -c SHA256SUMS.txt
 
       - name: Upload commit-scoped browser screenshots and archives
         uses: actions/upload-artifact@v4

@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const CREATE_ARCHIVE_SCRIPT = path.join(REPO_ROOT, 'scripts', 'create-release-archive.py');
 const LIBS = ['core', 'ui', 'workbench', 'workbench-react'];
 
 function parseOut(argv) {
@@ -26,9 +27,16 @@ try {
     const { version } = JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8'));
     // build:pack emits map-free output matching the published file allowlist.
     execFileSync('pnpm', ['run', 'build:pack'], { cwd: dir, stdio: 'inherit' });
-    execFileSync('pnpm', ['pack', '--pack-destination', out], { cwd: dir, stdio: 'pipe' });
+    execFileSync('pnpm', ['pack', '--pack-destination', out], {
+      cwd: dir,
+      stdio: 'pipe',
+      env: { ...process.env, COPYFILE_DISABLE: '1' },
+    });
     const tarball = path.join(out, `rulecanvas-${lib}-${version}.tgz`);
     if (!existsSync(tarball)) throw new Error(`expected ${tarball} after pnpm pack`);
+    execFileSync('python3', [CREATE_ARCHIVE_SCRIPT, 'clean-tgz', '--input', tarball], {
+      stdio: 'inherit',
+    });
     process.stdout.write(`${tarball}\n`);
   }
 } catch (error) {

@@ -17,6 +17,15 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const CREATE_ARCHIVE_SCRIPT = path.join(REPO_ROOT, 'scripts', 'create-release-archive.py');
+const PREFLIGHT_ARCHIVE_SCRIPT = path.join(REPO_ROOT, 'scripts', 'release-preflight-archive.py');
+const FILESYSTEM_METADATA_NAMES = new Set(['.ds_store', '__macosx', 'thumbs.db', 'desktop.ini']);
+
+function isFilesystemMetadataPath(entryPath) {
+  return entryPath
+    .split('/')
+    .some((seg) => seg !== '' && (FILESYSTEM_METADATA_NAMES.has(seg.toLowerCase()) || seg.startsWith('._')));
+}
 
 const LIB_PACKAGES = [
   { name: '@rulecanvas/core', dir: 'packages/rulecanvas-core' },
@@ -59,11 +68,25 @@ try {
   for (const lib of LIB_PACKAGES) {
     const pkgDir = path.join(REPO_ROOT, lib.dir);
     execFileSync('pnpm', ['run', 'build:pack'], { cwd: pkgDir, stdio: 'inherit' });
-    execFileSync('pnpm', ['pack', '--pack-destination', tarDir], { cwd: pkgDir, stdio: 'pipe' });
+    execFileSync('pnpm', ['pack', '--pack-destination', tarDir], {
+      cwd: pkgDir,
+      stdio: 'pipe',
+      env: { ...process.env, COPYFILE_DISABLE: '1' },
+    });
     const { version } = JSON.parse(readFileSync(path.join(pkgDir, 'package.json'), 'utf8'));
     const fileName = `${lib.name.replace(/^@/, '').replace('/', '-')}-${version}.tgz`;
     const tgzPath = path.join(tarDir, fileName);
     assert(existsSync(tgzPath), `packed tarball missing: ${fileName}`);
+    execFileSync('python3', [CREATE_ARCHIVE_SCRIPT, 'clean-tgz', '--input', tgzPath], {
+      stdio: 'inherit',
+    });
+    const tgzBytes = readFileSync(tgzPath);
+    const tgzSha256 = createHash('sha256').update(tgzBytes).digest('hex');
+    execFileSync(
+      'python3',
+      [PREFLIGHT_ARCHIVE_SCRIPT, '--name', fileName, '--sha256', tgzSha256],
+      { input: tgzBytes, stdio: ['pipe', 'inherit', 'inherit'] },
+    );
     packedTarballs.set(lib.name, tgzPath);
 
     // 2. Inspect tarball contents against a positive archive allowlist
@@ -71,6 +94,13 @@ try {
       .trim()
       .split('\n')
       .filter(Boolean);
+
+    for (const entry of tarEntries) {
+      assert(
+        !isFilesystemMetadataPath(entry),
+        `${lib.name}: unintended filesystem metadata entry in tarball (${entry})`,
+      );
+    }
 
     const fileEntries = tarEntries.filter((entry) => !entry.endsWith('/'));
     assert(fileEntries.includes('package/package.json'), `${lib.name}: missing package.json in tarball`);
@@ -171,7 +201,9 @@ try {
       });
 
       const tgzPath = path.join(depTarDir, `${safeKey}-${pkgVersion}.tgz`);
-      execFileSync('tar', ['-czf', tgzPath, '-C', stageParent, 'package']);
+      execFileSync('tar', ['-czf', tgzPath, '-C', stageParent, 'package'], {
+        env: { ...process.env, COPYFILE_DISABLE: '1' },
+      });
       depSpecs[pkgName] = `file:${tgzPath}`;
 
       const siblingNm = pkgName.startsWith('@')

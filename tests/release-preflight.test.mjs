@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import {
+  cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -20,6 +21,7 @@ import { spawnSync } from 'node:child_process';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SCRIPT = path.join(REPO_ROOT, 'scripts', 'release-preflight.mjs');
+const CREATE_ARCHIVE_SCRIPT = path.join(REPO_ROOT, 'scripts', 'create-release-archive.py');
 const BROWSER_TIMEOUT_MS = 300_000;
 const RUN_TIMEOUT_MS = 240_000;
 
@@ -499,10 +501,18 @@ describe('release preflight: filesystem metadata artifacts', () => {
     { title: 'root .DS_Store', entry: { name: './.DS_Store', type: 'file', text: 'junk' } },
     { title: 'nested .DS_Store', entry: { name: './assets/.DS_Store', type: 'file', text: 'junk' } },
     { title: 'lowercase .ds_store', entry: { name: './.ds_store', type: 'file', text: 'junk' } },
+    { title: 'mixed-case .Ds_StOrE', entry: { name: './.Ds_StOrE', type: 'file', text: 'junk' } },
     { title: '__MACOSX directory', entry: { name: './__MACOSX', type: 'dir' } },
+    { title: 'lowercase __macosx directory', entry: { name: './__macosx', type: 'dir' } },
     { title: '__MACOSX AppleDouble entry', entry: { name: './__MACOSX/._index.html', type: 'file', text: 'junk' } },
+    { title: 'mixed-case __MacOSX AppleDouble entry', entry: { name: './__MacOSX/._INDEX.HTML', type: 'file', text: 'junk' } },
     { title: 'root AppleDouble ._index.html', entry: { name: './._index.html', type: 'file', text: 'junk' } },
+    { title: 'uppercase AppleDouble ._INDEX.HTML', entry: { name: './._INDEX.HTML', type: 'file', text: 'junk' } },
     { title: 'Thumbs.db', entry: { name: './Thumbs.db', type: 'file', text: 'junk' } },
+    { title: 'nested uppercase THUMBS.DB', entry: { name: './nested/THUMBS.DB', type: 'file', text: 'junk' } },
+    { title: 'mixed-case ThUmBs.Db', entry: { name: './ThUmBs.Db', type: 'file', text: 'junk' } },
+    { title: 'Desktop.ini', entry: { name: './Desktop.ini', type: 'file', text: 'junk' } },
+    { title: 'uppercase DESKTOP.INI', entry: { name: './nested/DESKTOP.INI', type: 'file', text: 'junk' } },
   ];
 
   for (const { title, entry } of metadataMembers) {
@@ -548,4 +558,182 @@ describe('release preflight: filesystem metadata artifacts', () => {
       ]);
     });
   }
+});
+
+describe('release preflight: archive creation and metadata exclusion integration', () => {
+  const METADATA_NAMES = new Set(['.ds_store', '__macosx', 'thumbs.db', 'desktop.ini']);
+
+  function hasMetadataSegment(memberName) {
+    return memberName
+      .split('/')
+      .some((seg) => seg !== '' && (METADATA_NAMES.has(seg.toLowerCase()) || seg.startsWith('._')));
+  }
+
+  function addMixedCaseMetadata(dir) {
+    const nestedDir = path.join(dir, 'nested');
+    mkdirSync(nestedDir, { recursive: true });
+    for (const rel of [
+      '.DS_Store',
+      '.ds_store',
+      '.Ds_StOrE',
+      'Thumbs.db',
+      'THUMBS.DB',
+      'nested/THUMBS.DB',
+      'nested/ThUmBs.Db',
+      'Desktop.ini',
+      'DESKTOP.INI',
+      'nested/deSkTop.InI',
+      '__MACOSX/._index.html',
+      '__macosx/junk.txt',
+      'nested/__MacOSX/file.txt',
+      '._index.html',
+      'nested/._ASSET.JS',
+    ]) {
+      const target = path.join(dir, rel);
+      mkdirSync(path.dirname(target), { recursive: true });
+      writeFileSync(target, 'junk\n', 'utf8');
+    }
+  }
+
+  function listTreeNames(rootDir) {
+    const out = [];
+    const walk = (rel) => {
+      for (const name of readdirSync(path.join(rootDir, rel))) {
+        const childRel = rel === '' ? name : `${rel}/${name}`;
+        out.push(childRel);
+        if (lstatSync(path.join(rootDir, childRel)).isDirectory()) {
+          walk(childRel);
+        }
+      }
+    };
+    walk('');
+    return out;
+  }
+
+  test('strips mixed-case metadata from all seven archives and passes full preflight', { timeout: BROWSER_TIMEOUT_MS }, () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'rulecanvas-archive-create-'));
+    tempRoots.push(root);
+    const srcRoot = path.join(root, 'sources');
+    const archiveDir = path.join(root, 'archives');
+    const parent = path.join(root, 'parent');
+    mkdirSync(srcRoot);
+    mkdirSync(archiveDir);
+    mkdirSync(parent);
+
+    const staticSources = [
+      { src: path.join(REPO_ROOT, 'apps', 'agent-gate', 'dist'), name: 'agent-gate-static.tar.gz', dir: 'agent-gate' },
+      { src: path.join(REPO_ROOT, 'apps', 'interlock-sim', 'dist'), name: 'interlock-sim-static.tar.gz', dir: 'interlock-sim' },
+      { src: SITE_DIR, name: 'site-static.tar.gz', dir: 'site' },
+    ];
+    for (const item of staticSources) {
+      if (!existsSync(path.join(item.src, 'index.html'))) {
+        assert.fail(`${item.src}/index.html is missing; run "pnpm build" before pnpm test:release:preflight`);
+      }
+      const dirtyDir = path.join(srcRoot, item.dir);
+      cpSync(item.src, dirtyDir, { recursive: true });
+      addMixedCaseMetadata(dirtyDir);
+
+      const created = spawnSync(
+        'python3',
+        [CREATE_ARCHIVE_SCRIPT, 'static', '--source', dirtyDir, '--output', path.join(archiveDir, item.name)],
+        { cwd: REPO_ROOT, encoding: 'utf8' },
+      );
+      assert.equal(created.status, 0, `create static failed for ${item.name}: ${created.stderr}`);
+    }
+
+    const dirtyLibs = LIB_NAMES.map((name) => ({
+      out: path.join(archiveDir, name),
+      entries: [
+        { name: 'package', type: 'dir' },
+        { name: 'package/package.json', type: 'file', text: JSON.stringify({ name, version: '0.0.0' }) },
+        { name: 'package/dist', type: 'dir' },
+        { name: 'package/dist/index.js', type: 'file', text: 'export const ok = true;\n' },
+        { name: 'package/.Ds_StOrE', type: 'file', text: 'junk' },
+        { name: 'package/DESKTOP.INI', type: 'file', text: 'junk' },
+        { name: 'package/dist/THUMBS.DB', type: 'file', text: 'junk' },
+        { name: 'package/dist/._index.js', type: 'file', text: 'junk' },
+        { name: 'package/__macosx', type: 'dir' },
+        { name: 'package/__macosx/junk.txt', type: 'file', text: 'junk' },
+        { name: 'package/dist/__MacOSX/index.js', type: 'file', text: 'junk' },
+      ],
+    }));
+    buildArchives(dirtyLibs);
+    for (const name of LIB_NAMES) {
+      const cleaned = spawnSync(
+        'python3',
+        [CREATE_ARCHIVE_SCRIPT, 'clean-tgz', '--input', path.join(archiveDir, name)],
+        { cwd: REPO_ROOT, encoding: 'utf8' },
+      );
+      assert.equal(cleaned.status, 0, `clean-tgz failed for ${name}: ${cleaned.stderr}`);
+    }
+
+    for (const name of ARCHIVE_NAMES) {
+      const listing = spawnSync('tar', ['-tzf', path.join(archiveDir, name)], { encoding: 'utf8' });
+      assert.equal(listing.status, 0, listing.stderr);
+      const members = listing.stdout.trim().split('\n').filter(Boolean);
+      assert.equal(
+        members.some((m) => hasMetadataSegment(m)),
+        false,
+        `${name} retained metadata members: ${members.filter(hasMetadataSegment).join(', ')}`,
+      );
+      if (LIB_NAMES.includes(name)) {
+        assert.ok(members.includes('package/dist/index.js'), `${name} lost legitimate dist/index.js`);
+      } else {
+        assert.ok(members.includes('./index.html'), `${name} lost legitimate ./index.html`);
+      }
+    }
+
+    writeManifest(archiveDir);
+    const output = path.join(parent, 'published');
+    const preflight = runPreflight(['--archive-dir', archiveDir, '--output', output]);
+    assert.equal(preflight.status, 0, `stdout=${preflight.stdout} stderr=${preflight.stderr}`);
+    const publishedEntries = listTreeNames(output);
+    assert.equal(
+      publishedEntries.some((entry) => hasMetadataSegment(entry)),
+      false,
+      `published directory contains metadata entries: ${publishedEntries.filter(hasMetadataSegment).join(', ')}`,
+    );
+  });
+
+  test('preserves archive security checks while creating or cleaning archives', () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'rulecanvas-archive-sec-'));
+    tempRoots.push(root);
+
+    const symlinkDir = path.join(root, 'symlink-src');
+    mkdirSync(symlinkDir);
+    writeFileSync(path.join(symlinkDir, 'index.html'), '<!doctype html>', 'utf8');
+    symlinkSync('/etc/passwd', path.join(symlinkDir, 'leak.txt'));
+    const staticRes = spawnSync(
+      'python3',
+      [CREATE_ARCHIVE_SCRIPT, 'static', '--source', symlinkDir, '--output', path.join(root, 'out.tar.gz')],
+      { cwd: REPO_ROOT, encoding: 'utf8' },
+    );
+    assert.notEqual(staticRes.status, 0, 'create-release-archive static must reject symlinks');
+
+    const badTgz = path.join(root, 'bad-symlink.tgz');
+    const traversalTgz = path.join(root, 'bad-traversal.tgz');
+    buildArchives([
+      {
+        out: badTgz,
+        entries: [
+          { name: 'package/package.json', type: 'file', text: '{}' },
+          { name: 'package/link', type: 'symlink', linkname: '/etc/passwd' },
+        ],
+      },
+      {
+        out: traversalTgz,
+        entries: [
+          { name: 'package/package.json', type: 'file', text: '{}' },
+          { name: '../escape.txt', type: 'file', text: 'evil' },
+        ],
+      },
+    ]);
+    for (const candidate of [badTgz, traversalTgz]) {
+      const cleanRes = spawnSync('python3', [CREATE_ARCHIVE_SCRIPT, 'clean-tgz', '--input', candidate], {
+        cwd: REPO_ROOT,
+        encoding: 'utf8',
+      });
+      assert.notEqual(cleanRes.status, 0, `clean-tgz must reject security defect in ${candidate}`);
+    }
+  });
 });
