@@ -736,4 +736,261 @@ describe('release preflight: archive creation and metadata exclusion integration
       assert.notEqual(cleanRes.status, 0, `clean-tgz must reject security defect in ${candidate}`);
     }
   });
+
+  test('clean-tgz rejects duplicate paths, oversized/aggregate metadata, and malformed metadata without writing partial output', () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'rulecanvas-clean-tgz-'));
+    tempRoots.push(root);
+    const helperPath = path.join(REPO_ROOT, 'scripts', 'release-preflight-archive.py');
+    const outDir = path.join(root, 'outputs');
+    mkdirSync(outDir);
+
+    const existingValidPath = path.join(outDir, 'existing-valid.tgz');
+    buildArchives([
+      {
+        out: existingValidPath,
+        entries: [
+          { name: 'package', type: 'dir' },
+          { name: 'package/package.json', type: 'file', text: '{"name":"valid","version":"0.1.0"}' },
+          { name: 'package/dist/index.js', type: 'file', text: 'export const ok = true;\n' },
+        ],
+      },
+    ]);
+    const existingBytesBefore = readFileSync(existingValidPath);
+    const existingShaBefore = sha256(existingBytesBefore);
+
+    const malformedCases = [
+      {
+        name: 'exact-dup.tgz',
+        expectStderr: 'duplicate path',
+        entries: [
+          { name: 'package/package.json', type: 'file', text: '{}' },
+          { name: 'package/dist/index.js', type: 'file', text: 'export const a = 1;\n' },
+          { name: 'package/dist/index.js', type: 'file', text: 'export const a = 2;\n' },
+        ],
+      },
+      {
+        name: 'case-dup.tgz',
+        expectStderr: 'duplicate path',
+        entries: [
+          { name: 'package/package.json', type: 'file', text: '{}' },
+          { name: 'package/dist/index.js', type: 'file', text: 'export const a = 1;\n' },
+          { name: 'package/dist/INDEX.js', type: 'file', text: 'export const a = 2;\n' },
+        ],
+      },
+      {
+        name: 'oversize-metadata.tgz',
+        expectStderr: 'file larger than 16 MiB',
+        entries: [
+          { name: 'package/package.json', type: 'file', text: '{}' },
+          { name: 'package/dist/index.js', type: 'file', text: 'export const a = 1;\n' },
+          { name: 'package/THUMBS.DB', type: 'file', zeros: 16 * 1024 * 1024 + 1 },
+        ],
+      },
+      {
+        name: 'aggregate-total-metadata.tgz',
+        expectStderr: 'total content exceeds 128 MiB',
+        entries: [
+          { name: 'package/package.json', type: 'file', text: '{}' },
+          { name: 'package/dist/index.js', type: 'file', text: 'export const a = 1;\n' },
+          ...Array.from({ length: 9 }, (_, i) => ({
+            name: `package/._pad${i}.bin`,
+            type: 'file',
+            zeros: 15 * 1024 * 1024,
+          })),
+        ],
+      },
+      {
+        name: 'member-count-metadata.tgz',
+        expectStderr: 'more than 2000 members',
+        entries: [
+          { name: 'package/package.json', type: 'file', text: '{}' },
+          ...Array.from({ length: 2000 }, (_, i) => ({
+            name: `package/._m${i}.txt`,
+            type: 'file',
+            text: 'x',
+          })),
+        ],
+      },
+      {
+        name: 'traversal-metadata.tgz',
+        expectStderr: "'..' path segment",
+        entries: [
+          { name: 'package/package.json', type: 'file', text: '{}' },
+          { name: '../.DS_Store', type: 'file', text: 'junk' },
+        ],
+      },
+      {
+        name: 'absolute-metadata.tgz',
+        expectStderr: 'absolute path',
+        entries: [
+          { name: 'package/package.json', type: 'file', text: '{}' },
+          { name: '/tmp/.DS_Store', type: 'file', text: 'junk' },
+        ],
+      },
+      {
+        name: 'backslash-metadata.tgz',
+        expectStderr: 'backslash in path',
+        entries: [
+          { name: 'package/package.json', type: 'file', text: '{}' },
+          { name: 'package\\THUMBS.DB', type: 'file', text: 'junk' },
+        ],
+      },
+      {
+        name: 'symlink-metadata.tgz',
+        expectStderr: 'not a regular file or directory',
+        entries: [
+          { name: 'package/package.json', type: 'file', text: '{}' },
+          { name: 'package/.DS_Store', type: 'symlink', linkname: '/etc/passwd' },
+        ],
+      },
+      {
+        name: 'hardlink-metadata.tgz',
+        expectStderr: 'not a regular file or directory',
+        entries: [
+          { name: 'package/package.json', type: 'file', text: '{}' },
+          { name: 'package/THUMBS.DB', type: 'hardlink', linkname: 'package/package.json' },
+        ],
+      },
+      {
+        name: 'device-metadata.tgz',
+        expectStderr: 'not a regular file or directory',
+        entries: [
+          { name: 'package/package.json', type: 'file', text: '{}' },
+          { name: 'package/._dev', type: 'chr' },
+        ],
+      },
+    ];
+
+    buildArchives(
+      malformedCases.map((c) => ({
+        out: path.join(root, c.name),
+        entries: c.entries,
+      })),
+    );
+
+    for (const c of malformedCases) {
+      const inPath = path.join(root, c.name);
+      const inShaBefore = sha256(readFileSync(inPath));
+      const absentOut = path.join(outDir, `absent-${c.name}`);
+
+      // Failure with new output path leaves no partial output or temp files.
+      const resNew = spawnSync(
+        'python3',
+        [CREATE_ARCHIVE_SCRIPT, 'clean-tgz', '--input', inPath, '--output', absentOut],
+        { cwd: REPO_ROOT, encoding: 'utf8' },
+      );
+      assert.notEqual(resNew.status, 0, `${c.name} must be rejected`);
+      assert.ok(
+        resNew.stderr.includes(c.expectStderr),
+        `${c.name} stderr should include "${c.expectStderr}", got: ${resNew.stderr}`,
+      );
+      assert.equal(existsSync(absentOut), false, `${c.name} must not create output on failure`);
+
+      // Failure targeting an existing valid archive preserves the existing output untouched.
+      const resExisting = spawnSync(
+        'python3',
+        [CREATE_ARCHIVE_SCRIPT, 'clean-tgz', '--input', inPath, '--output', existingValidPath],
+        { cwd: REPO_ROOT, encoding: 'utf8' },
+      );
+      assert.notEqual(resExisting.status, 0, `${c.name} must fail against existing output`);
+      assert.equal(
+        sha256(readFileSync(existingValidPath)),
+        existingShaBefore,
+        `${c.name} must preserve existing valid output on failure`,
+      );
+
+      // In-place failure preserves input untouched.
+      const resInPlace = spawnSync(
+        'python3',
+        [CREATE_ARCHIVE_SCRIPT, 'clean-tgz', '--input', inPath],
+        { cwd: REPO_ROOT, encoding: 'utf8' },
+      );
+      assert.notEqual(resInPlace.status, 0, `${c.name} must fail in-place`);
+      assert.equal(sha256(readFileSync(inPath)), inShaBefore, `${c.name} must preserve input on in-place failure`);
+    }
+
+    assert.deepEqual(
+      readdirSync(outDir),
+      ['existing-valid.tgz'],
+      'no partial output or temporary files should remain in output directory',
+    );
+
+    // Valid archive containing mixed-case metadata cleans cleanly and passes preflight.
+    const validDirtyIn = path.join(root, 'valid-dirty.tgz');
+    const validCleanOut = path.join(outDir, 'valid-clean.tgz');
+    buildArchives([
+      {
+        out: validDirtyIn,
+        entries: [
+          { name: 'package', type: 'dir' },
+          { name: 'package/package.json', type: 'file', text: '{"name":"clean-test","version":"0.1.0"}' },
+          { name: 'package/README.md', type: 'file', text: '# Clean Test\n' },
+          { name: 'package/dist', type: 'dir' },
+          { name: 'package/dist/index.js', type: 'file', text: 'export const ok = true;\n' },
+          { name: 'package/.Ds_StOrE', type: 'file', text: 'junk' },
+          { name: 'package/DESKTOP.INI', type: 'file', text: 'junk' },
+          { name: 'package/dist/THUMBS.DB', type: 'file', text: 'junk' },
+          { name: 'package/dist/._index.js', type: 'file', text: 'junk' },
+          { name: 'package/__MacOSX', type: 'dir' },
+          { name: 'package/__MacOSX/._index.js', type: 'file', text: 'junk' },
+        ],
+      },
+    ]);
+    const cleanValid = spawnSync(
+      'python3',
+      [CREATE_ARCHIVE_SCRIPT, 'clean-tgz', '--input', validDirtyIn, '--output', validCleanOut],
+      { cwd: REPO_ROOT, encoding: 'utf8' },
+    );
+    assert.equal(cleanValid.status, 0, `valid dirty archive failed clean-tgz: ${cleanValid.stderr}`);
+    const cleanedBytes = readFileSync(validCleanOut);
+    const pf = spawnSync(
+      'python3',
+      ['-B', helperPath, '--name', 'valid-clean.tgz', '--sha256', sha256(cleanedBytes)],
+      { cwd: REPO_ROOT, input: cleanedBytes },
+    );
+    assert.equal(pf.status, 0, `cleaned archive failed preflight: ${pf.stderr.toString('utf8')}`);
+    const members = spawnSync('tar', ['-tzf', validCleanOut], { encoding: 'utf8' })
+      .stdout.trim()
+      .split('\n')
+      .filter(Boolean);
+    assert.equal(members.some(hasMetadataSegment), false, 'cleaned archive must contain no metadata');
+    assert.ok(members.includes('package/package.json'));
+    assert.ok(members.includes('package/README.md'));
+    assert.ok(members.includes('package/dist/index.js'));
+  });
+
+  test('pack:local publishes four preflight-validated library tarballs with no leftover temp files', { timeout: RUN_TIMEOUT_MS }, () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'rulecanvas-pack-local-test-'));
+    tempRoots.push(root);
+    const outDir = path.join(root, 'tarballs');
+    const helperPath = path.join(REPO_ROOT, 'scripts', 'release-preflight-archive.py');
+    const packScript = path.join(REPO_ROOT, 'scripts', 'pack-local.mjs');
+
+    const res = spawnSync(process.execPath, [packScript, '--out', outDir], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      timeout: RUN_TIMEOUT_MS,
+    });
+    assert.equal(res.status, 0, `pack-local.mjs failed: stdout=${res.stdout} stderr=${res.stderr}`);
+    assert.deepEqual(readdirSync(outDir).sort(), [...LIB_NAMES].sort());
+
+    for (const libName of LIB_NAMES) {
+      const tgzPath = path.join(outDir, libName);
+      const bytes = readFileSync(tgzPath);
+      const pf = spawnSync(
+        'python3',
+        ['-B', helperPath, '--name', libName, '--sha256', sha256(bytes)],
+        { cwd: REPO_ROOT, input: bytes },
+      );
+      assert.equal(pf.status, 0, `${libName} failed preflight: ${pf.stderr.toString('utf8')}`);
+      const members = spawnSync('tar', ['-tzf', tgzPath], { encoding: 'utf8' })
+        .stdout.trim()
+        .split('\n')
+        .filter(Boolean);
+      assert.equal(members.some(hasMetadataSegment), false, `${libName} contains metadata`);
+      assert.ok(members.includes('package/package.json'), `${libName} missing package.json`);
+      assert.ok(members.includes('package/README.md'), `${libName} missing README.md`);
+      assert.ok(members.includes('package/LICENSE'), `${libName} missing LICENSE`);
+    }
+  });
 });

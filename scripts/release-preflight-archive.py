@@ -111,7 +111,7 @@ def normalise(ti):
     return segments
 
 
-def validate(tf, stream_len, reject_top_level=()):
+def validate(tf, stream_len, reject_top_level=(), allow_filesystem_metadata=False):
     """Pass 1: validate every member without writing. Returns [(TarInfo, segments)]."""
     plan = []
     files = {}  # casefolded path -> original path
@@ -125,9 +125,10 @@ def validate(tf, stream_len, reject_top_level=()):
         if ti.type not in (tarfile.REGTYPE, tarfile.AREGTYPE, tarfile.DIRTYPE) or getattr(ti, "sparse", None) is not None:
             raise Reject("%s: not a regular file or directory" % entry_label(ti))
         segments = normalise(ti)
-        for seg in segments:
-            if is_filesystem_metadata_segment(seg):
-                raise Reject("%s: unintended filesystem metadata artifact" % entry_label(ti))
+        if not allow_filesystem_metadata:
+            for seg in segments:
+                if is_filesystem_metadata_segment(seg):
+                    raise Reject("%s: unintended filesystem metadata artifact" % entry_label(ti))
         is_dir = ti.type == tarfile.DIRTYPE
         if segments and segments[0].casefold() in reject_top_level:
             raise Reject("%s: top-level %s collides with a reserved directory" % (entry_label(ti), ascii(segments[0])))

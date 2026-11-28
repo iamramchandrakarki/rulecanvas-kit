@@ -5,9 +5,11 @@ Usage:
   create-release-archive.py static --source DIR --output FILE
   create-release-archive.py clean-tgz --input FILE [--output FILE]
 
-Shares the single-source metadata exclusion predicate and archive security
-limits from scripts/release-preflight-archive.py without silently stripping
-security violations such as links, devices, or path traversal entries.
+Reuses the single-source validation and metadata exclusion policy from
+scripts/release-preflight-archive.py. Structural validation (member types,
+paths, duplicates, conflicts, per-file/aggregate limits, and end-of-archive
+blocks) runs before metadata exclusion, and emitted archives are validated
+against the strict preflight contract before atomic publication.
 """
 
 import sys
@@ -64,7 +66,22 @@ def make_file_tarinfo(name, size):
     return ti
 
 
-def write_gzip_atomic(tar_bytes, output_path):
+def compress_and_verify_archive(tar_bytes):
+    gz_buf = io.BytesIO()
+    with gzip.GzipFile(fileobj=gz_buf, mode="wb", mtime=0) as gz_fh:
+        gz_fh.write(tar_bytes)
+    gz_bytes = gz_buf.getvalue()
+    if len(gz_bytes) > preflight.MAX_COMPRESSED:
+        raise Reject("compressed output exceeds %d MiB" % (preflight.MAX_COMPRESSED // preflight.MIB))
+
+    verified_raw = preflight.decompress(gz_bytes)
+    with tarfile.open(fileobj=io.BytesIO(verified_raw), mode="r:") as verify_tf:
+        preflight.validate(verify_tf, len(verified_raw), allow_filesystem_metadata=False)
+        preflight.check_end_blocks(verified_raw, verify_tf.offset)
+    return gz_bytes
+
+
+def write_bytes_atomic(data, output_path):
     out_abs = os.path.abspath(output_path)
     out_dir = os.path.dirname(out_abs)
     try:
@@ -77,8 +94,7 @@ def write_gzip_atomic(tar_bytes, output_path):
     fd, tmp_path = tempfile.mkstemp(prefix=".tmp-archive-", suffix=".tar.gz", dir=out_dir)
     try:
         with os.fdopen(fd, "wb") as raw_fh:
-            with gzip.GzipFile(fileobj=raw_fh, mode="wb", mtime=0) as gz_fh:
-                gz_fh.write(tar_bytes)
+            raw_fh.write(data)
         os.chmod(tmp_path, 0o644)
         os.replace(tmp_path, out_abs)
     except Exception:
@@ -141,7 +157,8 @@ def create_static_archive(source_dir, output_path):
                 preflight.normalise(ti)
                 tf.addfile(ti, io.BytesIO(data))
 
-    write_gzip_atomic(tar_buf.getvalue(), output_path)
+    gz_bytes = compress_and_verify_archive(tar_buf.getvalue())
+    write_bytes_atomic(gz_bytes, output_path)
 
 
 def clean_tgz_archive(input_path, output_path):
@@ -159,40 +176,30 @@ def clean_tgz_archive(input_path, output_path):
 
     raw = preflight.decompress(compressed)
     out_buf = io.BytesIO()
-    kept_members = 0
-    kept_total = 0
 
     with tarfile.open(fileobj=io.BytesIO(raw), mode="r:") as src_tf:
+        # Pass 1: validate full input archive structural integrity, uniqueness,
+        # and resource limits BEFORE excluding any filesystem metadata members.
+        plan = preflight.validate(src_tf, len(raw), allow_filesystem_metadata=True)
+        preflight.check_end_blocks(raw, src_tf.offset)
+
+        # Pass 2: emit clean archive omitting only validated filesystem metadata.
         with tarfile.open(fileobj=out_buf, mode="w", format=tarfile.PAX_FORMAT) as dst_tf:
-            for ti in src_tf:
-                if ti.type not in (tarfile.REGTYPE, tarfile.AREGTYPE, tarfile.DIRTYPE) or getattr(ti, "sparse", None) is not None:
-                    raise Reject("%s: not a regular file or directory" % preflight.entry_label(ti))
-                segments = preflight.normalise(ti)
+            for ti, segments in plan:
                 if any(preflight.is_filesystem_metadata_segment(seg) for seg in segments):
                     continue
-
-                kept_members += 1
-                if kept_members > preflight.MAX_MEMBERS:
-                    raise Reject("more than %d members" % preflight.MAX_MEMBERS)
-
                 if ti.type == tarfile.DIRTYPE:
                     dst_tf.addfile(make_dir_tarinfo(ti.name))
                 else:
-                    if ti.size > preflight.MAX_FILE:
-                        raise Reject("%s: file larger than %d MiB" % (preflight.entry_label(ti), preflight.MAX_FILE // preflight.MIB))
-                    kept_total += ti.size
-                    if kept_total > preflight.MAX_TOTAL:
-                        raise Reject("%s: total content exceeds %d MiB" % (preflight.entry_label(ti), preflight.MAX_TOTAL // preflight.MIB))
-                    if ti.offset_data + ti.size > len(raw):
-                        raise Reject("%s: declared size exceeds data supplied" % preflight.entry_label(ti))
                     src_fh = src_tf.extractfile(ti)
                     payload = src_fh.read() if src_fh is not None else b""
                     if len(payload) != ti.size:
                         raise Reject("%s: data ended early" % preflight.entry_label(ti))
                     dst_tf.addfile(make_file_tarinfo(ti.name, len(payload)), io.BytesIO(payload))
-        preflight.check_end_blocks(raw, src_tf.offset)
 
-    write_gzip_atomic(out_buf.getvalue(), output_path)
+    # Pass 3: verify the emitted bytes against strict preflight before publication.
+    gz_bytes = compress_and_verify_archive(out_buf.getvalue())
+    write_bytes_atomic(gz_bytes, output_path)
 
 
 def main():
