@@ -37,7 +37,9 @@ A `VERIFIED` verdict covers this finite model within its state and depth bounds.
 
 The `@rulecanvas/*` packages are not published to npm. You install them from local tarballs.
 
-Requirements: Node.js 22.18 or later (`node --test` runs the TypeScript model through Node's built-in type stripping), and pnpm.
+Requirements:
+- **Running and consuming existing tarballs:** Node.js 22.18 or later (`node --test` runs the TypeScript model through Node's built-in type stripping) and `pnpm`.
+- **Packing the libraries from source (`pnpm run pack:local`):** also requires Python 3 (`python3`, standard library only) for archive normalization and preflight validation.
 
 1. Clone the repository and pack the four libraries. `pack:local` writes the tarballs to `../rulecanvas-tarballs/`, next to the repository.
 

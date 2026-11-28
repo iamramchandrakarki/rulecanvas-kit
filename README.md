@@ -87,7 +87,7 @@ Boundary tests automatically enforce an acyclic 4-library package graph (`@rulec
 
 ## Installation and Quick Start
 
-Prerequisites: Node.js `^22.12.0 || ^24.0.0 || >=26.0.0` (Node 24 LTS recommended; CI runs Node 24) and `pnpm` (`12.21.0`).
+Prerequisites: Node.js `^22.12.0 || ^24.0.0 || >=26.0.0` (Node 24 LTS recommended; CI runs Node 24) and `pnpm` (`12.21.0`) for installing, building, testing, and consuming packages. Python 3 (`python3`, standard library only) is additionally required when packing release archives from source (`pnpm run pack:local`, `pnpm verify:pack`) or running release preflight (`pnpm verify:release:preflight`, `pnpm test:release:preflight`).
 
 ```bash
 git clone https://github.com/iamramchandrakarki/rulecanvas-kit.git
